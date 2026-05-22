@@ -11,7 +11,9 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -38,6 +40,9 @@ type workflowSnapshot struct {
 	CurrentActivity string          `json:"currentActivity"`
 	LastOutput      json.RawMessage `json:"lastOutput,omitempty"`
 	LastError       string          `json:"lastError,omitempty"`
+	Context         json.RawMessage `json:"context,omitempty"`
+	PendingSignals  int             `json:"pendingSignals,omitempty"`
+	NextRunAt       *time.Time      `json:"nextRunAt,omitempty"`
 }
 
 func NewService(cfg config.WorkflowConfig, logger *slog.Logger, buses ...*livebus.Bus) (*Service, error) {
@@ -55,6 +60,16 @@ func NewService(cfg config.WorkflowConfig, logger *slog.Logger, buses ...*livebu
 	}
 
 	db.SetMaxOpenConns(1)
+	for _, pragma := range []string{
+		`PRAGMA journal_mode = WAL`,
+		`PRAGMA busy_timeout = 5000`,
+		`PRAGMA foreign_keys = ON`,
+	} {
+		if _, err := db.Exec(pragma); err != nil {
+			_ = db.Close()
+			return nil, fmt.Errorf("configure workflow database: %w", err)
+		}
+	}
 
 	live := livebus.New()
 	if len(buses) > 0 && buses[0] != nil {
@@ -70,7 +85,7 @@ func NewService(cfg config.WorkflowConfig, logger *slog.Logger, buses ...*livebu
 		live:       live,
 	}
 
-	for _, activity := range builtInActivities(svc.logger) {
+	for _, activity := range builtInActivities(cfg, svc.logger) {
 		svc.activities[activity.Descriptor().Name] = activity
 	}
 
@@ -514,6 +529,7 @@ func (s *Service) StartWorkflow(ctx context.Context, definitionID string) (Workf
 		Status:            StatusRunning,
 		CurrentStepIndex:  -1,
 		LastEventSequence: 0,
+		Context:           buildInitialContext(details.ID, details.ActiveVersion),
 		CreatedAt:         now,
 		UpdatedAt:         now,
 	}
@@ -532,6 +548,7 @@ func (s *Service) StartWorkflow(ctx context.Context, definitionID string) (Workf
 		Status:          instance.Status,
 		CurrentStepName: stepName,
 		CurrentActivity: activityName,
+		Context:         instance.Context,
 	})
 	if err != nil {
 		return WorkflowInstance{}, err
@@ -567,7 +584,7 @@ func (s *Service) StartWorkflow(ctx context.Context, definitionID string) (Workf
 		instance.CurrentStepIndex = -1
 		instance.CurrentStepName = ""
 		instance.CurrentActivity = ""
-		if err := s.updateInstanceTx(ctx, tx, instance, workflowSnapshot{Status: StatusCompleted}, nil); err != nil {
+		if err := s.updateInstanceTx(ctx, tx, instance, snapshotFromInstance(instance), nil); err != nil {
 			return WorkflowInstance{}, err
 		}
 	} else {
@@ -582,14 +599,11 @@ func (s *Service) StartWorkflow(ctx context.Context, definitionID string) (Workf
 			return WorkflowInstance{}, err
 		}
 		instance.LastEventSequence = sequence
+		instance.NextRunAt = &now
 		if err := insertTaskTx(ctx, tx, instance.ID, 0, firstStep, now); err != nil {
 			return WorkflowInstance{}, err
 		}
-		if err := s.updateInstanceTx(ctx, tx, instance, workflowSnapshot{
-			Status:          StatusRunning,
-			CurrentStepName: firstStep.Name,
-			CurrentActivity: firstStep.Activity,
-		}, nil); err != nil {
+		if err := s.updateInstanceTx(ctx, tx, instance, snapshotFromInstance(instance), nil); err != nil {
 			return WorkflowInstance{}, err
 		}
 	}
@@ -613,7 +627,7 @@ func (s *Service) StartWorkflow(ctx context.Context, definitionID string) (Workf
 func (s *Service) ListWorkflows(ctx context.Context) ([]WorkflowInstance, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, definition_id, definition_version, status, current_step_index, current_step_name,
-		       current_activity, last_event_sequence, last_error, created_at, updated_at
+		       current_activity, snapshot_json, last_event_sequence, last_error, created_at, updated_at
 		FROM workflow_instances
 		ORDER BY updated_at DESC, created_at DESC
 	`)
@@ -641,7 +655,7 @@ func (s *Service) ListWorkflows(ctx context.Context) ([]WorkflowInstance, error)
 func (s *Service) GetWorkflow(ctx context.Context, workflowID string) (WorkflowInstance, error) {
 	row := s.db.QueryRowContext(ctx, `
 		SELECT id, definition_id, definition_version, status, current_step_index, current_step_name,
-		       current_activity, last_event_sequence, last_error, created_at, updated_at
+		       current_activity, snapshot_json, last_event_sequence, last_error, created_at, updated_at
 		FROM workflow_instances
 		WHERE id = ?
 	`, workflowID)
@@ -689,6 +703,204 @@ func (s *Service) GetWorkflowHistory(ctx context.Context, workflowID string) ([]
 	}
 
 	return events, nil
+}
+
+func (s *Service) SignalWorkflow(ctx context.Context, workflowID string, input SignalWorkflowInput) (WorkflowInstance, error) {
+	name := strings.TrimSpace(input.Name)
+	if name == "" {
+		return WorkflowInstance{}, fmt.Errorf("workflow signal name is required")
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return WorkflowInstance{}, fmt.Errorf("begin signal transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	instance, err := s.getWorkflowTx(ctx, tx, workflowID)
+	if err != nil {
+		return WorkflowInstance{}, err
+	}
+	if instance.Status == StatusCompleted || instance.Status == StatusCanceled {
+		return WorkflowInstance{}, fmt.Errorf("workflow %s is not accepting signals in status %q", workflowID, instance.Status)
+	}
+
+	now := time.Now().UTC()
+	payload := input.Payload
+	if len(payload) == 0 {
+		payload = json.RawMessage(`{}`)
+	}
+	updatedContext, err := applySignalToContext(instance.Context, name, payload, now)
+	if err != nil {
+		return WorkflowInstance{}, err
+	}
+
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO workflow_signals (workflow_id, signal_name, payload, status, created_at, processed_at)
+		VALUES (?, ?, ?, 'processed', ?, ?)
+	`, workflowID, name, string(payload), formatTime(now), formatTime(now)); err != nil {
+		return WorkflowInstance{}, fmt.Errorf("insert workflow signal: %w", err)
+	}
+
+	sequence, err := appendEventTx(ctx, tx, workflowID, instance.LastEventSequence, "WorkflowSignaled", map[string]any{
+		"name":    name,
+		"payload": decodePayloadForEvent(payload),
+	})
+	if err != nil {
+		return WorkflowInstance{}, err
+	}
+
+	instance.Context = updatedContext
+	instance.LastEventSequence = sequence
+	instance.UpdatedAt = now
+	if err := s.updateInstanceTx(ctx, tx, instance, snapshotFromInstance(instance), nil); err != nil {
+		return WorkflowInstance{}, err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return WorkflowInstance{}, fmt.Errorf("commit workflow signal transaction: %w", err)
+	}
+
+	result, err := s.GetWorkflow(ctx, workflowID)
+	if err != nil {
+		return WorkflowInstance{}, err
+	}
+	s.emitLiveEvent("workflow.signaled", "workflow", workflowID, map[string]any{
+		"workflowId": workflowID,
+		"name":       name,
+		"payload":    decodePayloadForEvent(payload),
+	})
+	s.emitOperationEvent(workflowID, "WorkflowSignaled", map[string]any{
+		"name":    name,
+		"payload": decodePayloadForEvent(payload),
+	})
+	return result, nil
+}
+
+func (s *Service) CancelWorkflow(ctx context.Context, workflowID string) (WorkflowInstance, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return WorkflowInstance{}, fmt.Errorf("begin workflow cancel transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	instance, err := s.getWorkflowTx(ctx, tx, workflowID)
+	if err != nil {
+		return WorkflowInstance{}, err
+	}
+	if instance.Status == StatusCompleted || instance.Status == StatusCanceled {
+		return WorkflowInstance{}, fmt.Errorf("workflow %s cannot be canceled from status %q", workflowID, instance.Status)
+	}
+
+	now := time.Now().UTC()
+	sequence, err := appendEventTx(ctx, tx, workflowID, instance.LastEventSequence, "WorkflowCanceled", map[string]any{
+		"canceledAt": formatTime(now),
+	})
+	if err != nil {
+		return WorkflowInstance{}, err
+	}
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE workflow_tasks
+		SET status = ?, lease_owner = '', lease_expires_at = NULL, updated_at = ?
+		WHERE workflow_id = ? AND status NOT IN (?, ?)
+	`, StatusCanceled, formatTime(now), workflowID, StatusCompleted, StatusCanceled); err != nil {
+		return WorkflowInstance{}, fmt.Errorf("cancel workflow tasks: %w", err)
+	}
+
+	instance.Status = StatusCanceled
+	instance.LastError = ""
+	instance.NextRunAt = nil
+	instance.LastEventSequence = sequence
+	instance.UpdatedAt = now
+	if err := s.updateInstanceTx(ctx, tx, instance, snapshotFromInstance(instance), nil); err != nil {
+		return WorkflowInstance{}, err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return WorkflowInstance{}, fmt.Errorf("commit workflow cancel transaction: %w", err)
+	}
+
+	result, err := s.GetWorkflow(ctx, workflowID)
+	if err != nil {
+		return WorkflowInstance{}, err
+	}
+	s.emitLiveEvent("workflow.canceled", "workflow", workflowID, map[string]any{
+		"workflowId": workflowID,
+		"status":     StatusCanceled,
+	})
+	s.emitOperationEvent(workflowID, "WorkflowCanceled", map[string]any{
+		"status": StatusCanceled,
+	})
+	return result, nil
+}
+
+func (s *Service) ReplayWorkflow(ctx context.Context, workflowID string) (WorkflowReplay, error) {
+	events, err := s.GetWorkflowHistory(ctx, workflowID)
+	if err != nil {
+		return WorkflowReplay{}, err
+	}
+	replay := WorkflowReplay{
+		WorkflowID: workflowID,
+		Status:     StatusPending,
+		Context:    buildInitialContext("", 0),
+		EventCount: len(events),
+	}
+
+	for _, event := range events {
+		replay.LastEventSequence = event.Sequence
+		payloadMap, _ := decodePayloadForEvent(event.Payload).(map[string]any)
+		switch event.EventType {
+		case "WorkflowStarted":
+			replay.Status = StatusRunning
+			replay.WorkflowDefinition, _ = payloadMap["definitionId"].(string)
+		case "ActivityScheduled":
+			replay.Status = StatusRunning
+			replay.CurrentStepName, _ = payloadMap["stepName"].(string)
+			replay.CurrentActivity, _ = payloadMap["activity"].(string)
+			replay.LastError = ""
+		case "ActivityWaiting", "ActivityRetryScheduled":
+			replay.Status = StatusRunning
+			replay.LastError, _ = payloadMap["error"].(string)
+		case "ActivityCompleted":
+			if contextValue, ok := payloadMap["context"]; ok {
+				if encoded, err := json.Marshal(contextValue); err == nil {
+					replay.Context = json.RawMessage(encoded)
+				}
+			} else if replay.Context != nil {
+				stepName, _ := payloadMap["stepName"].(string)
+				if outputValue, ok := payloadMap["output"]; ok {
+					if encoded, err := json.Marshal(outputValue); err == nil {
+						replay.Context, _ = applyStepOutputToContext(replay.Context, stepName, json.RawMessage(encoded))
+					}
+				}
+			}
+			if outputValue, ok := payloadMap["output"]; ok {
+				if encoded, err := json.Marshal(outputValue); err == nil {
+					replay.LastOutput = json.RawMessage(encoded)
+				}
+			}
+			replay.LastError = ""
+		case "ActivityFailed", "WorkflowFailed":
+			replay.Status = StatusFailed
+			replay.LastError, _ = payloadMap["error"].(string)
+		case "WorkflowCompleted":
+			replay.Status = StatusCompleted
+			replay.CurrentStepName = ""
+			replay.CurrentActivity = ""
+		case "WorkflowCanceled":
+			replay.Status = StatusCanceled
+			replay.CurrentStepName = ""
+			replay.CurrentActivity = ""
+		case "WorkflowSignaled":
+			name, _ := payloadMap["name"].(string)
+			if name != "" {
+				encoded, _ := json.Marshal(payloadMap["payload"])
+				replay.Context, _ = applySignalToContext(replay.Context, name, json.RawMessage(encoded), event.CreatedAt)
+			}
+		}
+	}
+
+	return replay, nil
 }
 
 func (s *Service) ListRecentEvents(ctx context.Context, limit int) ([]WorkflowEvent, error) {
@@ -808,11 +1020,17 @@ func (s *Service) RunOnce(ctx context.Context) (bool, error) {
 	if activity == nil {
 		return true, s.failTaskNow(ctx, task, fmt.Errorf("activity %q is not registered", step.Activity))
 	}
+	resolvedInput, err := resolveStepInput(step.Input, instance.Context)
+	if err != nil {
+		return true, s.failTaskNow(ctx, task, err)
+	}
+	step.Input = resolvedInput
 
 	output, execErr := activity.Execute(ctx, ActivityExecutionRequest{
 		WorkflowID:        task.WorkflowID,
 		DefinitionID:      details.ID,
 		DefinitionVersion: details.ActiveVersion,
+		WorkflowContext:   instance.Context,
 		Step:              step,
 		Task:              task,
 		Now:               time.Now().UTC(),
@@ -826,7 +1044,7 @@ func (s *Service) RunOnce(ctx context.Context) (bool, error) {
 		return true, s.delayTask(ctx, task, step, *output.DelayUntil, output.State)
 	}
 
-	return true, s.completeTask(ctx, task, details, step, output.Output)
+	return true, s.completeTask(ctx, task, details, step, output.Output, output.ContextUpdates)
 }
 
 func (s *Service) applyTaskAction(ctx context.Context, taskID int64, action string) (WorkflowTask, error) {
@@ -864,6 +1082,7 @@ func (s *Service) applyTaskAction(ctx context.Context, taskID int64, action stri
 		eventType = "TaskRetried"
 		instance.Status = StatusRunning
 		instance.LastError = ""
+		instance.NextRunAt = &now
 	case "requeue":
 		if task.Status == StatusCompleted {
 			return WorkflowTask{}, fmt.Errorf("task %d cannot be requeued after completion", taskID)
@@ -876,6 +1095,7 @@ func (s *Service) applyTaskAction(ctx context.Context, taskID int64, action stri
 		if instance.Status != StatusCompleted && instance.Status != StatusCanceled {
 			instance.Status = StatusRunning
 			instance.LastError = ""
+			instance.NextRunAt = &now
 		}
 	case "pause":
 		if task.Status != StatusPending && task.Status != StatusRunning {
@@ -888,6 +1108,7 @@ func (s *Service) applyTaskAction(ctx context.Context, taskID int64, action stri
 		if instance.Status == StatusRunning {
 			instance.Status = StatusPaused
 		}
+		instance.NextRunAt = nil
 	case "resume":
 		if task.Status != StatusPaused {
 			return WorkflowTask{}, fmt.Errorf("task %d cannot be resumed from status %q", taskID, task.Status)
@@ -900,6 +1121,7 @@ func (s *Service) applyTaskAction(ctx context.Context, taskID int64, action stri
 		if instance.Status == StatusPaused {
 			instance.Status = StatusRunning
 		}
+		instance.NextRunAt = &now
 	case "cancel":
 		if task.Status == StatusCompleted || task.Status == StatusCanceled {
 			return WorkflowTask{}, fmt.Errorf("task %d cannot be canceled from status %q", taskID, task.Status)
@@ -911,6 +1133,7 @@ func (s *Service) applyTaskAction(ctx context.Context, taskID int64, action stri
 		eventType = "TaskCanceled"
 		instance.Status = StatusCanceled
 		instance.LastError = ""
+		instance.NextRunAt = nil
 	default:
 		return WorkflowTask{}, fmt.Errorf("unsupported task action %q", action)
 	}
@@ -952,13 +1175,7 @@ func (s *Service) applyTaskAction(ctx context.Context, taskID int64, action stri
 	}
 
 	instance.LastEventSequence = sequence
-	snapshot := workflowSnapshot{
-		Status:          instance.Status,
-		CurrentStepName: instance.CurrentStepName,
-		CurrentActivity: instance.CurrentActivity,
-		LastError:       instance.LastError,
-	}
-	if err := s.updateInstanceTx(ctx, tx, instance, snapshot, nil); err != nil {
+	if err := s.updateInstanceTx(ctx, tx, instance, snapshotFromInstance(instance), nil); err != nil {
 		return WorkflowTask{}, err
 	}
 
@@ -985,7 +1202,7 @@ func (s *Service) applyTaskAction(ctx context.Context, taskID int64, action stri
 	return result, nil
 }
 
-func (s *Service) completeTask(ctx context.Context, task WorkflowTask, definition DefinitionDetails, step StepDefinition, output json.RawMessage) error {
+func (s *Service) completeTask(ctx context.Context, task WorkflowTask, definition DefinitionDetails, step StepDefinition, output json.RawMessage, contextUpdates map[string]any) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin task completion transaction: %w", err)
@@ -999,6 +1216,14 @@ func (s *Service) completeTask(ctx context.Context, task WorkflowTask, definitio
 
 	now := time.Now().UTC()
 	sequence := instance.LastEventSequence
+	updatedContext, err := applyActivityResultToContext(instance.Context, step.Name, output, contextUpdates)
+	if err != nil {
+		return err
+	}
+	instance.Context = updatedContext
+	instance.LastOutput = output
+	instance.NextRunAt = nil
+
 	sequence, err = appendEventTx(ctx, tx, instance.ID, sequence, "ActivityCompleted", map[string]any{
 		"taskId":    task.ID,
 		"stepIndex": task.StepIndex,
@@ -1006,6 +1231,7 @@ func (s *Service) completeTask(ctx context.Context, task WorkflowTask, definitio
 		"activity":  step.Activity,
 		"attempt":   task.Attempts,
 		"output":    decodePayloadForEvent(output),
+		"context":   decodePayloadForEvent(updatedContext),
 	})
 	if err != nil {
 		return err
@@ -1019,12 +1245,15 @@ func (s *Service) completeTask(ctx context.Context, task WorkflowTask, definitio
 		return fmt.Errorf("mark workflow task complete: %w", err)
 	}
 
-	nextStepIndex := task.StepIndex + 1
+	nextStepIndex, selectedTransition, err := resolveNextStep(definition.Document.Steps, task.StepIndex, updatedContext)
+	if err != nil {
+		return err
+	}
 	instance.UpdatedAt = now
 	instance.LastEventSequence = sequence
 	instance.LastError = ""
 
-	if nextStepIndex >= len(definition.Document.Steps) {
+	if nextStepIndex < 0 {
 		sequence, err = appendEventTx(ctx, tx, instance.ID, sequence, "WorkflowCompleted", map[string]any{
 			"completedAt": formatTime(now),
 		})
@@ -1036,14 +1265,21 @@ func (s *Service) completeTask(ctx context.Context, task WorkflowTask, definitio
 		instance.CurrentStepName = ""
 		instance.CurrentActivity = ""
 		instance.LastEventSequence = sequence
-		if err := s.updateInstanceTx(ctx, tx, instance, workflowSnapshot{
-			Status:     StatusCompleted,
-			LastOutput: output,
-		}, nil); err != nil {
+		if err := s.updateInstanceTx(ctx, tx, instance, snapshotFromInstance(instance), nil); err != nil {
 			return err
 		}
 	} else {
 		nextStep := definition.Document.Steps[nextStepIndex]
+		if selectedTransition != nil {
+			sequence, err = appendEventTx(ctx, tx, instance.ID, sequence, "TransitionSelected", map[string]any{
+				"fromStep": task.StepName,
+				"toStep":   nextStep.Name,
+				"label":    selectedTransition.Label,
+			})
+			if err != nil {
+				return err
+			}
+		}
 		sequence, err = appendEventTx(ctx, tx, instance.ID, sequence, "ActivityScheduled", map[string]any{
 			"stepIndex":   nextStepIndex,
 			"stepName":    nextStep.Name,
@@ -1061,12 +1297,8 @@ func (s *Service) completeTask(ctx context.Context, task WorkflowTask, definitio
 		instance.CurrentStepName = nextStep.Name
 		instance.CurrentActivity = nextStep.Activity
 		instance.LastEventSequence = sequence
-		if err := s.updateInstanceTx(ctx, tx, instance, workflowSnapshot{
-			Status:          StatusRunning,
-			CurrentStepName: nextStep.Name,
-			CurrentActivity: nextStep.Activity,
-			LastOutput:      output,
-		}, nil); err != nil {
+		instance.NextRunAt = &now
+		if err := s.updateInstanceTx(ctx, tx, instance, snapshotFromInstance(instance), nil); err != nil {
 			return err
 		}
 	}
@@ -1150,12 +1382,9 @@ func (s *Service) delayTask(ctx context.Context, task WorkflowTask, step StepDef
 	instance.Status = StatusRunning
 	instance.LastEventSequence = sequence
 	instance.LastError = ""
+	instance.NextRunAt = &runAt
 	instance.UpdatedAt = now
-	if err := s.updateInstanceTx(ctx, tx, instance, workflowSnapshot{
-		Status:          StatusRunning,
-		CurrentStepName: instance.CurrentStepName,
-		CurrentActivity: instance.CurrentActivity,
-	}, nil); err != nil {
+	if err := s.updateInstanceTx(ctx, tx, instance, snapshotFromInstance(instance), nil); err != nil {
 		return err
 	}
 
@@ -1226,13 +1455,9 @@ func (s *Service) handleTaskFailure(ctx context.Context, task WorkflowTask, step
 		instance.Status = StatusRunning
 		instance.LastEventSequence = sequence
 		instance.LastError = execErr.Error()
+		instance.NextRunAt = &nextRunAt
 		instance.UpdatedAt = now
-		if err := s.updateInstanceTx(ctx, tx, instance, workflowSnapshot{
-			Status:          StatusRunning,
-			CurrentStepName: instance.CurrentStepName,
-			CurrentActivity: instance.CurrentActivity,
-			LastError:       execErr.Error(),
-		}, nil); err != nil {
+		if err := s.updateInstanceTx(ctx, tx, instance, snapshotFromInstance(instance), nil); err != nil {
 			return err
 		}
 	} else {
@@ -1268,13 +1493,9 @@ func (s *Service) handleTaskFailure(ctx context.Context, task WorkflowTask, step
 		instance.Status = StatusFailed
 		instance.LastEventSequence = sequence
 		instance.LastError = execErr.Error()
+		instance.NextRunAt = nil
 		instance.UpdatedAt = now
-		if err := s.updateInstanceTx(ctx, tx, instance, workflowSnapshot{
-			Status:          StatusFailed,
-			CurrentStepName: instance.CurrentStepName,
-			CurrentActivity: instance.CurrentActivity,
-			LastError:       execErr.Error(),
-		}, nil); err != nil {
+		if err := s.updateInstanceTx(ctx, tx, instance, snapshotFromInstance(instance), nil); err != nil {
 			return err
 		}
 	}
@@ -1360,13 +1581,9 @@ func (s *Service) failTaskNow(ctx context.Context, task WorkflowTask, cause erro
 	instance.Status = StatusFailed
 	instance.LastEventSequence = sequence
 	instance.LastError = cause.Error()
+	instance.NextRunAt = nil
 	instance.UpdatedAt = now
-	if err := s.updateInstanceTx(ctx, tx, instance, workflowSnapshot{
-		Status:          StatusFailed,
-		CurrentStepName: instance.CurrentStepName,
-		CurrentActivity: instance.CurrentActivity,
-		LastError:       cause.Error(),
-	}, nil); err != nil {
+	if err := s.updateInstanceTx(ctx, tx, instance, snapshotFromInstance(instance), nil); err != nil {
 		return err
 	}
 
@@ -1535,11 +1752,12 @@ func (s *Service) normalizeDefinition(input CreateDefinitionInput) (DefinitionDo
 	seenNames := make(map[string]struct{}, len(input.Steps))
 	for i, step := range input.Steps {
 		normalized := StepDefinition{
-			Name:     strings.TrimSpace(step.Name),
-			Activity: strings.TrimSpace(step.Activity),
-			Input:    step.Input,
-			Retry:    step.Retry,
-			Layout:   step.Layout,
+			Name:        strings.TrimSpace(step.Name),
+			Activity:    strings.TrimSpace(step.Activity),
+			Input:       step.Input,
+			Retry:       step.Retry,
+			Layout:      step.Layout,
+			Transitions: make([]StepTransition, 0, len(step.Transitions)),
 		}
 		if normalized.Name == "" {
 			return DefinitionDocument{}, fmt.Errorf("step %d requires a name", i)
@@ -1563,7 +1781,51 @@ func (s *Service) normalizeDefinition(input CreateDefinitionInput) (DefinitionDo
 		if len(normalized.Input) == 0 {
 			normalized.Input = json.RawMessage(`{}`)
 		}
+		for _, transition := range step.Transitions {
+			next := StepTransition{
+				To:    strings.TrimSpace(transition.To),
+				Label: strings.TrimSpace(transition.Label),
+			}
+			if next.To == "" {
+				return DefinitionDocument{}, fmt.Errorf("step %q has a transition with no target", normalized.Name)
+			}
+			if transition.Condition != nil {
+				next.Condition = &TransitionCondition{
+					Path:     strings.TrimSpace(transition.Condition.Path),
+					Operator: strings.TrimSpace(strings.ToLower(transition.Condition.Operator)),
+					Value:    transition.Condition.Value,
+				}
+				if next.Condition.Path == "" {
+					return DefinitionDocument{}, fmt.Errorf("step %q has a transition with no condition path", normalized.Name)
+				}
+				if next.Condition.Operator == "" {
+					next.Condition.Operator = "eq"
+				}
+			}
+			normalized.Transitions = append(normalized.Transitions, next)
+		}
 		document.Steps = append(document.Steps, normalized)
+	}
+
+	stepNames := make(map[string]struct{}, len(document.Steps))
+	for _, step := range document.Steps {
+		stepNames[step.Name] = struct{}{}
+	}
+	for _, step := range document.Steps {
+		defaultTransitions := 0
+		for _, transition := range step.Transitions {
+			if _, ok := stepNames[transition.To]; !ok {
+				return DefinitionDocument{}, fmt.Errorf("step %q references unknown transition target %q", step.Name, transition.To)
+			}
+			if transition.Condition == nil {
+				defaultTransitions++
+			} else if err := validateTransitionCondition(step.Name, *transition.Condition); err != nil {
+				return DefinitionDocument{}, err
+			}
+		}
+		if defaultTransitions > 1 {
+			return DefinitionDocument{}, fmt.Errorf("step %q can only have one default transition", step.Name)
+		}
 	}
 
 	return document, nil
@@ -1708,7 +1970,7 @@ func (s *Service) getDefinitionVersionDocumentTx(ctx context.Context, tx *sql.Tx
 func (s *Service) getWorkflowTx(ctx context.Context, tx *sql.Tx, workflowID string) (WorkflowInstance, error) {
 	row := tx.QueryRowContext(ctx, `
 		SELECT id, definition_id, definition_version, status, current_step_index, current_step_name,
-		       current_activity, last_event_sequence, last_error, created_at, updated_at
+		       current_activity, snapshot_json, last_event_sequence, last_error, created_at, updated_at
 		FROM workflow_instances
 		WHERE id = ?
 	`, workflowID)
@@ -1764,6 +2026,343 @@ func decodePayloadForEvent(raw json.RawMessage) any {
 		return string(raw)
 	}
 	return payload
+}
+
+var templateTokenPattern = regexp.MustCompile(`\{\{\s*([^{}]+?)\s*\}\}`)
+
+func buildInitialContext(definitionID string, version int) json.RawMessage {
+	payload, _ := json.Marshal(map[string]any{
+		"workflow": map[string]any{
+			"definitionId":      definitionID,
+			"definitionVersion": version,
+		},
+		"steps":   map[string]any{},
+		"signals": map[string]any{},
+	})
+	return json.RawMessage(payload)
+}
+
+func snapshotFromInstance(instance WorkflowInstance) workflowSnapshot {
+	return workflowSnapshot{
+		Status:          instance.Status,
+		CurrentStepName: instance.CurrentStepName,
+		CurrentActivity: instance.CurrentActivity,
+		LastOutput:      instance.LastOutput,
+		LastError:       instance.LastError,
+		Context:         instance.Context,
+		PendingSignals:  instance.PendingSignals,
+		NextRunAt:       instance.NextRunAt,
+	}
+}
+
+func decodeJSONObject(raw json.RawMessage) map[string]any {
+	if len(raw) == 0 {
+		return map[string]any{}
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(raw, &payload); err != nil || payload == nil {
+		return map[string]any{}
+	}
+	return payload
+}
+
+func encodeJSONObject(payload map[string]any) (json.RawMessage, error) {
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		return nil, err
+	}
+	return json.RawMessage(encoded), nil
+}
+
+func decodeJSONValue(raw json.RawMessage) any {
+	if len(raw) == 0 {
+		return nil
+	}
+	var value any
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return string(raw)
+	}
+	return value
+}
+
+func setPathValue(root map[string]any, path string, value any) {
+	parts := strings.Split(strings.TrimSpace(strings.Trim(path, ".")), ".")
+	if len(parts) == 0 || parts[0] == "" {
+		return
+	}
+
+	current := root
+	for _, rawPart := range parts[:len(parts)-1] {
+		part := strings.TrimSpace(rawPart)
+		if part == "" {
+			return
+		}
+		next, ok := current[part].(map[string]any)
+		if !ok {
+			next = map[string]any{}
+			current[part] = next
+		}
+		current = next
+	}
+	lastPart := strings.TrimSpace(parts[len(parts)-1])
+	if lastPart == "" {
+		return
+	}
+	current[lastPart] = value
+}
+
+func lookupPathValue(root any, path string) (any, bool) {
+	parts := strings.Split(strings.TrimSpace(strings.Trim(path, ".")), ".")
+	current := root
+	for _, rawPart := range parts {
+		part := strings.TrimSpace(rawPart)
+		if part == "" {
+			return nil, false
+		}
+		switch typed := current.(type) {
+		case map[string]any:
+			next, ok := typed[part]
+			if !ok {
+				return nil, false
+			}
+			current = next
+		case []any:
+			index, err := strconv.Atoi(part)
+			if err != nil || index < 0 || index >= len(typed) {
+				return nil, false
+			}
+			current = typed[index]
+		default:
+			return nil, false
+		}
+	}
+	return current, true
+}
+
+func stringifyTemplateValue(value any) string {
+	switch typed := value.(type) {
+	case nil:
+		return ""
+	case string:
+		return typed
+	case bool, float64, int, int64, uint64:
+		return fmt.Sprint(typed)
+	default:
+		encoded, err := json.Marshal(typed)
+		if err != nil {
+			return fmt.Sprint(typed)
+		}
+		return string(encoded)
+	}
+}
+
+func resolveTemplateValue(value any, context map[string]any) any {
+	switch typed := value.(type) {
+	case string:
+		matches := templateTokenPattern.FindAllStringSubmatch(typed, -1)
+		if len(matches) == 0 {
+			return typed
+		}
+		if len(matches) == 1 && strings.TrimSpace(matches[0][0]) == strings.TrimSpace(typed) {
+			resolved, ok := lookupPathValue(context, matches[0][1])
+			if ok {
+				return resolved
+			}
+			return typed
+		}
+		return templateTokenPattern.ReplaceAllStringFunc(typed, func(token string) string {
+			match := templateTokenPattern.FindStringSubmatch(token)
+			if len(match) < 2 {
+				return token
+			}
+			resolved, ok := lookupPathValue(context, match[1])
+			if !ok {
+				return token
+			}
+			return stringifyTemplateValue(resolved)
+		})
+	case []any:
+		result := make([]any, 0, len(typed))
+		for _, item := range typed {
+			result = append(result, resolveTemplateValue(item, context))
+		}
+		return result
+	case map[string]any:
+		result := make(map[string]any, len(typed))
+		for key, item := range typed {
+			result[key] = resolveTemplateValue(item, context)
+		}
+		return result
+	default:
+		return value
+	}
+}
+
+func resolveStepInput(raw json.RawMessage, contextRaw json.RawMessage) (json.RawMessage, error) {
+	if len(raw) == 0 {
+		return json.RawMessage(`{}`), nil
+	}
+	var payload any
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return nil, fmt.Errorf("decode step input for templating: %w", err)
+	}
+	context := decodeJSONObject(contextRaw)
+	resolved := resolveTemplateValue(payload, context)
+	encoded, err := json.Marshal(resolved)
+	if err != nil {
+		return nil, fmt.Errorf("encode resolved step input: %w", err)
+	}
+	return json.RawMessage(encoded), nil
+}
+
+func applyStepOutputToContext(contextRaw json.RawMessage, stepName string, output json.RawMessage) (json.RawMessage, error) {
+	context := decodeJSONObject(contextRaw)
+	outputValue := decodeJSONValue(output)
+	setPathValue(context, "last", outputValue)
+	setPathValue(context, "steps."+stepName, outputValue)
+	return encodeJSONObject(context)
+}
+
+func applyActivityResultToContext(contextRaw json.RawMessage, stepName string, output json.RawMessage, updates map[string]any) (json.RawMessage, error) {
+	context := decodeJSONObject(contextRaw)
+	for path, value := range updates {
+		setPathValue(context, path, value)
+	}
+	outputValue := decodeJSONValue(output)
+	setPathValue(context, "last", outputValue)
+	setPathValue(context, "steps."+stepName, outputValue)
+	return encodeJSONObject(context)
+}
+
+func applySignalToContext(contextRaw json.RawMessage, signalName string, payload json.RawMessage, now time.Time) (json.RawMessage, error) {
+	context := decodeJSONObject(contextRaw)
+	signals, _ := context["signals"].(map[string]any)
+	if signals == nil {
+		signals = map[string]any{}
+		context["signals"] = signals
+	}
+	current, _ := signals[signalName].(map[string]any)
+	if current == nil {
+		current = map[string]any{}
+	}
+	count, _ := current["count"].(float64)
+	current["count"] = count + 1
+	current["lastPayload"] = decodeJSONValue(payload)
+	current["receivedAt"] = formatTime(now)
+	signals[signalName] = current
+	return encodeJSONObject(context)
+}
+
+func validateTransitionCondition(stepName string, condition TransitionCondition) error {
+	switch condition.Operator {
+	case "eq", "neq", "exists", "not_exists", "truthy", "falsy":
+		return nil
+	default:
+		return fmt.Errorf("step %q has unsupported transition operator %q", stepName, condition.Operator)
+	}
+}
+
+func resolveNextStep(steps []StepDefinition, currentIndex int, contextRaw json.RawMessage) (int, *StepTransition, error) {
+	if currentIndex < 0 || currentIndex >= len(steps) {
+		return -1, nil, fmt.Errorf("step index %d out of range", currentIndex)
+	}
+
+	step := steps[currentIndex]
+	if len(step.Transitions) == 0 {
+		nextIndex := currentIndex + 1
+		if nextIndex >= len(steps) {
+			return -1, nil, nil
+		}
+		return nextIndex, nil, nil
+	}
+
+	indexByName := make(map[string]int, len(steps))
+	for idx, candidate := range steps {
+		indexByName[candidate.Name] = idx
+	}
+
+	var defaultTransition *StepTransition
+	context := decodeJSONObject(contextRaw)
+	for i := range step.Transitions {
+		transition := &step.Transitions[i]
+		if transition.Condition == nil {
+			defaultTransition = transition
+			continue
+		}
+		matched, err := transitionMatches(context, *transition.Condition)
+		if err != nil {
+			return -1, nil, fmt.Errorf("evaluate transition from step %q to %q: %w", step.Name, transition.To, err)
+		}
+		if matched {
+			nextIndex, ok := indexByName[transition.To]
+			if !ok {
+				return -1, nil, fmt.Errorf("transition target %q not found", transition.To)
+			}
+			return nextIndex, transition, nil
+		}
+	}
+
+	if defaultTransition != nil {
+		nextIndex, ok := indexByName[defaultTransition.To]
+		if !ok {
+			return -1, nil, fmt.Errorf("transition target %q not found", defaultTransition.To)
+		}
+		return nextIndex, defaultTransition, nil
+	}
+
+	return -1, nil, fmt.Errorf("step %q completed but no transition matched workflow context", step.Name)
+}
+
+func transitionMatches(context map[string]any, condition TransitionCondition) (bool, error) {
+	value, found := lookupPathValue(context, condition.Path)
+	switch condition.Operator {
+	case "exists":
+		return found, nil
+	case "not_exists":
+		return !found, nil
+	case "truthy":
+		return isTruthy(value), nil
+	case "falsy":
+		return !isTruthy(value), nil
+	case "eq", "neq":
+		expected := decodeJSONValue(condition.Value)
+		actualJSON, err := json.Marshal(value)
+		if err != nil {
+			return false, fmt.Errorf("marshal transition actual value: %w", err)
+		}
+		expectedJSON, err := json.Marshal(expected)
+		if err != nil {
+			return false, fmt.Errorf("marshal transition expected value: %w", err)
+		}
+		matched := string(actualJSON) == string(expectedJSON)
+		if condition.Operator == "neq" {
+			return !matched, nil
+		}
+		return matched, nil
+	default:
+		return false, fmt.Errorf("unsupported transition operator %q", condition.Operator)
+	}
+}
+
+func isTruthy(value any) bool {
+	switch typed := value.(type) {
+	case nil:
+		return false
+	case bool:
+		return typed
+	case string:
+		return typed != ""
+	case float64:
+		return typed != 0
+	case int:
+		return typed != 0
+	case []any:
+		return len(typed) > 0
+	case map[string]any:
+		return len(typed) > 0
+	default:
+		return true
+	}
 }
 
 func buildSnapshotJSON(snapshot workflowSnapshot) (string, error) {
@@ -1863,10 +2462,11 @@ func scanDefinitionVersionSummary(scanner interface{ Scan(...any) error }) (Defi
 
 func scanWorkflowInstance(scanner interface{ Scan(...any) error }) (WorkflowInstance, error) {
 	var (
-		instance  WorkflowInstance
-		lastError sql.NullString
-		createdAt string
-		updatedAt string
+		instance     WorkflowInstance
+		snapshotJSON string
+		lastError    sql.NullString
+		createdAt    string
+		updatedAt    string
 	)
 	if err := scanner.Scan(
 		&instance.ID,
@@ -1876,6 +2476,7 @@ func scanWorkflowInstance(scanner interface{ Scan(...any) error }) (WorkflowInst
 		&instance.CurrentStepIndex,
 		&instance.CurrentStepName,
 		&instance.CurrentActivity,
+		&snapshotJSON,
 		&instance.LastEventSequence,
 		&lastError,
 		&createdAt,
@@ -1886,6 +2487,18 @@ func scanWorkflowInstance(scanner interface{ Scan(...any) error }) (WorkflowInst
 	instance.LastError = lastError.String
 	instance.CreatedAt = mustParseTime(createdAt)
 	instance.UpdatedAt = mustParseTime(updatedAt)
+	if snapshotJSON != "" {
+		var snapshot workflowSnapshot
+		if err := json.Unmarshal([]byte(snapshotJSON), &snapshot); err == nil {
+			instance.LastOutput = snapshot.LastOutput
+			instance.Context = snapshot.Context
+			instance.PendingSignals = snapshot.PendingSignals
+			instance.NextRunAt = snapshot.NextRunAt
+			if instance.LastError == "" {
+				instance.LastError = snapshot.LastError
+			}
+		}
+	}
 	return instance, nil
 }
 
@@ -2010,8 +2623,19 @@ func (s *Service) initSchema(ctx context.Context) error {
 			created_at TEXT NOT NULL,
 			updated_at TEXT NOT NULL
 		)`,
+		`CREATE TABLE IF NOT EXISTS workflow_signals (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			workflow_id TEXT NOT NULL,
+			signal_name TEXT NOT NULL,
+			payload TEXT NOT NULL DEFAULT '',
+			status TEXT NOT NULL,
+			created_at TEXT NOT NULL,
+			processed_at TEXT
+		)`,
 		`CREATE INDEX IF NOT EXISTS idx_workflow_tasks_status_run_at ON workflow_tasks(status, run_at)`,
+		`CREATE INDEX IF NOT EXISTS idx_workflow_tasks_workflow_status ON workflow_tasks(workflow_id, status, run_at)`,
 		`CREATE INDEX IF NOT EXISTS idx_workflow_events_workflow_sequence ON workflow_events(workflow_id, sequence)`,
+		`CREATE INDEX IF NOT EXISTS idx_workflow_signals_workflow_created_at ON workflow_signals(workflow_id, created_at)`,
 		`CREATE INDEX IF NOT EXISTS idx_workflow_instances_updated_at ON workflow_instances(updated_at)`,
 	}
 

@@ -24,12 +24,25 @@ type StepLayout struct {
 	Y float64 `json:"y"`
 }
 
+type TransitionCondition struct {
+	Path     string          `json:"path"`
+	Operator string          `json:"operator"`
+	Value    json.RawMessage `json:"value,omitempty"`
+}
+
+type StepTransition struct {
+	To        string               `json:"to"`
+	Label     string               `json:"label,omitempty"`
+	Condition *TransitionCondition `json:"condition,omitempty"`
+}
+
 type StepDefinition struct {
-	Name     string          `json:"name"`
-	Activity string          `json:"activity"`
-	Input    json.RawMessage `json:"input,omitempty"`
-	Retry    RetryPolicy     `json:"retry"`
-	Layout   StepLayout      `json:"layout"`
+	Name        string           `json:"name"`
+	Activity    string           `json:"activity"`
+	Input       json.RawMessage  `json:"input,omitempty"`
+	Retry       RetryPolicy      `json:"retry"`
+	Layout      StepLayout       `json:"layout"`
+	Transitions []StepTransition `json:"transitions,omitempty"`
 }
 
 type DefinitionDocument struct {
@@ -71,17 +84,21 @@ type DefinitionDetails struct {
 }
 
 type WorkflowInstance struct {
-	ID                string    `json:"id"`
-	DefinitionID      string    `json:"definitionId"`
-	DefinitionVersion int       `json:"definitionVersion"`
-	Status            string    `json:"status"`
-	CurrentStepIndex  int       `json:"currentStepIndex"`
-	CurrentStepName   string    `json:"currentStepName"`
-	CurrentActivity   string    `json:"currentActivity"`
-	LastEventSequence int       `json:"lastEventSequence"`
-	LastError         string    `json:"lastError,omitempty"`
-	CreatedAt         time.Time `json:"createdAt"`
-	UpdatedAt         time.Time `json:"updatedAt"`
+	ID                string          `json:"id"`
+	DefinitionID      string          `json:"definitionId"`
+	DefinitionVersion int             `json:"definitionVersion"`
+	Status            string          `json:"status"`
+	CurrentStepIndex  int             `json:"currentStepIndex"`
+	CurrentStepName   string          `json:"currentStepName"`
+	CurrentActivity   string          `json:"currentActivity"`
+	LastEventSequence int             `json:"lastEventSequence"`
+	LastError         string          `json:"lastError,omitempty"`
+	LastOutput        json.RawMessage `json:"lastOutput,omitempty"`
+	Context           json.RawMessage `json:"context,omitempty"`
+	PendingSignals    int             `json:"pendingSignals"`
+	NextRunAt         *time.Time      `json:"nextRunAt,omitempty"`
+	CreatedAt         time.Time       `json:"createdAt"`
+	UpdatedAt         time.Time       `json:"updatedAt"`
 }
 
 type WorkflowEvent struct {
@@ -110,9 +127,40 @@ type WorkflowTask struct {
 	State          json.RawMessage `json:"-"`
 }
 
+type WorkflowSignal struct {
+	ID          int64           `json:"id"`
+	WorkflowID  string          `json:"workflowId"`
+	SignalName  string          `json:"signalName"`
+	Payload     json.RawMessage `json:"payload"`
+	Status      string          `json:"status"`
+	CreatedAt   time.Time       `json:"createdAt"`
+	ProcessedAt *time.Time      `json:"processedAt,omitempty"`
+}
+
+type SignalWorkflowInput struct {
+	Name    string          `json:"name"`
+	Payload json.RawMessage `json:"payload,omitempty"`
+}
+
+type WorkflowReplay struct {
+	WorkflowID         string          `json:"workflowId"`
+	Status             string          `json:"status"`
+	CurrentStepName    string          `json:"currentStepName,omitempty"`
+	CurrentActivity    string          `json:"currentActivity,omitempty"`
+	LastEventSequence  int             `json:"lastEventSequence"`
+	LastError          string          `json:"lastError,omitempty"`
+	LastOutput         json.RawMessage `json:"lastOutput,omitempty"`
+	Context            json.RawMessage `json:"context,omitempty"`
+	EventCount         int             `json:"eventCount"`
+	WorkflowDefinition string          `json:"definitionId,omitempty"`
+}
+
 type ActivityDescriptor struct {
 	Name         string         `json:"name"`
+	DisplayName  string         `json:"displayName,omitempty"`
 	Description  string         `json:"description"`
 	Category     string         `json:"category"`
+	Status       string         `json:"status,omitempty"`
+	Tags         []string       `json:"tags,omitempty"`
 	ExampleInput map[string]any `json:"exampleInput,omitempty"`
 }

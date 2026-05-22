@@ -19,7 +19,7 @@ import {
   useNodesState,
   useReactFlow,
 } from '@xyflow/react'
-import { AlertCircle, ArrowLeft, CheckCircle2, Clock3, FileText, Globe, Grip, Plus, Save, Send, SquareTerminal, Trash2, TriangleAlert, X } from 'lucide-react'
+import { AlertCircle, ArrowLeft, CheckCircle2, ChevronDown, ChevronRight, Clock3, FileText, Globe, Grip, Plus, Save, Send, SquareTerminal, Trash2, TriangleAlert, X } from 'lucide-react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { workflowApi } from '../services/api'
 import type { WorkflowActivity, WorkflowDefinitionDocument } from '../types'
@@ -43,6 +43,12 @@ type BasicNodeData = {
   label: string
 }
 
+type ContextReference = {
+  label: string
+  template: string
+  description: string
+}
+
 type DesignerNodeData = ActivityNodeData | BasicNodeData
 
 type FlowNode = Node<DesignerNodeData>
@@ -62,6 +68,10 @@ function formatCategory(category: string) {
     return 'General'
   }
   return category.replace(/[-_]/g, ' ').replace(/\b\w/g, (letter) => letter.toUpperCase())
+}
+
+function activityDisplayName(activity: Pick<WorkflowActivity, 'name' | 'displayName'>) {
+  return activity.displayName?.trim() || formatCategory(activity.name)
 }
 
 function stringifyValue(value: unknown) {
@@ -170,6 +180,89 @@ function formatStructuredEditorValue(value: unknown) {
   return JSON.stringify(value, null, 2)
 }
 
+function formatStringListValue(value: unknown) {
+  if (!Array.isArray(value)) {
+    return ''
+  }
+  return value.map((item) => String(item)).join(', ')
+}
+
+function collectContextReferences(nodes: Node[], edges: Edge[], currentNodeID: string): ContextReference[] {
+  const nodeMap = new Map(nodes.map((node) => [node.id, node]))
+  const outgoing = new Map<string, string[]>()
+  for (const edge of edges) {
+    outgoing.set(edge.source, [...(outgoing.get(edge.source) ?? []), edge.target])
+  }
+
+  const orderedPreviousNodes: ActivityFlowNode[] = []
+  const visited = new Set<string>()
+  let currentID = startNodeID
+  while (!visited.has(currentID) && currentID !== currentNodeID) {
+    visited.add(currentID)
+    const nextTargets = outgoing.get(currentID) ?? []
+    if (nextTargets.length === 0) {
+      break
+    }
+    const nextID = nextTargets[0]
+    if (nextID === currentNodeID || nextID === endNodeID) {
+      break
+    }
+    const nextNode = nodeMap.get(nextID)
+    if (nextNode?.type === 'activity') {
+      orderedPreviousNodes.push(nextNode as ActivityFlowNode)
+    }
+    currentID = nextID
+  }
+
+  const references: ContextReference[] = [
+    {
+      label: 'Latest completed step',
+      template: '{{last}}',
+      description: 'Uses the full output from the most recently completed step.',
+    },
+    {
+      label: 'Latest completed field',
+      template: '{{last.field}}',
+      description: 'Replace "field" with a property from the latest step output.',
+    },
+    {
+      label: 'Signal payload',
+      template: '{{signals.approval.lastPayload}}',
+      description: 'Reads the most recent payload for a workflow signal named approval.',
+    },
+    {
+      label: 'Signal count',
+      template: '{{signals.approval.count}}',
+      description: 'Reads how many times a workflow signal was received.',
+    },
+  ]
+
+  for (const previousNode of orderedPreviousNodes) {
+    const stepName = previousNode.data.label.trim() || previousNode.data.activityName
+    references.push({
+      label: `${stepName} output`,
+      template: `{{steps.${stepName}}}`,
+      description: 'References the full output object for this earlier step.',
+    })
+
+    const seenKeys = new Set<string>()
+    for (const row of previousNode.data.inputRows) {
+      const key = row.key.trim()
+      if (!key || seenKeys.has(key)) {
+        continue
+      }
+      seenKeys.add(key)
+      references.push({
+        label: `${stepName}.${key}`,
+        template: `{{steps.${stepName}.${key}}}`,
+        description: 'Common field path based on this step configuration. Adjust deeper fields as needed.',
+      })
+    }
+  }
+
+  return references
+}
+
 function activityVisual(activityName: string) {
   switch (activityName) {
     case 'http-request':
@@ -270,22 +363,35 @@ function ActivityNode({ data, selected }: NodeProps<ActivityFlowNode>) {
 
 function ActivityPropertiesModal({
   node,
+  contextReferences,
   onClose,
   onDelete,
   onUpdate,
 }: {
   node: ActivityFlowNode
+  contextReferences: ContextReference[]
   onClose: () => void
   onDelete: () => void
   onUpdate: (updater: (data: ActivityNodeData) => ActivityNodeData) => void
 }) {
   const payload = buildInputPayload(node.data.inputRows)
+  const [copiedTemplate, setCopiedTemplate] = useState<string | null>(null)
+  const [isContextExpanded, setIsContextExpanded] = useState(false)
 
   const setField = (key: string, value: string, options?: { removeWhenBlank?: boolean }) => {
     onUpdate((data) => ({
       ...data,
       inputRows: upsertInputRow(data.inputRows, key, value, options),
     }))
+  }
+
+  const copyTemplate = async (template: string) => {
+    try {
+      await navigator.clipboard.writeText(template)
+      setCopiedTemplate(template)
+    } catch {
+      setCopiedTemplate(null)
+    }
   }
 
   const renderGenericRows = () => (
@@ -511,6 +617,76 @@ function ActivityPropertiesModal({
             </div>
           </div>
         )
+      case 'script':
+        return (
+          <div className="space-y-3">
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+              <div>
+                <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wide text-gray-500 dark:text-slate-400">Language</label>
+                <input
+                  value={findInputRowValue(node.data.inputRows, 'language') || 'starlark'}
+                  onChange={(event) => setField('language', event.target.value || 'starlark')}
+                  placeholder="starlark"
+                  className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2.5 text-sm text-gray-900 outline-none transition-colors focus:border-primary-500 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
+                />
+              </div>
+              <div>
+                <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wide text-gray-500 dark:text-slate-400">Timeout ms</label>
+                <input
+                  type="number"
+                  min={1}
+                  value={findInputRowValue(node.data.inputRows, 'timeoutMs')}
+                  onChange={(event) => setField('timeoutMs', event.target.value, { removeWhenBlank: true })}
+                  placeholder="100"
+                  className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2.5 text-sm text-gray-900 outline-none transition-colors focus:border-primary-500 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
+                />
+              </div>
+            </div>
+            <div>
+              <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wide text-gray-500 dark:text-slate-400">Exports</label>
+              <input
+                value={formatStringListValue((payload as Record<string, unknown>).exports)}
+                onChange={(event) =>
+                  setField(
+                    'exports',
+                    JSON.stringify(
+                      event.target.value
+                        .split(',')
+                        .map((item) => item.trim())
+                        .filter(Boolean),
+                    ),
+                    { removeWhenBlank: true },
+                  )
+                }
+                placeholder="result, extra_value"
+                className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2.5 text-sm text-gray-900 outline-none transition-colors focus:border-primary-500 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
+              />
+            </div>
+            <div>
+              <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wide text-gray-500 dark:text-slate-400">Script</label>
+              <textarea
+                rows={10}
+                value={String((payload as Record<string, unknown>).script ?? '')}
+                onChange={(event) => setField('script', event.target.value)}
+                placeholder={'result = {"message": strings.upper(input["name"])}'}
+                className="w-full rounded-lg border border-gray-200 bg-slate-950 px-3 py-2 font-mono text-sm text-slate-100 outline-none transition-colors focus:border-primary-500 dark:border-slate-700"
+              />
+            </div>
+            <div>
+              <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wide text-gray-500 dark:text-slate-400">Data JSON</label>
+              <textarea
+                rows={6}
+                value={formatStructuredEditorValue((payload as Record<string, unknown>).data)}
+                onChange={(event) => setField('data', event.target.value, { removeWhenBlank: true })}
+                placeholder='{"name":"orchestra"}'
+                className="w-full rounded-lg border border-gray-200 bg-slate-950 px-3 py-2 font-mono text-sm text-slate-100 outline-none transition-colors focus:border-primary-500 dark:border-slate-700"
+              />
+            </div>
+            <div className="rounded-lg border border-dashed border-gray-300 p-3 text-[11px] text-gray-500 dark:border-slate-700 dark:text-slate-400">
+              Use the builtins <span className="font-mono">json</span>, <span className="font-mono">strings</span>, <span className="font-mono">collections</span>, <span className="font-mono">workflow</span>, and <span className="font-mono">asserts</span>. Workflow context is available in <span className="font-mono">ctx</span>.
+            </div>
+          </div>
+        )
       default:
         return renderGenericRows()
     }
@@ -574,18 +750,72 @@ function ActivityPropertiesModal({
             </div>
 
             <div>
+            <div>
               <div className="mb-3">
                 <h3 className="text-sm font-semibold text-gray-900 dark:text-slate-100">Activity-specific properties</h3>
                 <p className="mt-1 text-xs text-gray-500 dark:text-slate-400">This editor is tailored to the selected activity so workflow authors rarely need raw JSON.</p>
               </div>
               {renderActivityFields()}
             </div>
+            </div>
 
             {node.data.activityName !== 'http-request' && node.data.activityName !== 'delay' && node.data.activityName !== 'log' && node.data.activityName !== 'noop' && node.data.activityName !== 'fail' ? null : (
-              <div className="rounded-lg border border-dashed border-gray-300 p-3 text-[11px] text-gray-500 dark:border-slate-700 dark:text-slate-400">
-                Double-click the node again any time to reopen this editor.
-              </div>
+            <div className="rounded-lg border border-dashed border-gray-300 p-3 text-[11px] text-gray-500 dark:border-slate-700 dark:text-slate-400">
+              Double-click the node again any time to reopen this editor.
+            </div>
             )}
+
+            <div className="rounded-xl border border-primary-200 bg-primary-50/70 dark:border-primary-900/40 dark:bg-primary-950/20">
+            <button
+              type="button"
+              onClick={() => setIsContextExpanded((current) => !current)}
+              className="flex w-full items-start justify-between gap-3 px-3 py-3 text-left"
+            >
+              <div>
+                <h3 className="text-sm font-semibold text-gray-900 dark:text-slate-100">Available context values</h3>
+                <p className="mt-1 text-xs text-gray-600 dark:text-slate-300">
+                  Copy a template to reuse data from earlier steps or workflow signals.
+                </p>
+              </div>
+              <div className="mt-0.5 flex items-center gap-2">
+                {copiedTemplate ? (
+                  <span className="rounded-full bg-white px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-primary-700 shadow-sm dark:bg-slate-900 dark:text-primary-200">
+                    Copied
+                  </span>
+                ) : null}
+                {isContextExpanded ? <ChevronDown className="h-4 w-4 text-primary-700 dark:text-primary-200" /> : <ChevronRight className="h-4 w-4 text-primary-700 dark:text-primary-200" />}
+              </div>
+            </button>
+            {isContextExpanded ? (
+              <div className="border-t border-primary-200 px-3 pb-3 pt-3 dark:border-primary-900/40">
+                <div className="space-y-2">
+                  {contextReferences.map((reference) => (
+                    <div key={`${reference.label}-${reference.template}`} className="rounded-lg border border-primary-100 bg-white/80 p-2.5 dark:border-primary-900/30 dark:bg-slate-900/70">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <div className="text-xs font-semibold text-gray-900 dark:text-slate-100">{reference.label}</div>
+                          <div className="mt-1 rounded-md bg-slate-950 px-2 py-1 font-mono text-[11px] text-slate-100">
+                            {reference.template}
+                          </div>
+                          <p className="mt-1 text-[11px] text-gray-500 dark:text-slate-400">{reference.description}</p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => void copyTemplate(reference.template)}
+                          className="shrink-0 rounded-lg border border-primary-200 px-2.5 py-1.5 text-[10px] font-semibold uppercase tracking-wide text-primary-700 transition-colors hover:bg-primary-100 dark:border-primary-900/40 dark:text-primary-200 dark:hover:bg-primary-900/30"
+                        >
+                          Copy
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                <p className="mt-3 text-[11px] text-gray-500 dark:text-slate-400">
+                  Step names with spaces are supported. Use additional dot paths after the copied root to reach nested fields.
+                </p>
+              </div>
+            ) : null}
+            </div>
           </div>
         </div>
 
@@ -669,7 +899,7 @@ function createActivityNode(activity: WorkflowActivity, position: { x: number; y
     sourcePosition: Position.Right,
     targetPosition: Position.Left,
     data: {
-      label: label ?? `${formatCategory(activity.name)} step`,
+      label: label ?? `${activityDisplayName(activity)} step`,
       activityName: activity.name,
       description: activity.description,
       inputRows: rowsFromInput(input, activity.exampleInput),
@@ -874,6 +1104,10 @@ function WorkflowDesignerCanvas() {
 
   const selectedNode = nodes.find((node) => node.selected && node.type === 'activity') as ActivityFlowNode | undefined
   const editingNode = nodes.find((node) => node.id === editingNodeID && node.type === 'activity') as ActivityFlowNode | undefined
+  const contextReferences = useMemo(
+    () => (editingNode ? collectContextReferences(nodes, edges, editingNode.id) : []),
+    [editingNode, nodes, edges],
+  )
 
   useEffect(() => {
     if (editingNodeID && !editingNode) {
@@ -931,16 +1165,22 @@ function WorkflowDesignerCanvas() {
       if (!connection.source || !connection.target) {
         return
       }
+      if (connection.source === endNodeID || connection.target === startNodeID || connection.source === connection.target) {
+        setPageError('The designer currently supports a single forward path from Start to End.')
+        return
+      }
       setEdges((currentEdges) =>
-        addEdge(
-          {
-            ...connection,
-            type: 'smoothstep',
-            markerEnd: { type: MarkerType.ArrowClosed },
-          },
-          currentEdges.filter((edge) => !(edge.source === connection.source && edge.target === connection.target)),
-        ),
+        addEdge({
+          ...connection,
+          type: 'smoothstep',
+          markerEnd: { type: MarkerType.ArrowClosed },
+        }, currentEdges.filter((edge) => (
+          edge.source !== connection.source &&
+          edge.target !== connection.target &&
+          !(edge.source === connection.source && edge.target === connection.target)
+        ))),
       )
+      setPageError(null)
     },
     [setEdges],
   )
@@ -1104,7 +1344,7 @@ function WorkflowDesignerCanvas() {
             <div>
               <h1 className="text-xl font-bold text-gray-900 dark:text-slate-100">{definitionId ? 'Workflow designer' : 'New workflow designer'}</h1>
               <p className="mt-1 text-xs text-gray-500 dark:text-slate-400">
-                Build a workflow on the canvas, drag activities from the right palette, and save without editing raw JSON.
+                Build a workflow on the canvas, drag activities from the right palette, and save without editing raw JSON. The current compiler enforces one forward path from Start to End.
               </p>
             </div>
           </div>
@@ -1317,9 +1557,20 @@ function WorkflowDesignerCanvas() {
                       <div key={activity.name} className="rounded-lg border border-gray-200 p-3 dark:border-slate-800">
                         <div className="flex items-start justify-between gap-2">
                           <div>
-                            <div className="text-xs font-semibold text-gray-900 dark:text-slate-100">{activity.name}</div>
-                            <div className="mt-1 inline-flex rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-700 dark:bg-slate-800 dark:text-slate-200">
-                              {formatCategory(activity.category)}
+                            <div className="text-xs font-semibold text-gray-900 dark:text-slate-100">{activityDisplayName(activity)}</div>
+                            <div className="mt-1 flex flex-wrap gap-1">
+                              <div className="inline-flex rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-700 dark:bg-slate-800 dark:text-slate-200">
+                                {formatCategory(activity.category)}
+                              </div>
+                              {activity.status ? (
+                                <div className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${
+                                  activity.status === 'beta'
+                                    ? 'bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-200'
+                                    : 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-200'
+                                }`}>
+                                  {activity.status}
+                                </div>
+                              ) : null}
                             </div>
                           </div>
                           <button
@@ -1332,6 +1583,18 @@ function WorkflowDesignerCanvas() {
                           </button>
                         </div>
                         <p className="mt-2 text-[11px] text-gray-500 dark:text-slate-400">{activity.description}</p>
+                        {activity.tags && activity.tags.length > 0 ? (
+                          <div className="mt-2 flex flex-wrap gap-1">
+                            {activity.tags.map((tag) => (
+                              <span
+                                key={tag}
+                                className="inline-flex rounded-full border border-gray-200 px-2 py-0.5 text-[10px] text-gray-600 dark:border-slate-700 dark:text-slate-300"
+                              >
+                                {tag}
+                              </span>
+                            ))}
+                          </div>
+                        ) : null}
                         <button
                           type="button"
                           onClick={() => appendActivity(activity)}
@@ -1352,6 +1615,7 @@ function WorkflowDesignerCanvas() {
       {editingNode ? (
         <ActivityPropertiesModal
           node={editingNode}
+          contextReferences={contextReferences}
           onClose={() => setEditingNodeID(null)}
           onDelete={() => removeNodeByID(editingNode.id)}
           onUpdate={(updater) => updateNodeData(editingNode.id, updater)}

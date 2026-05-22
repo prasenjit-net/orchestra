@@ -8,6 +8,7 @@ import type {
   WorkflowDefinitionsResponse,
   WorkflowHistoryResponse,
   WorkflowOperationsResponse,
+  WorkflowReplay,
   WorkflowInstance,
   WorkflowTask,
   WorkflowTaskAction,
@@ -103,6 +104,22 @@ export const workflowApi = {
   getWorkflow: async (workflowId: string) => handleResponse<WorkflowInstance>(await fetch(buildApiUrl(`/workflows/${workflowId}`))),
   getWorkflowHistory: async (workflowId: string) =>
     handleResponse<WorkflowHistoryResponse>(await fetch(buildApiUrl(`/workflows/${workflowId}/history`))),
+  cancelWorkflow: async (workflowId: string) =>
+    handleResponse<WorkflowInstance>(
+      await fetch(buildApiUrl(`/workflows/${workflowId}/cancel`), {
+        method: 'POST',
+      }),
+    ),
+  signalWorkflow: async (workflowId: string, payload: { name: string; payload?: unknown }) =>
+    handleResponse<WorkflowInstance>(
+      await fetch(buildApiUrl(`/workflows/${workflowId}/signals`), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      }),
+    ),
+  replayWorkflow: async (workflowId: string) =>
+    handleResponse<WorkflowReplay>(await fetch(buildApiUrl(`/workflows/${workflowId}/replay`))),
   listTasks: async () => handleResponse<WorkflowTasksResponse>(await fetch(buildApiUrl('/workflows/tasks'))),
   applyTaskAction: async (taskId: number, action: WorkflowTaskAction) =>
     handleResponse<WorkflowTask>(

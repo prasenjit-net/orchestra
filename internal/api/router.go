@@ -100,6 +100,15 @@ func NewRouter(cfg config.Config, logger *slog.Logger, build version.Info, live 
 			r.Get("/history", func(w http.ResponseWriter, r *http.Request) {
 				h.GetWorkflowHistory(w, r, chi.URLParam(r, "workflowID"))
 			})
+			r.Post("/cancel", func(w http.ResponseWriter, r *http.Request) {
+				h.CancelWorkflow(w, r, chi.URLParam(r, "workflowID"))
+			})
+			r.Post("/signals", func(w http.ResponseWriter, r *http.Request) {
+				h.SignalWorkflow(w, r, chi.URLParam(r, "workflowID"))
+			})
+			r.Get("/replay", func(w http.ResponseWriter, r *http.Request) {
+				h.ReplayWorkflow(w, r, chi.URLParam(r, "workflowID"))
+			})
 		})
 	}
 	r.Get("/", func(w http.ResponseWriter, r *http.Request) {

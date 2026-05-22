@@ -5,6 +5,7 @@ import OperationsPage from './pages/OperationsPage'
 import QueuesPage from './pages/QueuesPage'
 import RunDetailsPage from './pages/RunDetailsPage'
 import RunsPage from './pages/RunsPage'
+import SignalsPage from './pages/SignalsPage'
 import SettingsPage from './pages/SettingsPage'
 import WorkflowDesignerPage from './pages/WorkflowDesignerPage'
 import WorkflowListPage from './pages/WorkflowListPage'
@@ -23,6 +24,7 @@ function App() {
         <Route path="workflows/operations" element={<Navigate to="/operations" replace />} />
         <Route path="runs" element={<RunsPage />} />
         <Route path="runs/:workflowId" element={<RunDetailsPage />} />
+        <Route path="signals" element={<SignalsPage />} />
         <Route path="queues" element={<QueuesPage />} />
         <Route path="operations" element={<OperationsPage />} />
         <Route path="settings" element={<SettingsPage />} />

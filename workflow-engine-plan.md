@@ -166,6 +166,218 @@ Each activity should define:
 - retry policy
 - idempotency contract
 
+### Activity Catalog Expansion Plan
+
+Expand the activity model from the current small built-in set into a broader, opinionated catalog so most workflows can be authored without custom Go code.
+
+Target activity families:
+
+1. **System**
+   - `noop`
+   - `log`
+   - `fail`
+   - `transform`
+   - `script`
+2. **Flow control**
+   - `delay`
+   - `wait-signal`
+   - `branch`
+   - `foreach`
+   - `parallel-group`
+3. **Integration**
+   - `http-request`
+   - `webhook`
+   - `email`
+   - `slack`
+   - `queue-publish`
+4. **Data**
+   - `set-context`
+   - `json-patch`
+   - `template-render`
+   - `base64`
+   - `hash`
+5. **Operator / manual**
+   - `approval`
+   - `manual-task`
+   - `human-wait`
+
+The initial rule should remain: **prefer a curated activity catalog over arbitrary user code**, and only introduce carefully sandboxed scripting as an advanced escape hatch.
+
+### Activity Descriptor Evolution
+
+The existing activity descriptor should grow beyond runtime name/description/category so the UI can render richer editors and operators can understand execution risk.
+
+Each activity descriptor should eventually include:
+
+1. runtime identity
+   - name
+   - version
+   - category
+2. authoring metadata
+   - display label
+   - icon
+   - short description
+   - field schema
+   - defaults
+   - examples
+3. execution metadata
+   - timeout default
+   - retry recommendations
+   - idempotency notes
+   - sensitive field paths
+   - whether network access is allowed
+   - whether the step may mutate workflow context directly
+
+### Script Activity Plan (Starlark Sandbox)
+
+Add one **sandboxed script activity** powered by **Starlark**, intended for lightweight data transformation and conditional logic inside workflows.
+
+This should be treated as:
+
+- a **trusted-but-constrained operator feature**
+- not a general arbitrary code execution environment
+- not a replacement for purpose-built integration activities
+
+#### Why Starlark
+
+Starlark is a strong fit because it is:
+
+1. deterministic by design
+2. Python-like and approachable for operators
+3. embeddable in Go
+4. easier to constrain than general JavaScript or shell execution
+5. well suited for pure transformation logic over JSON-like data
+
+#### Intended Use Cases
+
+The script activity should support:
+
+1. reshaping step output into a later-step payload
+2. deriving flags, labels, and routing decisions from workflow context
+3. lightweight validation and normalization
+4. building request bodies, headers, or message payloads
+5. small reusable helper logic that does not justify a new Go activity yet
+
+It should **not** be used for:
+
+- arbitrary network access
+- filesystem access
+- spawning processes
+- sleeping, blocking, or long-running loops
+- bypassing the curated integration/security model
+
+#### Script Activity Contract
+
+Suggested step shape:
+
+```json
+{
+  "name": "prepare-payload",
+  "activity": "script",
+  "input": {
+    "language": "starlark",
+    "script": "result = {\"message\": \"hello %s\" % ctx[\"steps\"][\"fetch\"][\"name\"]}",
+    "timeoutMs": 250,
+    "exports": ["result"]
+  }
+}
+```
+
+Suggested execution contract:
+
+1. The engine injects a read-only environment:
+   - `ctx` → workflow context
+   - `step` → current step metadata
+   - `workflow` → workflow identifiers/version
+   - `input` → resolved activity input payload
+2. The script computes values and returns a final result object.
+3. The activity output is JSON-encoded and appended like any other activity result.
+4. Script failures become normal activity failures with explicit error history.
+
+#### Sandbox Rules
+
+The script runtime must be sandboxed with explicit limits:
+
+1. **No I/O**
+   - no filesystem
+   - no network
+   - no subprocesses
+2. **Deterministic builtins only**
+   - no wall-clock access from inside the script
+   - no randomness unless explicitly injected and versioned
+3. **Execution limits**
+   - max source size
+   - max output size
+   - max CPU steps / instruction budget
+   - strict timeout
+   - bounded recursion / collection growth
+4. **Memory safety**
+   - small bounded values
+   - reject pathological nested structures
+5. **Read-only inputs**
+   - `ctx`, `workflow`, and `step` should be presented as immutable values to the script
+
+#### Starlark Builtins Plan
+
+For builtins, take inspiration from this repository’s workflow/product focus and create a small standard library aimed at orchestration and payload shaping rather than general programming.
+
+Proposed builtins/modules:
+
+1. **JSON/data helpers**
+   - `json.encode(value)`
+   - `json.decode(text)`
+   - `json.merge(a, b)`
+   - `json.pick(value, paths)`
+2. **Collection helpers**
+   - `collections.compact(list_or_dict)`
+   - `collections.group_by(list, key)`
+   - `collections.flatten(list)`
+3. **String helpers**
+   - `strings.trim(value)`
+   - `strings.lower(value)`
+   - `strings.upper(value)`
+   - `strings.contains(value, part)`
+   - `strings.replace(value, old, new)`
+4. **Time formatting helpers**
+   - `time.parse_rfc3339(value)`
+   - `time.format_rfc3339(value)`
+   - `time.add_seconds(value, n)`
+   - keep these deterministic and explicit
+5. **Workflow helpers**
+   - `workflow.step_output(name)`
+   - `workflow.signal(name)`
+   - `workflow.fail(message)` for explicit script-side failure
+6. **Validation helpers**
+   - `asserts.non_empty(value, message)`
+   - `asserts.equals(a, b, message)`
+   - `asserts.has_keys(obj, keys)`
+
+The first version should keep the builtin surface **very small** and grow only after observing repeated workflow-authoring needs.
+
+#### Security Review Requirements for Script Activity
+
+Before shipping script execution:
+
+1. review Starlark interpreter extension points and limit hooks
+2. explicitly document allowed builtins and forbidden capabilities
+3. add denial-of-service tests for loops, recursion, large allocations, and oversized outputs
+4. ensure activity history redacts script source or secrets when needed
+5. make script activity disabled by configuration until the sandbox is proven stable
+
+#### Rollout Plan for Script Activity
+
+1. **Phase A**
+   - land descriptor/schema only
+   - expose in UI as planned but feature-flagged
+2. **Phase B**
+   - implement pure Starlark evaluation with read-only context and basic builtins
+   - no external side effects
+3. **Phase C**
+   - add richer helper modules and validation helpers
+   - add reusable script snippets/templates in the UI
+4. **Phase D**
+   - review whether some common scripts should instead become first-class built-in activities
+
 ### 3. Durable Workflow Instance
 
 Each instance needs:
@@ -550,6 +762,7 @@ Add API support for the visual builder, not just the runtime:
 
 1. `GET /api/workflows/activities`
    - extend response with UI field metadata
+   - include activity capability flags such as `supportsSandbox`, `networkAccess`, `pureTransform`, `featureFlag`
 2. `GET /api/workflow-definitions/{id}`
    - include builder layout metadata if present
 3. `POST /api/workflow-definitions`
@@ -558,6 +771,28 @@ Add API support for the visual builder, not just the runtime:
    - same as above for draft versions
 5. `POST /api/workflow-definitions/validate`
    - validate without saving
+
+### Activity Authoring UX Plan
+
+The builder palette should evolve into a categorized activity catalog with strong defaults and templates.
+
+1. Show top-level categories:
+   - system
+   - flow control
+   - integration
+   - data
+   - manual/operator
+2. Each activity card should expose:
+   - concise description
+   - risk/safety badge
+   - common use-case examples
+   - whether the activity is deterministic, side-effecting, or sandboxed
+3. The script activity editor should include:
+   - Starlark code editor with syntax highlighting
+   - builtin reference panel
+   - context reference browser
+   - snippet/template picker
+   - dry-run validation endpoint before publish
 
 ### Implementation Phases
 
@@ -960,6 +1195,9 @@ Add targeted tests that simulate:
 - Redact sensitive fields from logs and history when needed.
 - Restrict destructive queue actions such as cancel, purge, and dead-letter replay behind explicit authorization.
 - Validate UI-authored definitions against an allowlist of supported step types and registered activities.
+- Keep script execution behind an explicit feature flag and sandbox policy.
+- Never allow script activities to reach filesystem, shell, or unrestricted network capabilities.
+- Treat new builtins as security-sensitive API surface and review each one before exposing it to workflow authors.
 
 ## Incremental Delivery Plan
 

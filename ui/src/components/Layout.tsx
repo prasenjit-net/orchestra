@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { NavLink, Outlet } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
-import { BookOpen, LayoutDashboard, Menu, Moon, Monitor, Radio, Settings, Sun, Workflow, X, ListChecks, Play } from 'lucide-react'
+import { BellRing, BookOpen, LayoutDashboard, Menu, Moon, Monitor, Radio, Settings, Sun, Workflow, X, ListChecks, Play } from 'lucide-react'
 import clsx from 'clsx'
 import { LogoFull } from './Logo'
 import { metaApi } from '../services/api'
@@ -14,6 +14,7 @@ const navItems = [
   { to: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
   { to: '/workflows', label: 'Workflows', icon: Workflow },
   { to: '/runs', label: 'Runs', icon: Play },
+  { to: '/signals', label: 'Signals', icon: BellRing },
   { to: '/queues', label: 'Queues', icon: ListChecks },
   { to: '/operations', label: 'Operations', icon: Radio },
   { to: '/settings', label: 'Settings', icon: Settings },

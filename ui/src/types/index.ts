@@ -35,8 +35,11 @@ export interface MetaResponse {
 
 export interface WorkflowActivity {
   name: string
+  displayName?: string
   description: string
   category: string
+  status?: string
+  tags?: string[]
   exampleInput?: unknown
 }
 
@@ -54,12 +57,25 @@ export interface WorkflowStepLayout {
   y: number
 }
 
+export interface WorkflowTransitionCondition {
+  path: string
+  operator: string
+  value?: unknown
+}
+
+export interface WorkflowStepTransition {
+  to: string
+  label?: string
+  condition?: WorkflowTransitionCondition
+}
+
 export interface WorkflowStepDefinition {
   name: string
   activity: string
   input?: unknown
   retry?: RetryPolicy
   layout?: WorkflowStepLayout
+  transitions?: WorkflowStepTransition[]
 }
 
 export interface WorkflowDefinitionDocument {
@@ -107,6 +123,10 @@ export interface WorkflowInstance {
   currentActivity: string
   lastEventSequence: number
   lastError?: string
+  lastOutput?: unknown
+  context?: Record<string, unknown>
+  pendingSignals: number
+  nextRunAt?: string
   createdAt: string
   updatedAt: string
 }
@@ -153,6 +173,19 @@ export interface WorkflowTasksResponse {
 }
 
 export type WorkflowTaskAction = 'retry' | 'requeue' | 'pause' | 'resume' | 'cancel'
+
+export interface WorkflowReplay {
+  workflowId: string
+  status: string
+  currentStepName?: string
+  currentActivity?: string
+  lastEventSequence: number
+  lastError?: string
+  lastOutput?: unknown
+  context?: Record<string, unknown>
+  eventCount: number
+  definitionId?: string
+}
 
 export interface WorkflowLiveEvent {
   type: string

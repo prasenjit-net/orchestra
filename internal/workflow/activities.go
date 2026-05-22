@@ -7,8 +7,11 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
+
+	"github.com/prasenjit-net/orchestra/internal/config"
 )
 
 type Activity interface {
@@ -20,25 +23,46 @@ type ActivityExecutionRequest struct {
 	WorkflowID        string
 	DefinitionID      string
 	DefinitionVersion int
+	WorkflowContext   json.RawMessage
 	Step              StepDefinition
 	Task              WorkflowTask
 	Now               time.Time
 }
 
 type ActivityResult struct {
-	Output     json.RawMessage
-	DelayUntil *time.Time
-	State      json.RawMessage
+	Output         json.RawMessage
+	DelayUntil     *time.Time
+	State          json.RawMessage
+	ContextUpdates map[string]any
 }
 
-func builtInActivities(logger *slog.Logger) []Activity {
-	return []Activity{
+func builtInActivities(cfg config.WorkflowConfig, logger *slog.Logger) []Activity {
+	activities := []Activity{
 		noopActivity{},
+		transformActivity{},
 		delayActivity{},
+		waitSignalActivity{},
+		branchActivity{},
 		httpActivity{},
+		webhookActivity{},
+		emailActivity{},
+		slackActivity{},
+		queuePublishActivity{},
+		setContextActivity{},
+		jsonPatchActivity{},
+		templateRenderActivity{},
+		base64Activity{},
+		hashActivity{},
+		approvalActivity{},
+		manualTaskActivity{},
+		humanWaitActivity{},
 		logActivity{logger: logger},
 		failActivity{},
 	}
+	if cfg.ScriptEnabled {
+		activities = append(activities, newScriptActivity(cfg))
+	}
+	return activities
 }
 
 type noopActivity struct{}
@@ -46,8 +70,11 @@ type noopActivity struct{}
 func (noopActivity) Descriptor() ActivityDescriptor {
 	return ActivityDescriptor{
 		Name:         "noop",
+		DisplayName:  "No-op",
 		Description:  "Completes immediately without side effects.",
 		Category:     "system",
+		Status:       "stable",
+		Tags:         []string{"utility", "pass-through"},
 		ExampleInput: map[string]any{"note": "optional context"},
 	}
 }
@@ -73,8 +100,11 @@ type delayActivityState struct {
 func (delayActivity) Descriptor() ActivityDescriptor {
 	return ActivityDescriptor{
 		Name:        "delay",
+		DisplayName: "Delay",
 		Description: "Defers the workflow step until a future timestamp without relying on in-memory sleep.",
 		Category:    "timers",
+		Status:      "stable",
+		Tags:        []string{"timer", "scheduling"},
 		ExampleInput: map[string]any{
 			"durationSeconds": 30,
 		},
@@ -160,11 +190,16 @@ type httpActivityInput struct {
 	ExpectedStatus int               `json:"expectedStatus"`
 }
 
+const maxHTTPResponseBodyBytes = 1 << 20
+
 func (httpActivity) Descriptor() ActivityDescriptor {
 	return ActivityDescriptor{
 		Name:        "http-request",
+		DisplayName: "HTTP request",
 		Description: "Performs an HTTP request and returns the response status, headers, and body.",
 		Category:    "integration",
+		Status:      "stable",
+		Tags:        []string{"http", "api", "webhook"},
 		ExampleInput: map[string]any{
 			"method":         "POST",
 			"url":            "https://example.com/hooks/workflow",
@@ -195,6 +230,10 @@ func (httpActivity) Execute(ctx context.Context, req ActivityExecutionRequest) (
 	if strings.TrimSpace(input.URL) == "" {
 		return ActivityResult{}, fmt.Errorf("http-request activity requires a url")
 	}
+	parsedURL, err := validateHTTPRequestURL(input.URL)
+	if err != nil {
+		return ActivityResult{}, err
+	}
 	if input.TimeoutSeconds <= 0 {
 		input.TimeoutSeconds = 10
 	}
@@ -204,7 +243,7 @@ func (httpActivity) Execute(ctx context.Context, req ActivityExecutionRequest) (
 		return ActivityResult{}, err
 	}
 
-	request, err := http.NewRequestWithContext(ctx, method, input.URL, bodyReader)
+	request, err := http.NewRequestWithContext(ctx, method, parsedURL.String(), bodyReader)
 	if err != nil {
 		return ActivityResult{}, fmt.Errorf("create http-request activity request: %w", err)
 	}
@@ -222,9 +261,12 @@ func (httpActivity) Execute(ctx context.Context, req ActivityExecutionRequest) (
 	}
 	defer response.Body.Close()
 
-	responseBody, err := io.ReadAll(response.Body)
+	responseBody, err := io.ReadAll(io.LimitReader(response.Body, maxHTTPResponseBodyBytes+1))
 	if err != nil {
 		return ActivityResult{}, fmt.Errorf("read http-request activity response body: %w", err)
+	}
+	if len(responseBody) > maxHTTPResponseBodyBytes {
+		return ActivityResult{}, fmt.Errorf("http-request activity response exceeded %d bytes", maxHTTPResponseBodyBytes)
 	}
 
 	if input.ExpectedStatus > 0 && response.StatusCode != input.ExpectedStatus {
@@ -244,6 +286,21 @@ func (httpActivity) Execute(ctx context.Context, req ActivityExecutionRequest) (
 	}
 
 	return ActivityResult{Output: output}, nil
+}
+
+func validateHTTPRequestURL(raw string) (*url.URL, error) {
+	parsed, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil {
+		return nil, fmt.Errorf("parse http-request activity url: %w", err)
+	}
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return nil, fmt.Errorf("http-request activity requires an http or https url")
+	}
+	host := strings.ToLower(parsed.Hostname())
+	if host == "" {
+		return nil, fmt.Errorf("http-request activity requires a host")
+	}
+	return parsed, nil
 }
 
 func encodeHTTPRequestBody(body any) (io.Reader, string, error) {
@@ -272,8 +329,11 @@ type logActivityInput struct {
 func (a logActivity) Descriptor() ActivityDescriptor {
 	return ActivityDescriptor{
 		Name:        "log",
+		DisplayName: "Log",
 		Description: "Writes a structured log entry from workflow input.",
 		Category:    "observability",
+		Status:      "stable",
+		Tags:        []string{"logging", "debugging"},
 		ExampleInput: map[string]any{
 			"message": "workflow step executed",
 			"level":   "info",
@@ -331,8 +391,11 @@ type failActivityInput struct {
 func (failActivity) Descriptor() ActivityDescriptor {
 	return ActivityDescriptor{
 		Name:         "fail",
+		DisplayName:  "Fail",
 		Description:  "Fails the step intentionally to exercise retries and terminal failures.",
 		Category:     "testing",
+		Status:       "stable",
+		Tags:         []string{"testing", "control"},
 		ExampleInput: map[string]any{"message": "intentional failure"},
 	}
 }

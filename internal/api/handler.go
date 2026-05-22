@@ -331,6 +331,65 @@ func (h *Handler) GetWorkflowHistory(w http.ResponseWriter, r *http.Request, wor
 	respondJSON(w, http.StatusOK, map[string]any{"events": events})
 }
 
+func (h *Handler) CancelWorkflow(w http.ResponseWriter, r *http.Request, workflowID string) {
+	if h.workflow == nil {
+		writeError(w, http.StatusServiceUnavailable, "workflow service unavailable")
+		return
+	}
+
+	instance, err := h.workflow.CancelWorkflow(r.Context(), workflowID)
+	if err != nil {
+		if errors.Is(err, workflow.ErrNotFound) {
+			writeError(w, http.StatusNotFound, err.Error())
+			return
+		}
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	respondJSON(w, http.StatusOK, instance)
+}
+
+func (h *Handler) SignalWorkflow(w http.ResponseWriter, r *http.Request, workflowID string) {
+	if h.workflow == nil {
+		writeError(w, http.StatusServiceUnavailable, "workflow service unavailable")
+		return
+	}
+
+	var input workflow.SignalWorkflowInput
+	if err := decodeJSON(r, &input); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	instance, err := h.workflow.SignalWorkflow(r.Context(), workflowID, input)
+	if err != nil {
+		if errors.Is(err, workflow.ErrNotFound) {
+			writeError(w, http.StatusNotFound, err.Error())
+			return
+		}
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	respondJSON(w, http.StatusOK, instance)
+}
+
+func (h *Handler) ReplayWorkflow(w http.ResponseWriter, r *http.Request, workflowID string) {
+	if h.workflow == nil {
+		writeError(w, http.StatusServiceUnavailable, "workflow service unavailable")
+		return
+	}
+
+	replay, err := h.workflow.ReplayWorkflow(r.Context(), workflowID)
+	if err != nil {
+		writeWorkflowError(w, err)
+		return
+	}
+
+	respondJSON(w, http.StatusOK, replay)
+}
+
 func (h *Handler) ListWorkflowTasks(w http.ResponseWriter, r *http.Request) {
 	if h.workflow == nil {
 		writeError(w, http.StatusServiceUnavailable, "workflow service unavailable")

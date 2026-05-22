@@ -44,10 +44,15 @@ type UIConfig struct {
 }
 
 type WorkflowConfig struct {
-	Enabled       bool          `mapstructure:"enabled" yaml:"enabled"`
-	DatabasePath  string        `mapstructure:"databasePath" yaml:"databasePath"`
-	PollInterval  time.Duration `mapstructure:"pollInterval" yaml:"pollInterval"`
-	LeaseDuration time.Duration `mapstructure:"leaseDuration" yaml:"leaseDuration"`
+	Enabled                 bool          `mapstructure:"enabled" yaml:"enabled"`
+	DatabasePath            string        `mapstructure:"databasePath" yaml:"databasePath"`
+	PollInterval            time.Duration `mapstructure:"pollInterval" yaml:"pollInterval"`
+	LeaseDuration           time.Duration `mapstructure:"leaseDuration" yaml:"leaseDuration"`
+	ScriptEnabled           bool          `mapstructure:"scriptEnabled" yaml:"scriptEnabled"`
+	ScriptTimeout           time.Duration `mapstructure:"scriptTimeout" yaml:"scriptTimeout"`
+	ScriptMaxSourceBytes    int           `mapstructure:"scriptMaxSourceBytes" yaml:"scriptMaxSourceBytes"`
+	ScriptMaxOutputBytes    int           `mapstructure:"scriptMaxOutputBytes" yaml:"scriptMaxOutputBytes"`
+	ScriptMaxExecutionSteps uint64        `mapstructure:"scriptMaxExecutionSteps" yaml:"scriptMaxExecutionSteps"`
 }
 
 func Default() Config {
@@ -74,10 +79,15 @@ func Default() Config {
 			DevProxyURL: "http://localhost:5173",
 		},
 		Workflow: WorkflowConfig{
-			Enabled:       true,
-			DatabasePath:  "data/workflows.db",
-			PollInterval:  1 * time.Second,
-			LeaseDuration: 30 * time.Second,
+			Enabled:                 true,
+			DatabasePath:            "data/workflows.db",
+			PollInterval:            1 * time.Second,
+			LeaseDuration:           30 * time.Second,
+			ScriptEnabled:           false,
+			ScriptTimeout:           250 * time.Millisecond,
+			ScriptMaxSourceBytes:    16 * 1024,
+			ScriptMaxOutputBytes:    256 * 1024,
+			ScriptMaxExecutionSteps: 25_000,
 		},
 	}
 }
@@ -110,6 +120,11 @@ func SetDefaults(v *viper.Viper) {
 	v.SetDefault("workflow.databasePath", defaults.Workflow.DatabasePath)
 	v.SetDefault("workflow.pollInterval", defaults.Workflow.PollInterval)
 	v.SetDefault("workflow.leaseDuration", defaults.Workflow.LeaseDuration)
+	v.SetDefault("workflow.scriptEnabled", defaults.Workflow.ScriptEnabled)
+	v.SetDefault("workflow.scriptTimeout", defaults.Workflow.ScriptTimeout)
+	v.SetDefault("workflow.scriptMaxSourceBytes", defaults.Workflow.ScriptMaxSourceBytes)
+	v.SetDefault("workflow.scriptMaxOutputBytes", defaults.Workflow.ScriptMaxOutputBytes)
+	v.SetDefault("workflow.scriptMaxExecutionSteps", defaults.Workflow.ScriptMaxExecutionSteps)
 }
 
 func Load(v *viper.Viper) (Config, error) {
@@ -184,6 +199,11 @@ workflow:
   databasePath: data/workflows.db
   pollInterval: 1s
   leaseDuration: 30s
+  scriptEnabled: false
+  scriptTimeout: 250ms
+  scriptMaxSourceBytes: 16384
+  scriptMaxOutputBytes: 262144
+  scriptMaxExecutionSteps: 25000
 `
 
 const DefaultEnvExample = `APP_ENV=development
@@ -197,4 +217,9 @@ APP_WORKFLOW_ENABLED=true
 APP_WORKFLOW_DATABASE_PATH=data/workflows.db
 APP_WORKFLOW_POLL_INTERVAL=1s
 APP_WORKFLOW_LEASE_DURATION=30s
+APP_WORKFLOW_SCRIPT_ENABLED=false
+APP_WORKFLOW_SCRIPT_TIMEOUT=250ms
+APP_WORKFLOW_SCRIPT_MAX_SOURCE_BYTES=16384
+APP_WORKFLOW_SCRIPT_MAX_OUTPUT_BYTES=262144
+APP_WORKFLOW_SCRIPT_MAX_EXECUTION_STEPS=25000
 `

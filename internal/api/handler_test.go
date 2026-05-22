@@ -57,6 +57,30 @@ func TestWorkflowActivitiesEndpoint(t *testing.T) {
 	}
 }
 
+func TestWorkflowActivitiesEndpointIncludesScriptWhenEnabled(t *testing.T) {
+	cfg := config.Default()
+	cfg.Workflow.DatabasePath = filepath.Join(t.TempDir(), "workflows.db")
+	cfg.Workflow.ScriptEnabled = true
+	service, err := workflow.NewService(cfg.Workflow, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatalf("NewService returned error: %v", err)
+	}
+	defer service.Close()
+
+	router := NewRouter(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), version.Current(), livebus.New(), service)
+	req := httptest.NewRequest(http.MethodGet, "/workflows/activities", nil)
+	res := httptest.NewRecorder()
+
+	router.ServeHTTP(res, req)
+
+	if res.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", res.Code)
+	}
+	if !strings.Contains(res.Body.String(), `"name":"script"`) {
+		t.Fatalf("expected script activity when enabled, got %s", res.Body.String())
+	}
+}
+
 func TestCreateWorkflowDefinitionEndpoint(t *testing.T) {
 	cfg := config.Default()
 	cfg.Workflow.DatabasePath = filepath.Join(t.TempDir(), "workflows.db")
