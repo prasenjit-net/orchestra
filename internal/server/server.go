@@ -14,14 +14,18 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 
-	"github.com/your-org/go-app-template/internal/api"
-	"github.com/your-org/go-app-template/internal/config"
-	"github.com/your-org/go-app-template/internal/version"
+	"github.com/prasenjit-net/orchestra/internal/api"
+	"github.com/prasenjit-net/orchestra/internal/config"
+	"github.com/prasenjit-net/orchestra/internal/livebus"
+	"github.com/prasenjit-net/orchestra/internal/version"
+	"github.com/prasenjit-net/orchestra/internal/workflow"
 )
 
 type Options struct {
-	DevMode bool
-	UIFS    fs.FS
+	DevMode  bool
+	UIFS     fs.FS
+	Live     *livebus.Bus
+	Workflow *workflow.Service
 }
 
 type App struct {
@@ -43,7 +47,7 @@ func (a *App) Handler() http.Handler {
 	r.Use(middleware.Heartbeat("/livez"))
 	r.Use(requestLogger(a.logger))
 
-	r.Mount("/api", api.NewRouter(a.cfg, a.logger, a.build))
+	r.Mount("/api", api.NewRouter(a.cfg, a.logger, a.build, a.options.Live, a.options.Workflow))
 
 	if a.options.DevMode && strings.TrimSpace(a.cfg.UI.DevProxyURL) != "" {
 		r.Handle("/*", newDevProxy(a.cfg.UI.DevProxyURL, a.logger))

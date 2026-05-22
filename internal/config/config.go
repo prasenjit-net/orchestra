@@ -11,10 +11,11 @@ import (
 )
 
 type Config struct {
-	App     AppConfig     `mapstructure:"app" yaml:"app"`
-	Server  ServerConfig  `mapstructure:"server" yaml:"server"`
-	Logging LoggingConfig `mapstructure:"logging" yaml:"logging"`
-	UI      UIConfig      `mapstructure:"ui" yaml:"ui"`
+	App      AppConfig      `mapstructure:"app" yaml:"app"`
+	Server   ServerConfig   `mapstructure:"server" yaml:"server"`
+	Logging  LoggingConfig  `mapstructure:"logging" yaml:"logging"`
+	UI       UIConfig       `mapstructure:"ui" yaml:"ui"`
+	Workflow WorkflowConfig `mapstructure:"workflow" yaml:"workflow"`
 }
 
 type AppConfig struct {
@@ -42,13 +43,20 @@ type UIConfig struct {
 	DevProxyURL string `mapstructure:"devProxyURL" yaml:"devProxyURL"`
 }
 
+type WorkflowConfig struct {
+	Enabled       bool          `mapstructure:"enabled" yaml:"enabled"`
+	DatabasePath  string        `mapstructure:"databasePath" yaml:"databasePath"`
+	PollInterval  time.Duration `mapstructure:"pollInterval" yaml:"pollInterval"`
+	LeaseDuration time.Duration `mapstructure:"leaseDuration" yaml:"leaseDuration"`
+}
+
 func Default() Config {
 	return Config{
 		App: AppConfig{
-			Name:        "Go App Template",
+			Name:        "Orchestra",
 			Env:         "development",
 			URL:         "http://localhost:8080",
-			Description: "Full-stack starter with an embedded React frontend.",
+			Description: "Durable workflow engine with an embedded React control plane.",
 		},
 		Server: ServerConfig{
 			Host:            "0.0.0.0",
@@ -64,6 +72,12 @@ func Default() Config {
 		},
 		UI: UIConfig{
 			DevProxyURL: "http://localhost:5173",
+		},
+		Workflow: WorkflowConfig{
+			Enabled:       true,
+			DatabasePath:  "data/workflows.db",
+			PollInterval:  1 * time.Second,
+			LeaseDuration: 30 * time.Second,
 		},
 	}
 }
@@ -92,6 +106,10 @@ func SetDefaults(v *viper.Viper) {
 	v.SetDefault("logging.level", defaults.Logging.Level)
 	v.SetDefault("logging.format", defaults.Logging.Format)
 	v.SetDefault("ui.devProxyURL", defaults.UI.DevProxyURL)
+	v.SetDefault("workflow.enabled", defaults.Workflow.Enabled)
+	v.SetDefault("workflow.databasePath", defaults.Workflow.DatabasePath)
+	v.SetDefault("workflow.pollInterval", defaults.Workflow.PollInterval)
+	v.SetDefault("workflow.leaseDuration", defaults.Workflow.LeaseDuration)
 }
 
 func Load(v *viper.Viper) (Config, error) {
@@ -141,10 +159,10 @@ func fileExists(path string) bool {
 }
 
 const DefaultConfigYAML = `app:
-  name: Go App Template
+  name: Orchestra
   env: development
   url: http://localhost:8080
-  description: Full-stack starter with Go at the repo root and an embedded React UI.
+  description: Durable workflow engine with Go at the repo root and an embedded React UI.
 
 server:
   host: 0.0.0.0
@@ -160,13 +178,23 @@ logging:
 
 ui:
   devProxyURL: http://localhost:5173
+
+workflow:
+  enabled: true
+  databasePath: data/workflows.db
+  pollInterval: 1s
+  leaseDuration: 30s
 `
 
 const DefaultEnvExample = `APP_ENV=development
-APP_APP_NAME=Go App Template
+APP_APP_NAME=Orchestra
 APP_SERVER_HOST=0.0.0.0
 APP_SERVER_PORT=8080
 APP_LOGGING_LEVEL=debug
 APP_LOGGING_FORMAT=text
 APP_UI_DEV_PROXY_URL=http://localhost:5173
+APP_WORKFLOW_ENABLED=true
+APP_WORKFLOW_DATABASE_PATH=data/workflows.db
+APP_WORKFLOW_POLL_INTERVAL=1s
+APP_WORKFLOW_LEASE_DURATION=30s
 `

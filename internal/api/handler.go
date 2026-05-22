@@ -1,20 +1,29 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
+	"strconv"
 	"time"
 
-	"github.com/your-org/go-app-template/internal/config"
-	"github.com/your-org/go-app-template/internal/version"
+	"github.com/coder/websocket"
+	"github.com/coder/websocket/wsjson"
+	"github.com/prasenjit-net/orchestra/internal/config"
+	"github.com/prasenjit-net/orchestra/internal/livebus"
+	"github.com/prasenjit-net/orchestra/internal/version"
+	"github.com/prasenjit-net/orchestra/internal/workflow"
 )
 
 type Handler struct {
-	config  config.Config
-	version version.Info
+	config   config.Config
+	version  version.Info
+	live     *livebus.Bus
+	workflow *workflow.Service
 }
 
-type healthResponse struct {
+type HealthResponse struct {
 	Status    string       `json:"status"`
 	Service   string       `json:"service"`
 	Env       string       `json:"env"`
@@ -41,32 +50,36 @@ type metaResponse struct {
 	Version     version.Info `json:"version"`
 }
 
-func NewHandler(cfg config.Config, build version.Info) *Handler {
-	return &Handler{config: cfg, version: build}
+func NewHandler(cfg config.Config, build version.Info, live *livebus.Bus, workflowService *workflow.Service) *Handler {
+	return &Handler{config: cfg, version: build, live: live, workflow: workflowService}
 }
 
-func (h *Handler) Health(w http.ResponseWriter, r *http.Request) {
-	respondJSON(w, http.StatusOK, healthResponse{
+func BuildHealthResponse(cfg config.Config, build version.Info) HealthResponse {
+	return HealthResponse{
 		Status:  "ok",
-		Service: h.config.App.Name,
-		Env:     h.config.App.Env,
+		Service: cfg.App.Name,
+		Env:     cfg.App.Env,
 		Time:    time.Now().UTC(),
-		Version: h.version,
+		Version: build,
 		Documents: []string{
 			"README.md",
 			"config.yaml",
 			"ui/src/pages",
 		},
-	})
+	}
+}
+
+func (h *Handler) Health(w http.ResponseWriter, r *http.Request) {
+	respondJSON(w, http.StatusOK, BuildHealthResponse(h.config, h.version))
 }
 
 func (h *Handler) Example(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, exampleResponse{
-		Title:       "Go + React starter template",
-		Summary:     "Embed a Vite-generated React application directly into the Go binary with one production build.",
-		Features:    []string{"Cobra CLI commands", "Viper config + .env support", "Chi API router", "Embedded SPA serving", "React Query + Tailwind UI"},
+		Title:       "Orchestra workflow engine",
+		Summary:     "Durable workflow orchestration with a Go backend and embedded React control plane.",
+		Features:    []string{"Durable workflow runtime", "SQLite-backed state", "Chi API router", "Embedded SPA serving", "React Query + WebSocket live bus"},
 		Quickstart:  []string{"make install-deps", "make dev-all", "make build", "./build/<binary> serve"},
-		Repository:  "Template repository",
+		Repository:  "https://github.com/prasenjit-net/orchestra",
 		FrontendDir: "ui",
 	})
 }
@@ -82,8 +95,334 @@ func (h *Handler) Meta(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (h *Handler) ListWorkflowActivities(w http.ResponseWriter, r *http.Request) {
+	if h.workflow == nil {
+		writeError(w, http.StatusServiceUnavailable, "workflow service unavailable")
+		return
+	}
+	respondJSON(w, http.StatusOK, map[string]any{
+		"activities": h.workflow.ListActivities(),
+	})
+}
+
+func (h *Handler) WorkflowStream(w http.ResponseWriter, r *http.Request) {
+	if h.live == nil {
+		writeError(w, http.StatusServiceUnavailable, "live bus unavailable")
+		return
+	}
+
+	conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
+		InsecureSkipVerify: true,
+	})
+	if err != nil {
+		return
+	}
+	defer conn.CloseNow()
+
+	readCtx, readCancel := context.WithCancel(r.Context())
+	defer readCancel()
+	go func() {
+		_ = conn.CloseRead(readCtx)
+	}()
+
+	events, unsubscribe := h.live.Subscribe()
+	defer unsubscribe()
+
+	if err := wsjson.Write(r.Context(), conn, livebus.NewEvent("connection.ready", "connection", "app-live-bus", map[string]any{
+		"status": "connected",
+	})); err != nil {
+		return
+	}
+
+	for {
+		select {
+		case <-r.Context().Done():
+			_ = conn.Close(websocket.StatusNormalClosure, "client disconnected")
+			return
+		case event, ok := <-events:
+			if !ok {
+				_ = conn.Close(websocket.StatusGoingAway, "workflow stream closed")
+				return
+			}
+			if err := wsjson.Write(r.Context(), conn, event); err != nil {
+				return
+			}
+		}
+	}
+}
+
+func (h *Handler) CreateWorkflowDefinition(w http.ResponseWriter, r *http.Request) {
+	if h.workflow == nil {
+		writeError(w, http.StatusServiceUnavailable, "workflow service unavailable")
+		return
+	}
+
+	var input workflow.CreateDefinitionInput
+	if err := decodeJSON(r, &input); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	definition, err := h.workflow.CreateDefinition(r.Context(), input)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	respondJSON(w, http.StatusCreated, definition)
+}
+
+func (h *Handler) ListWorkflowDefinitions(w http.ResponseWriter, r *http.Request) {
+	if h.workflow == nil {
+		writeError(w, http.StatusServiceUnavailable, "workflow service unavailable")
+		return
+	}
+
+	definitions, err := h.workflow.ListDefinitions(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	respondJSON(w, http.StatusOK, map[string]any{"definitions": definitions})
+}
+
+func (h *Handler) GetWorkflowDefinition(w http.ResponseWriter, r *http.Request, definitionID string) {
+	if h.workflow == nil {
+		writeError(w, http.StatusServiceUnavailable, "workflow service unavailable")
+		return
+	}
+
+	definition, err := h.workflow.GetDefinition(r.Context(), definitionID)
+	if err != nil {
+		writeWorkflowError(w, err)
+		return
+	}
+
+	respondJSON(w, http.StatusOK, definition)
+}
+
+func (h *Handler) CreateWorkflowDefinitionVersion(w http.ResponseWriter, r *http.Request, definitionID string) {
+	if h.workflow == nil {
+		writeError(w, http.StatusServiceUnavailable, "workflow service unavailable")
+		return
+	}
+
+	var input workflow.CreateDefinitionInput
+	if err := decodeJSON(r, &input); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	definition, err := h.workflow.CreateDefinitionVersion(r.Context(), definitionID, input)
+	if err != nil {
+		if errors.Is(err, workflow.ErrNotFound) {
+			writeError(w, http.StatusNotFound, err.Error())
+			return
+		}
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	respondJSON(w, http.StatusCreated, definition)
+}
+
+func (h *Handler) PublishWorkflowDefinitionVersion(w http.ResponseWriter, r *http.Request, definitionID string, version int) {
+	if h.workflow == nil {
+		writeError(w, http.StatusServiceUnavailable, "workflow service unavailable")
+		return
+	}
+
+	definition, err := h.workflow.PublishDefinitionVersion(r.Context(), definitionID, version)
+	if err != nil {
+		if errors.Is(err, workflow.ErrNotFound) {
+			writeError(w, http.StatusNotFound, err.Error())
+			return
+		}
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	respondJSON(w, http.StatusOK, definition)
+}
+
+func (h *Handler) StartWorkflow(w http.ResponseWriter, r *http.Request, definitionID string) {
+	if h.workflow == nil {
+		writeError(w, http.StatusServiceUnavailable, "workflow service unavailable")
+		return
+	}
+
+	instance, err := h.workflow.StartWorkflow(r.Context(), definitionID)
+	if err != nil {
+		writeWorkflowError(w, err)
+		return
+	}
+
+	respondJSON(w, http.StatusCreated, instance)
+}
+
+func (h *Handler) ListWorkflows(w http.ResponseWriter, r *http.Request) {
+	if h.workflow == nil {
+		writeError(w, http.StatusServiceUnavailable, "workflow service unavailable")
+		return
+	}
+
+	workflows, err := h.workflow.ListWorkflows(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	respondJSON(w, http.StatusOK, map[string]any{"workflows": workflows})
+}
+
+func (h *Handler) ListWorkflowOperations(w http.ResponseWriter, r *http.Request) {
+	if h.workflow == nil {
+		writeError(w, http.StatusServiceUnavailable, "workflow service unavailable")
+		return
+	}
+
+	limit := 50
+	if raw := r.URL.Query().Get("limit"); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed <= 0 {
+			writeError(w, http.StatusBadRequest, "invalid limit")
+			return
+		}
+		limit = parsed
+	}
+
+	events, err := h.workflow.ListRecentEvents(r.Context(), limit)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	respondJSON(w, http.StatusOK, map[string]any{"events": events})
+}
+
+func (h *Handler) GetWorkflow(w http.ResponseWriter, r *http.Request, workflowID string) {
+	if h.workflow == nil {
+		writeError(w, http.StatusServiceUnavailable, "workflow service unavailable")
+		return
+	}
+
+	instance, err := h.workflow.GetWorkflow(r.Context(), workflowID)
+	if err != nil {
+		writeWorkflowError(w, err)
+		return
+	}
+
+	respondJSON(w, http.StatusOK, instance)
+}
+
+func (h *Handler) GetWorkflowHistory(w http.ResponseWriter, r *http.Request, workflowID string) {
+	if h.workflow == nil {
+		writeError(w, http.StatusServiceUnavailable, "workflow service unavailable")
+		return
+	}
+
+	events, err := h.workflow.GetWorkflowHistory(r.Context(), workflowID)
+	if err != nil {
+		writeWorkflowError(w, err)
+		return
+	}
+
+	respondJSON(w, http.StatusOK, map[string]any{"events": events})
+}
+
+func (h *Handler) ListWorkflowTasks(w http.ResponseWriter, r *http.Request) {
+	if h.workflow == nil {
+		writeError(w, http.StatusServiceUnavailable, "workflow service unavailable")
+		return
+	}
+
+	tasks, err := h.workflow.ListTasks(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	respondJSON(w, http.StatusOK, map[string]any{"tasks": tasks})
+}
+
+func (h *Handler) RetryWorkflowTask(w http.ResponseWriter, r *http.Request, taskID int64) {
+	h.applyTaskAction(w, r, taskID, h.workflow.RetryTask)
+}
+
+func (h *Handler) RequeueWorkflowTask(w http.ResponseWriter, r *http.Request, taskID int64) {
+	h.applyTaskAction(w, r, taskID, h.workflow.RequeueTask)
+}
+
+func (h *Handler) PauseWorkflowTask(w http.ResponseWriter, r *http.Request, taskID int64) {
+	h.applyTaskAction(w, r, taskID, h.workflow.PauseTask)
+}
+
+func (h *Handler) ResumeWorkflowTask(w http.ResponseWriter, r *http.Request, taskID int64) {
+	h.applyTaskAction(w, r, taskID, h.workflow.ResumeTask)
+}
+
+func (h *Handler) CancelWorkflowTask(w http.ResponseWriter, r *http.Request, taskID int64) {
+	h.applyTaskAction(w, r, taskID, h.workflow.CancelTask)
+}
+
 func respondJSON(w http.ResponseWriter, status int, payload any) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(payload)
+}
+
+func writeError(w http.ResponseWriter, status int, message string) {
+	respondJSON(w, status, map[string]string{"error": message})
+}
+
+func writeWorkflowError(w http.ResponseWriter, err error) {
+	if errors.Is(err, workflow.ErrNotFound) {
+		writeError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	writeError(w, http.StatusInternalServerError, err.Error())
+}
+
+func decodeJSON(r *http.Request, target any) error {
+	defer r.Body.Close()
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(target); err != nil {
+		return err
+	}
+	return nil
+}
+
+func parseTaskID(raw string) (int64, error) {
+	taskID, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil {
+		return 0, errors.New("invalid task id")
+	}
+	return taskID, nil
+}
+
+func parseVersion(raw string) (int, error) {
+	version, err := strconv.Atoi(raw)
+	if err != nil || version <= 0 {
+		return 0, errors.New("invalid version")
+	}
+	return version, nil
+}
+
+func (h *Handler) applyTaskAction(w http.ResponseWriter, r *http.Request, taskID int64, action func(context.Context, int64) (workflow.WorkflowTask, error)) {
+	if h.workflow == nil {
+		writeError(w, http.StatusServiceUnavailable, "workflow service unavailable")
+		return
+	}
+	task, err := action(r.Context(), taskID)
+	if err != nil {
+		if errors.Is(err, workflow.ErrNotFound) {
+			writeError(w, http.StatusNotFound, err.Error())
+			return
+		}
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	respondJSON(w, http.StatusOK, task)
 }

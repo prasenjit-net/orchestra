@@ -7,14 +7,18 @@ import (
 	"net/http"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 
-	"github.com/your-org/go-app-template/internal/config"
-	"github.com/your-org/go-app-template/internal/logging"
-	"github.com/your-org/go-app-template/internal/server"
-	"github.com/your-org/go-app-template/internal/version"
+	"github.com/prasenjit-net/orchestra/internal/api"
+	"github.com/prasenjit-net/orchestra/internal/config"
+	"github.com/prasenjit-net/orchestra/internal/livebus"
+	"github.com/prasenjit-net/orchestra/internal/logging"
+	"github.com/prasenjit-net/orchestra/internal/server"
+	"github.com/prasenjit-net/orchestra/internal/version"
+	"github.com/prasenjit-net/orchestra/internal/workflow"
 )
 
 var (
@@ -45,10 +49,22 @@ func runServe(cmd *cobra.Command, args []string) error {
 
 	logger := logging.New(cfg.Logging)
 	buildInfo := version.Current()
+	live := livebus.New()
+	defer live.Close()
+
+	workflowService, err := workflow.NewService(cfg.Workflow, logger, live)
+	if err != nil {
+		return fmt.Errorf("create workflow service: %w", err)
+	}
+	if workflowService != nil {
+		defer workflowService.Close()
+	}
 
 	appServer, err := server.New(cfg, logger, buildInfo, server.Options{
-		DevMode: devMode,
-		UIFS:    uiFS,
+		DevMode:  devMode,
+		UIFS:     uiFS,
+		Live:     live,
+		Workflow: workflowService,
 	})
 	if err != nil {
 		return err
@@ -63,6 +79,28 @@ func runServe(cmd *cobra.Command, args []string) error {
 	}
 
 	errCh := make(chan error, 1)
+	workerCtx, stopWorker := context.WithCancel(context.Background())
+	defer stopWorker()
+	publishHealth := func() {
+		live.Publish(livebus.NewEvent("health.updated", "health", "api", api.BuildHealthResponse(cfg, buildInfo)))
+	}
+	publishHealth()
+	go func() {
+		ticker := time.NewTicker(15 * time.Second)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-workerCtx.Done():
+				return
+			case <-ticker.C:
+				publishHealth()
+			}
+		}
+	}()
+	if workflowService != nil {
+		workflowService.Start(workerCtx)
+	}
 	go func() {
 		logger.Info("starting server",
 			"addr", httpServer.Addr,
@@ -80,11 +118,13 @@ func runServe(cmd *cobra.Command, args []string) error {
 
 	select {
 	case err := <-errCh:
+		stopWorker()
 		return err
 	case <-ctx.Done():
 		logger.Info("shutdown signal received")
 	}
 
+	stopWorker()
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), cfg.Server.ShutdownTimeout)
 	defer cancel()
 

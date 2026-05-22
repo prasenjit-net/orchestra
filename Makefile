@@ -11,9 +11,9 @@ VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev
 COMMIT := $(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 BUILD_DATE := $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 LD_FLAGS := -s -w \
-	-X github.com/your-org/go-app-template/internal/version.Version=$(VERSION) \
-	-X github.com/your-org/go-app-template/internal/version.Commit=$(COMMIT) \
-	-X github.com/your-org/go-app-template/internal/version.BuildDate=$(BUILD_DATE)
+	-X github.com/prasenjit-net/orchestra/internal/version.Version=$(VERSION) \
+	-X github.com/prasenjit-net/orchestra/internal/version.Commit=$(COMMIT) \
+	-X github.com/prasenjit-net/orchestra/internal/version.BuildDate=$(BUILD_DATE)
 
 .PHONY: all build build-ui build-go run dev dev-ui dev-all test lint lint-ui fmt install-deps clean init help
 

@@ -1,15 +1,13 @@
-# Go App Template
+# Orchestra
 
-A production-ready GitHub template repository for full-stack applications with:
+Orchestra is a durable workflow engine with:
 
 - Go backend at the repository root
 - React + Vite frontend in `ui/`
 - Embedded production UI served directly from the Go binary
-- Cobra CLI, Viper config, `.env` support, and a Tailwind-based admin shell modeled after the reference project
+- SQLite-backed workflow runtime, control plane routes, and WebSocket live updates
 
-The design and developer experience are intentionally based on the original reference implementation, but generalized into a reusable starter.
-
-App repository: `https://github.com/prasenjit-net/go-app-template`
+App repository: `https://github.com/prasenjit-net/orchestra`
 
 ## What You Get
 
@@ -120,37 +118,13 @@ APP_UI_DEV_PROXY_URL=http://localhost:5173
 
 ## UI Notes
 
-The frontend mirrors the reference repo’s patterns:
+The frontend includes:
 
 - fixed left sidebar shell
-- card-based dashboard layout
+- card-based dashboard and operations pages
 - Tailwind utility styling with shared badges and section headers
 - light/dark/system theme toggle
-- React Query service layer for API integration
-
-The starter keeps the same feel without hard-coding the reference project’s domain-specific screens.
-
-## GitHub Template Setup
-
-GitHub template mode is a repository setting, not a tracked file. After pushing this repo:
-
-1. Open the repository on GitHub.
-2. Go to `Settings`.
-3. In `General`, enable `Template repository`.
-4. Share the repository URL so users can click `Use this template`.
-
-## Renaming After Creating a New Repo
-
-After generating a repo from this template:
-
-1. Rename the repository on GitHub.
-2. Update the Go module path:
-   ```bash
-   go mod edit -module github.com/<owner>/<new-repo>
-   go mod tidy
-   ```
-3. Update the app name in `config.yaml` and `.env`.
-4. Optionally update the UI package name in `ui/package.json`.
+- React Query plus a shared WebSocket live bus for server-pushed updates
 
 ## Files to Review First
 

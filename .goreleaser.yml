@@ -8,9 +8,9 @@ builds:
   - binary: "{{ .ProjectName }}"
     ldflags:
       - -s -w
-      - -X github.com/your-org/go-app-template/internal/version.Version={{ .Version }}
-      - -X github.com/your-org/go-app-template/internal/version.Commit={{ .Commit }}
-      - -X github.com/your-org/go-app-template/internal/version.BuildDate={{ .Date }}
+      - -X github.com/prasenjit-net/orchestra/internal/version.Version={{ .Version }}
+      - -X github.com/prasenjit-net/orchestra/internal/version.Commit={{ .Commit }}
+      - -X github.com/prasenjit-net/orchestra/internal/version.BuildDate={{ .Date }}
     goos:
       - linux
       - darwin

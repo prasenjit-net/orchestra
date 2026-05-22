@@ -13,6 +13,7 @@ func TestLoadFromViper(t *testing.T) {
 	v.Set("app.name", "Template")
 	v.Set("server.port", 9090)
 	v.Set("server.readTimeout", "30s")
+	v.Set("workflow.databasePath", "data/test-workflows.db")
 
 	cfg, err := Load(v)
 	if err != nil {
@@ -26,5 +27,8 @@ func TestLoadFromViper(t *testing.T) {
 	}
 	if cfg.Server.ReadTimeout != 30*time.Second {
 		t.Fatalf("expected duration decode, got %s", cfg.Server.ReadTimeout)
+	}
+	if cfg.Workflow.DatabasePath != "data/test-workflows.db" {
+		t.Fatalf("expected workflow database path override, got %q", cfg.Workflow.DatabasePath)
 	}
 }

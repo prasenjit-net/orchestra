@@ -18,8 +18,8 @@ export default function SettingsPage() {
   return (
     <div className="space-y-8 p-8">
       <SectionHeader
-        title="Template Settings"
-        description="The backend exposes starter metadata so you can verify config, linker flags, and local development wiring."
+        title="Application Settings"
+        description="Inspect Orchestra configuration, build metadata, and local development wiring."
       />
 
       <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
@@ -65,12 +65,12 @@ export default function SettingsPage() {
       </div>
 
       <section className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900">
-        <h2 className="text-base font-semibold text-gray-900 dark:text-slate-100">Rename Checklist</h2>
+        <h2 className="text-base font-semibold text-gray-900 dark:text-slate-100">Environment Checklist</h2>
         <ul className="mt-4 space-y-3 text-sm text-gray-600 dark:text-slate-300">
-          <li>Update `go.mod` to the final module path.</li>
-          <li>Replace the starter app name in `config.yaml` and `.env`.</li>
-          <li>Swap example pages and sample API responses for your domain modules.</li>
-          <li>Push to GitHub and enable the repository’s template setting.</li>
+          <li>Review `config.yaml` and `.env` for environment-specific values.</li>
+          <li>Verify the public URL, Vite proxy URL, and logging defaults.</li>
+          <li>Update build metadata and release settings as deployment needs evolve.</li>
+          <li>Keep workflow runtime configuration aligned with your durability requirements.</li>
         </ul>
       </section>
     </div>

@@ -1,8 +1,13 @@
 import { Navigate, Route, Routes } from 'react-router-dom'
 import Layout from './components/Layout'
 import DashboardPage from './pages/DashboardPage'
-import ExamplesPage from './pages/ExamplesPage'
+import OperationsPage from './pages/OperationsPage'
+import QueuesPage from './pages/QueuesPage'
+import RunDetailsPage from './pages/RunDetailsPage'
+import RunsPage from './pages/RunsPage'
 import SettingsPage from './pages/SettingsPage'
+import WorkflowDesignerPage from './pages/WorkflowDesignerPage'
+import WorkflowListPage from './pages/WorkflowListPage'
 
 function App() {
   return (
@@ -10,7 +15,16 @@ function App() {
       <Route path="/" element={<Layout />}>
         <Route index element={<Navigate to="/dashboard" replace />} />
         <Route path="dashboard" element={<DashboardPage />} />
-        <Route path="examples" element={<ExamplesPage />} />
+        <Route path="workflows" element={<WorkflowListPage />} />
+        <Route path="workflows/new" element={<WorkflowDesignerPage />} />
+        <Route path="workflows/:definitionId/designer" element={<WorkflowDesignerPage />} />
+        <Route path="workflows/designer" element={<WorkflowDesignerPage />} />
+        <Route path="workflows/designer/:definitionId" element={<WorkflowDesignerPage />} />
+        <Route path="workflows/operations" element={<Navigate to="/operations" replace />} />
+        <Route path="runs" element={<RunsPage />} />
+        <Route path="runs/:workflowId" element={<RunDetailsPage />} />
+        <Route path="queues" element={<QueuesPage />} />
+        <Route path="operations" element={<OperationsPage />} />
         <Route path="settings" element={<SettingsPage />} />
       </Route>
     </Routes>
