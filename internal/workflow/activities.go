@@ -32,8 +32,15 @@ type ActivityExecutionRequest struct {
 type ActivityResult struct {
 	Output         json.RawMessage
 	DelayUntil     *time.Time
+	WaitForSignal  *ActivitySignalWait
 	State          json.RawMessage
 	ContextUpdates map[string]any
+}
+
+type ActivitySignalWait struct {
+	SignalName string
+	State      json.RawMessage
+	TimeoutAt  *time.Time
 }
 
 func builtInActivities(cfg config.WorkflowConfig, logger *slog.Logger) []Activity {

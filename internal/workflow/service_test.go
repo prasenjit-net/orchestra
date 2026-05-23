@@ -1059,6 +1059,33 @@ func TestWaitSignalActivityCompletesAfterSignal(t *testing.T) {
 	if _, err := service.RunOnce(context.Background()); err != nil {
 		t.Fatalf("RunOnce returned error: %v", err)
 	}
+	tasks, err := service.ListTasks(context.Background())
+	if err != nil {
+		t.Fatalf("ListTasks returned error: %v", err)
+	}
+	if len(tasks) != 1 || tasks[0].Status != StatusWaiting {
+		t.Fatalf("expected waiting task after initial signal wait, got %+v", tasks)
+	}
+	processed, err := service.RunOnce(context.Background())
+	if err != nil {
+		t.Fatalf("second RunOnce returned error: %v", err)
+	}
+	if processed {
+		t.Fatal("expected no work while task is parked waiting for signal")
+	}
+	history, err := service.GetWorkflowHistory(context.Background(), instance.ID)
+	if err != nil {
+		t.Fatalf("GetWorkflowHistory returned error: %v", err)
+	}
+	waitEvents := 0
+	for _, event := range history {
+		if event.EventType == "ActivityWaitingForSignal" {
+			waitEvents++
+		}
+	}
+	if waitEvents != 1 {
+		t.Fatalf("expected exactly one ActivityWaitingForSignal event, got %d", waitEvents)
+	}
 	instance, err = service.SignalWorkflow(context.Background(), instance.ID, SignalWorkflowInput{
 		Name:    "approval",
 		Payload: []byte(`{"approved":true}`),

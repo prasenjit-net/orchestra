@@ -61,6 +61,8 @@ type waitSignalInput struct {
 type waitSignalState struct {
 	StartedAt     string `json:"startedAt"`
 	ObservedCount int    `json:"observedCount"`
+	SignalName    string `json:"signalName"`
+	TimeoutAt     string `json:"timeoutAt,omitempty"`
 }
 
 func (waitSignalActivity) Descriptor() ActivityDescriptor {
@@ -632,21 +634,40 @@ func executeSignalWait(req ActivityExecutionRequest, cfg waitSignalConfig) (Acti
 		}
 		return ActivityResult{Output: output}, nil
 	}
-	if input.TimeoutSeconds > 0 {
-		startedAt, err := time.Parse(time.RFC3339Nano, state.StartedAt)
-		if err != nil {
-			return ActivityResult{}, fmt.Errorf("parse %s activity state start time: %w", req.Step.Activity, err)
+	if !initialized {
+		state.SignalName = signalName
+		if input.TimeoutSeconds > 0 {
+			state.TimeoutAt = formatTime(req.Now.Add(time.Duration(input.TimeoutSeconds) * time.Second).UTC())
 		}
-		if !req.Now.Before(startedAt.Add(time.Duration(input.TimeoutSeconds) * time.Second)) {
+	} else if state.SignalName == "" {
+		state.SignalName = signalName
+	}
+	if state.TimeoutAt != "" {
+		timeoutAt, err := time.Parse(time.RFC3339Nano, state.TimeoutAt)
+		if err != nil {
+			return ActivityResult{}, fmt.Errorf("parse %s activity timeout: %w", req.Step.Activity, err)
+		}
+		if !req.Now.Before(timeoutAt) {
 			return ActivityResult{}, fmt.Errorf("%s activity timed out waiting for signal %q", req.Step.Activity, signalName)
 		}
 	}
-	nextRunAt := req.Now.Add(time.Duration(input.PollIntervalSeconds) * time.Second).UTC()
 	statePayload, err := json.Marshal(state)
 	if err != nil {
 		return ActivityResult{}, fmt.Errorf("encode %s activity state: %w", req.Step.Activity, err)
 	}
-	return ActivityResult{DelayUntil: &nextRunAt, State: statePayload}, nil
+	wait := &ActivitySignalWait{
+		SignalName: signalName,
+		State:      statePayload,
+	}
+	if state.TimeoutAt != "" {
+		timeoutAt, err := time.Parse(time.RFC3339Nano, state.TimeoutAt)
+		if err != nil {
+			return ActivityResult{}, fmt.Errorf("parse %s activity timeout: %w", req.Step.Activity, err)
+		}
+		timeoutAt = timeoutAt.UTC()
+		wait.TimeoutAt = &timeoutAt
+	}
+	return ActivityResult{WaitForSignal: wait, State: statePayload}, nil
 }
 
 func executeHTTPAlias(ctx context.Context, req ActivityExecutionRequest, method string, urlField string) (ActivityResult, error) {

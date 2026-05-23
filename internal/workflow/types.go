@@ -8,6 +8,7 @@ import (
 const (
 	StatusPending   = "pending"
 	StatusRunning   = "running"
+	StatusWaiting   = "waiting"
 	StatusPaused    = "paused"
 	StatusCanceled  = "canceled"
 	StatusCompleted = "completed"

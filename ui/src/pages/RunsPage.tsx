@@ -46,7 +46,7 @@ export default function RunsPage() {
         <StatCard label="Runs" value={String(workflows.length)} description="Workflow instances in durable storage." icon={Workflow} tone="bg-sky-50 text-sky-600 dark:bg-sky-900/20 dark:text-sky-300" />
         <StatCard label="Running" value={String(workflows.filter((workflow) => workflow.status === 'running').length)} description="Instances currently executing." icon={Play} tone="bg-emerald-50 text-emerald-600 dark:bg-emerald-900/20 dark:text-emerald-300" />
         <StatCard label="Failed" value={String(workflows.filter((workflow) => workflow.status === 'failed').length)} description="Runs that need operator attention." icon={Activity} tone="bg-red-50 text-red-600 dark:bg-red-900/20 dark:text-red-300" />
-        <StatCard label="Queued tasks" value={String(tasks.filter((task) => task.status === 'pending' || task.status === 'running' || task.status === 'paused').length)} description="Pending, running, or paused tasks across all runs." icon={Clock3} tone="bg-amber-50 text-amber-600 dark:bg-amber-900/20 dark:text-amber-300" />
+        <StatCard label="Queued tasks" value={String(tasks.filter((task) => task.status === 'pending' || task.status === 'running' || task.status === 'paused' || task.status === 'waiting').length)} description="Pending, running, paused, or signal-waiting tasks across all runs." icon={Clock3} tone="bg-amber-50 text-amber-600 dark:bg-amber-900/20 dark:text-amber-300" />
       </div>
 
       <section className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900">

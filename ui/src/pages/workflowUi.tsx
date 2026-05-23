@@ -21,6 +21,7 @@ export function statusClasses(status: string) {
       return 'bg-sky-100 text-sky-700 dark:bg-sky-900/30 dark:text-sky-300'
     case 'draft':
     case 'paused':
+    case 'waiting':
       return 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300'
     case 'canceled':
       return 'bg-slate-200 text-slate-700 dark:bg-slate-800 dark:text-slate-200'
@@ -35,6 +36,8 @@ export function availableTaskActions(task: WorkflowTask): WorkflowTaskAction[] {
       return ['retry', 'requeue', 'cancel']
     case 'paused':
       return ['resume', 'cancel']
+    case 'waiting':
+      return ['requeue', 'cancel']
     case 'pending':
     case 'running':
       return ['pause', 'cancel', 'requeue']
@@ -63,6 +66,7 @@ export function actionLabel(action: WorkflowTaskAction) {
 export const queueEventTypes = new Set([
   'ActivityScheduled',
   'ActivityWaiting',
+  'ActivityWaitingForSignal',
   'ActivityRetryScheduled',
   'TaskRetried',
   'TaskRequeued',

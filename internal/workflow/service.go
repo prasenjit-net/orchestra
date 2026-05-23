@@ -34,6 +34,47 @@ type Service struct {
 	live       *livebus.Bus
 }
 
+func (s *Service) wakeTasksWaitingForSignalTx(ctx context.Context, tx *sql.Tx, workflowID string, signalName string, now time.Time) ([]int64, error) {
+	rows, err := tx.QueryContext(ctx, `
+		SELECT id, workflow_id, step_index, step_name, activity_name, status, attempts, max_attempts,
+		       run_at, last_error, lease_owner, lease_expires_at, state_json, created_at, updated_at
+		FROM workflow_tasks
+		WHERE workflow_id = ? AND status = ?
+		ORDER BY id ASC
+	`, workflowID, StatusWaiting)
+	if err != nil {
+		return nil, fmt.Errorf("query signal-waiting tasks: %w", err)
+	}
+	defer rows.Close()
+
+	var wokenIDs []int64
+	for rows.Next() {
+		task, err := scanWorkflowTask(rows)
+		if err != nil {
+			return nil, err
+		}
+		state, initialized, err := decodeWaitSignalState(task.State)
+		if err != nil {
+			return nil, err
+		}
+		if !initialized || strings.TrimSpace(state.SignalName) != signalName {
+			continue
+		}
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE workflow_tasks
+			SET status = ?, run_at = ?, lease_owner = '', lease_expires_at = NULL, updated_at = ?
+			WHERE id = ?
+		`, StatusPending, formatTime(now), formatTime(now), task.ID); err != nil {
+			return nil, fmt.Errorf("wake signal-waiting task %d: %w", task.ID, err)
+		}
+		wokenIDs = append(wokenIDs, task.ID)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate signal-waiting tasks: %w", err)
+	}
+	return wokenIDs, nil
+}
+
 type workflowSnapshot struct {
 	Status          string          `json:"status"`
 	CurrentStepName string          `json:"currentStepName"`
@@ -43,6 +84,13 @@ type workflowSnapshot struct {
 	Context         json.RawMessage `json:"context,omitempty"`
 	PendingSignals  int             `json:"pendingSignals,omitempty"`
 	NextRunAt       *time.Time      `json:"nextRunAt,omitempty"`
+}
+
+func parkedSignalRunAt(timeoutAt *time.Time) time.Time {
+	if timeoutAt != nil {
+		return timeoutAt.UTC()
+	}
+	return time.Date(9999, time.December, 31, 23, 59, 59, 0, time.UTC)
 }
 
 func NewService(cfg config.WorkflowConfig, logger *slog.Logger, buses ...*livebus.Bus) (*Service, error) {
@@ -750,9 +798,19 @@ func (s *Service) SignalWorkflow(ctx context.Context, workflowID string, input S
 		return WorkflowInstance{}, err
 	}
 
+	wokenTaskIDs, err := s.wakeTasksWaitingForSignalTx(ctx, tx, workflowID, name, now)
+	if err != nil {
+		return WorkflowInstance{}, err
+	}
+
 	instance.Context = updatedContext
 	instance.LastEventSequence = sequence
 	instance.UpdatedAt = now
+	if len(wokenTaskIDs) > 0 {
+		instance.Status = StatusRunning
+		instance.LastError = ""
+		instance.NextRunAt = &now
+	}
 	if err := s.updateInstanceTx(ctx, tx, instance, snapshotFromInstance(instance), nil); err != nil {
 		return WorkflowInstance{}, err
 	}
@@ -774,6 +832,14 @@ func (s *Service) SignalWorkflow(ctx context.Context, workflowID string, input S
 		"name":    name,
 		"payload": decodePayloadForEvent(payload),
 	})
+	for _, taskID := range wokenTaskIDs {
+		s.emitLiveEvent("task.updated", "task", fmt.Sprintf("%d", taskID), map[string]any{
+			"taskId":     taskID,
+			"workflowId": workflowID,
+			"status":     StatusPending,
+			"signal":     name,
+		})
+	}
 	return result, nil
 }
 
@@ -858,7 +924,7 @@ func (s *Service) ReplayWorkflow(ctx context.Context, workflowID string) (Workfl
 			replay.CurrentStepName, _ = payloadMap["stepName"].(string)
 			replay.CurrentActivity, _ = payloadMap["activity"].(string)
 			replay.LastError = ""
-		case "ActivityWaiting", "ActivityRetryScheduled":
+		case "ActivityWaiting", "ActivityWaitingForSignal", "ActivityRetryScheduled":
 			replay.Status = StatusRunning
 			replay.LastError, _ = payloadMap["error"].(string)
 		case "ActivityCompleted":
@@ -1042,6 +1108,9 @@ func (s *Service) RunOnce(ctx context.Context) (bool, error) {
 
 	if output.DelayUntil != nil {
 		return true, s.delayTask(ctx, task, step, *output.DelayUntil, output.State)
+	}
+	if output.WaitForSignal != nil {
+		return true, s.waitTaskForSignal(ctx, task, step, *output.WaitForSignal)
 	}
 
 	return true, s.completeTask(ctx, task, details, step, output.Output, output.ContextUpdates)
@@ -1413,6 +1482,79 @@ func (s *Service) delayTask(ctx context.Context, task WorkflowTask, step StepDef
 	return nil
 }
 
+func (s *Service) waitTaskForSignal(ctx context.Context, task WorkflowTask, step StepDefinition, wait ActivitySignalWait) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin task wait transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	instance, err := s.getWorkflowTx(ctx, tx, task.WorkflowID)
+	if err != nil {
+		return err
+	}
+
+	now := time.Now().UTC()
+	sequence := instance.LastEventSequence
+	payload := map[string]any{
+		"taskId":     task.ID,
+		"stepIndex":  task.StepIndex,
+		"stepName":   step.Name,
+		"activity":   step.Activity,
+		"signalName": wait.SignalName,
+	}
+	if wait.TimeoutAt != nil {
+		payload["timeoutAt"] = formatTime(*wait.TimeoutAt)
+	}
+	sequence, err = appendEventTx(ctx, tx, instance.ID, sequence, "ActivityWaitingForSignal", payload)
+	if err != nil {
+		return err
+	}
+
+	attempts := task.Attempts
+	if attempts > 0 {
+		attempts--
+	}
+	waitRunAt := parkedSignalRunAt(wait.TimeoutAt)
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE workflow_tasks
+		SET status = ?, attempts = ?, run_at = ?, last_error = '', lease_owner = '', lease_expires_at = NULL, state_json = ?, updated_at = ?
+		WHERE id = ?
+	`, StatusWaiting, attempts, formatTime(waitRunAt), rawJSONString(wait.State), formatTime(now), task.ID); err != nil {
+		return fmt.Errorf("park workflow task for signal: %w", err)
+	}
+
+	instance.Status = StatusRunning
+	instance.LastEventSequence = sequence
+	instance.LastError = ""
+	if wait.TimeoutAt != nil {
+		instance.NextRunAt = wait.TimeoutAt
+	} else {
+		instance.NextRunAt = nil
+	}
+	instance.UpdatedAt = now
+	if err := s.updateInstanceTx(ctx, tx, instance, snapshotFromInstance(instance), nil); err != nil {
+		return err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit task wait transaction: %w", err)
+	}
+
+	s.emitLiveEvent("task.updated", "task", fmt.Sprintf("%d", task.ID), map[string]any{
+		"taskId":     task.ID,
+		"workflowId": task.WorkflowID,
+		"status":     StatusWaiting,
+		"signalName": wait.SignalName,
+	})
+	s.emitLiveEvent("workflow.updated", "workflow", task.WorkflowID, map[string]any{
+		"workflowId": task.WorkflowID,
+		"status":     StatusRunning,
+	})
+	s.emitOperationEvent(task.WorkflowID, "ActivityWaitingForSignal", payload)
+	return nil
+}
+
 func (s *Service) handleTaskFailure(ctx context.Context, task WorkflowTask, step StepDefinition, execErr error) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -1622,10 +1764,10 @@ func (s *Service) claimNextTask(ctx context.Context) (WorkflowTask, bool, error)
 		SELECT id, workflow_id, step_index, step_name, activity_name, status, attempts, max_attempts,
 		       run_at, last_error, lease_owner, lease_expires_at, state_json, created_at, updated_at
 		FROM workflow_tasks
-		WHERE status = ? AND run_at <= ?
+		WHERE (status = ? AND run_at <= ?) OR (status = ? AND run_at <= ?)
 		ORDER BY run_at ASC, id ASC
 		LIMIT 1
-	`, StatusPending, formatTime(now))
+	`, StatusPending, formatTime(now), StatusWaiting, formatTime(now))
 	if err != nil {
 		return WorkflowTask{}, false, fmt.Errorf("select runnable workflow task: %w", err)
 	}

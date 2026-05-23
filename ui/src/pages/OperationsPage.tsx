@@ -59,7 +59,7 @@ export default function OperationsPage() {
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
         <StatCard label="Events" value={String(events.length)} description="Recent durable events returned by the API." icon={Activity} tone="bg-violet-50 text-violet-600 dark:bg-violet-900/20 dark:text-violet-300" />
         <StatCard label="Running runs" value={String(workflows.filter((workflow) => workflow.status === 'running').length)} description="Currently active workflow instances." icon={Workflow} tone="bg-sky-50 text-sky-600 dark:bg-sky-900/20 dark:text-sky-300" />
-        <StatCard label="Queued tasks" value={String(tasks.filter((task) => task.status === 'pending' || task.status === 'running' || task.status === 'paused').length)} description="Queue depth across all workflow instances." icon={Clock3} tone="bg-amber-50 text-amber-600 dark:bg-amber-900/20 dark:text-amber-300" />
+        <StatCard label="Queued tasks" value={String(tasks.filter((task) => task.status === 'pending' || task.status === 'running' || task.status === 'paused' || task.status === 'waiting').length)} description="Queue depth across all workflow instances." icon={Clock3} tone="bg-amber-50 text-amber-600 dark:bg-amber-900/20 dark:text-amber-300" />
         <StatCard label="Failures" value={String(events.filter((event) => event.eventType.includes('Failed')).length)} description="Recent workflow or activity failures." icon={Radio} tone="bg-red-50 text-red-600 dark:bg-red-900/20 dark:text-red-300" />
       </div>
 

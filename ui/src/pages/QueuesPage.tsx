@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Clock3, PauseCircle, Play, RotateCcw } from 'lucide-react'
+import { BellRing, Clock3, PauseCircle, Play, RotateCcw } from 'lucide-react'
 import { Link } from 'react-router-dom'
 import SectionHeader from '../components/SectionHeader'
 import StatCard from '../components/StatCard'
@@ -53,7 +53,8 @@ export default function QueuesPage() {
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
         <StatCard label="Pending" value={String(tasks.filter((task) => task.status === 'pending').length)} description="Tasks waiting to be claimed." icon={Clock3} tone="bg-amber-50 text-amber-600 dark:bg-amber-900/20 dark:text-amber-300" />
         <StatCard label="Running" value={String(tasks.filter((task) => task.status === 'running').length)} description="Tasks currently leased by a worker." icon={Play} tone="bg-sky-50 text-sky-600 dark:bg-sky-900/20 dark:text-sky-300" />
-        <StatCard label="Paused" value={String(tasks.filter((task) => task.status === 'paused').length)} description="Tasks paused by an operator." icon={PauseCircle} tone="bg-violet-50 text-violet-600 dark:bg-violet-900/20 dark:text-violet-300" />
+        <StatCard label="Waiting" value={String(tasks.filter((task) => task.status === 'waiting').length)} description="Tasks parked until an external signal arrives." icon={BellRing} tone="bg-violet-50 text-violet-600 dark:bg-violet-900/20 dark:text-violet-300" />
+        <StatCard label="Paused" value={String(tasks.filter((task) => task.status === 'paused').length)} description="Tasks paused by an operator." icon={PauseCircle} tone="bg-indigo-50 text-indigo-600 dark:bg-indigo-900/20 dark:text-indigo-300" />
         <StatCard label="Failed" value={String(tasks.filter((task) => task.status === 'failed').length)} description="Failed tasks awaiting action." icon={RotateCcw} tone="bg-red-50 text-red-600 dark:bg-red-900/20 dark:text-red-300" />
       </div>
 

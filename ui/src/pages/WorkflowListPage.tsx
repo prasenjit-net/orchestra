@@ -72,7 +72,7 @@ export default function WorkflowListPage() {
     definitions: definitions.length,
     drafts: definitions.filter((definition) => Boolean(definition.draftVersion)).length,
     running: workflows.filter((workflow) => workflow.status === 'running').length,
-    queued: tasks.filter((task) => task.status === 'pending' || task.status === 'running' || task.status === 'paused').length,
+    queued: tasks.filter((task) => task.status === 'pending' || task.status === 'running' || task.status === 'paused' || task.status === 'waiting').length,
   }
 
   return (
