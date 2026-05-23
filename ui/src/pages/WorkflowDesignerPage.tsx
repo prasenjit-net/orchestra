@@ -1,4 +1,4 @@
-import { type CSSProperties, type DragEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { type CSSProperties, type MouseEvent as ReactMouseEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   addEdge,
@@ -19,10 +19,10 @@ import {
   useNodesState,
   useReactFlow,
 } from '@xyflow/react'
-import { AlertCircle, ArrowLeft, CheckCircle2, ChevronDown, ChevronRight, Clock3, FileText, Globe, Grip, Plus, Save, Send, SquareTerminal, Trash2, TriangleAlert, X } from 'lucide-react'
+import { AlertCircle, ArrowLeft, CheckCircle2, ChevronDown, ChevronRight, Clock3, FileText, Globe, Grip, Save, Send, SquareTerminal, Trash2, TriangleAlert, X } from 'lucide-react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
-import { workflowApi } from '../services/api'
-import type { WorkflowActivity, WorkflowDefinitionDocument } from '../types'
+import { scriptsApi, workflowApi } from '../services/api'
+import type { Script, WorkflowActivity, WorkflowDefinitionDocument } from '../types'
 
 type InputRow = {
   id: string
@@ -49,12 +49,17 @@ type ContextReference = {
   description: string
 }
 
+type CanvasContextMenuState = {
+  x: number
+  y: number
+  flowPosition: { x: number; y: number }
+  category: string | null
+}
+
 type DesignerNodeData = ActivityNodeData | BasicNodeData
 
 type FlowNode = Node<DesignerNodeData>
 type ActivityFlowNode = Node<ActivityNodeData, 'activity'>
-type PaletteTab = 'all' | string
-type SidebarTab = 'metadata' | 'palette'
 
 const startNodeID = 'workflow-start'
 const endNodeID = 'workflow-end'
@@ -361,6 +366,212 @@ function ActivityNode({ data, selected }: NodeProps<ActivityFlowNode>) {
   )
 }
 
+function ScriptActivityFields({
+  node,
+  payload,
+  setField,
+  onUpdate,
+}: {
+  node: ActivityFlowNode
+  payload: unknown
+  setField: (key: string, value: string, options?: { removeWhenBlank?: boolean }) => void
+  onUpdate: (updater: (data: ActivityNodeData) => ActivityNodeData) => void
+}) {
+  const savedMode = Boolean(findInputRowValue(node.data.inputRows, 'scriptId'))
+
+  const scriptsQuery = useQuery({
+    queryKey: ['scripts'],
+    queryFn: scriptsApi.list,
+  })
+
+  const scripts: Script[] = scriptsQuery.data?.scripts ?? []
+  const selectedScript = scripts.find((s) => s.id === findInputRowValue(node.data.inputRows, 'scriptId'))
+
+  const switchToSaved = () => {
+    onUpdate((data) => ({
+      ...data,
+      inputRows: data.inputRows.filter((r) => r.key !== 'script'),
+    }))
+  }
+
+  const switchToInline = () => {
+    onUpdate((data) => ({
+      ...data,
+      inputRows: data.inputRows.filter((r) => r.key !== 'scriptId'),
+    }))
+  }
+
+  const selectScript = (script: Script) => {
+    onUpdate((data) => {
+      let rows = data.inputRows.filter((r) => r.key !== 'script' && r.key !== 'scriptId')
+      rows = upsertInputRow(rows, 'scriptId', script.id)
+      if (script.language) rows = upsertInputRow(rows, 'language', script.language)
+      if (script.timeoutMs) rows = upsertInputRow(rows, 'timeoutMs', String(script.timeoutMs))
+      if (script.exports?.length) rows = upsertInputRow(rows, 'exports', JSON.stringify(script.exports))
+      return { ...data, inputRows: rows }
+    })
+  }
+
+  return (
+    <div className="space-y-3">
+      {/* Mode toggle */}
+      <div className="flex items-center gap-1 rounded-lg border border-gray-200 p-1 dark:border-slate-700">
+        <button
+          type="button"
+          onClick={switchToInline}
+          className={`flex-1 rounded-md px-3 py-1.5 text-xs font-semibold transition-colors ${!savedMode ? 'bg-primary-600 text-white' : 'text-gray-600 hover:bg-gray-100 dark:text-slate-300 dark:hover:bg-slate-800'}`}
+        >
+          Inline
+        </button>
+        <button
+          type="button"
+          onClick={switchToSaved}
+          className={`flex-1 rounded-md px-3 py-1.5 text-xs font-semibold transition-colors ${savedMode ? 'bg-primary-600 text-white' : 'text-gray-600 hover:bg-gray-100 dark:text-slate-300 dark:hover:bg-slate-800'}`}
+        >
+          Saved script
+        </button>
+      </div>
+
+      {savedMode ? (
+        <>
+          <div>
+            <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wide text-gray-500 dark:text-slate-400">Script</label>
+            <select
+              value={findInputRowValue(node.data.inputRows, 'scriptId')}
+              onChange={(event) => {
+                const s = scripts.find((sc) => sc.id === event.target.value)
+                if (s) selectScript(s)
+              }}
+              className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2.5 text-sm text-gray-900 outline-none transition-colors focus:border-primary-500 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
+            >
+              <option value="">— choose a saved script —</option>
+              {scripts.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.name} ({s.language})
+                </option>
+              ))}
+            </select>
+          </div>
+          {selectedScript ? (
+            <div>
+              <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wide text-gray-500 dark:text-slate-400">
+                Source preview (read-only — edit on Scripts page)
+              </label>
+              <textarea
+                readOnly
+                rows={10}
+                value={selectedScript.source}
+                className="w-full rounded-lg border border-gray-200 bg-slate-950 px-3 py-2 font-mono text-sm text-slate-400 outline-none dark:border-slate-700"
+              />
+            </div>
+          ) : null}
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+            <div>
+              <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wide text-gray-500 dark:text-slate-400">Timeout ms override</label>
+              <input
+                type="number"
+                min={1}
+                value={findInputRowValue(node.data.inputRows, 'timeoutMs')}
+                onChange={(event) => setField('timeoutMs', event.target.value, { removeWhenBlank: true })}
+                placeholder="from saved script"
+                className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2.5 text-sm text-gray-900 outline-none transition-colors focus:border-primary-500 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
+              />
+            </div>
+            <div>
+              <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wide text-gray-500 dark:text-slate-400">Exports override</label>
+              <input
+                value={formatStringListValue((payload as Record<string, unknown>).exports)}
+                onChange={(event) =>
+                  setField(
+                    'exports',
+                    JSON.stringify(
+                      event.target.value
+                        .split(',')
+                        .map((item) => item.trim())
+                        .filter(Boolean),
+                    ),
+                    { removeWhenBlank: true },
+                  )
+                }
+                placeholder="from saved script"
+                className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2.5 text-sm text-gray-900 outline-none transition-colors focus:border-primary-500 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
+              />
+            </div>
+          </div>
+        </>
+      ) : (
+        <>
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+            <div>
+              <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wide text-gray-500 dark:text-slate-400">Language</label>
+              <input
+                value={findInputRowValue(node.data.inputRows, 'language') || 'starlark'}
+                onChange={(event) => setField('language', event.target.value || 'starlark')}
+                placeholder="starlark"
+                className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2.5 text-sm text-gray-900 outline-none transition-colors focus:border-primary-500 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
+              />
+            </div>
+            <div>
+              <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wide text-gray-500 dark:text-slate-400">Timeout ms</label>
+              <input
+                type="number"
+                min={1}
+                value={findInputRowValue(node.data.inputRows, 'timeoutMs')}
+                onChange={(event) => setField('timeoutMs', event.target.value, { removeWhenBlank: true })}
+                placeholder="100"
+                className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2.5 text-sm text-gray-900 outline-none transition-colors focus:border-primary-500 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
+              />
+            </div>
+          </div>
+          <div>
+            <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wide text-gray-500 dark:text-slate-400">Exports</label>
+            <input
+              value={formatStringListValue((payload as Record<string, unknown>).exports)}
+              onChange={(event) =>
+                setField(
+                  'exports',
+                  JSON.stringify(
+                    event.target.value
+                      .split(',')
+                      .map((item) => item.trim())
+                      .filter(Boolean),
+                  ),
+                  { removeWhenBlank: true },
+                )
+              }
+              placeholder="result, extra_value"
+              className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2.5 text-sm text-gray-900 outline-none transition-colors focus:border-primary-500 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
+            />
+          </div>
+          <div>
+            <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wide text-gray-500 dark:text-slate-400">Script</label>
+            <textarea
+              rows={10}
+              value={String((payload as Record<string, unknown>).script ?? '')}
+              onChange={(event) => setField('script', event.target.value)}
+              placeholder={'result = {"message": strings.upper(input["name"])}'}
+              className="w-full rounded-lg border border-gray-200 bg-slate-950 px-3 py-2 font-mono text-sm text-slate-100 outline-none transition-colors focus:border-primary-500 dark:border-slate-700"
+            />
+          </div>
+          <div className="rounded-lg border border-dashed border-gray-300 p-3 text-[11px] text-gray-500 dark:border-slate-700 dark:text-slate-400">
+            Use the builtins <span className="font-mono">json</span>, <span className="font-mono">strings</span>, <span className="font-mono">collections</span>, <span className="font-mono">workflow</span>, and <span className="font-mono">asserts</span>. Workflow context is available in <span className="font-mono">ctx</span>.
+          </div>
+        </>
+      )}
+      <div>
+        <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wide text-gray-500 dark:text-slate-400">Data JSON</label>
+        <textarea
+          rows={4}
+          value={formatStructuredEditorValue((payload as Record<string, unknown>).data)}
+          onChange={(event) => setField('data', event.target.value, { removeWhenBlank: true })}
+          placeholder='{"name":"orchestra"}'
+          className="w-full rounded-lg border border-gray-200 bg-slate-950 px-3 py-2 font-mono text-sm text-slate-100 outline-none transition-colors focus:border-primary-500 dark:border-slate-700"
+        />
+      </div>
+    </div>
+  )
+}
+
 function ActivityPropertiesModal({
   node,
   contextReferences,
@@ -618,75 +829,7 @@ function ActivityPropertiesModal({
           </div>
         )
       case 'script':
-        return (
-          <div className="space-y-3">
-            <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-              <div>
-                <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wide text-gray-500 dark:text-slate-400">Language</label>
-                <input
-                  value={findInputRowValue(node.data.inputRows, 'language') || 'starlark'}
-                  onChange={(event) => setField('language', event.target.value || 'starlark')}
-                  placeholder="starlark"
-                  className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2.5 text-sm text-gray-900 outline-none transition-colors focus:border-primary-500 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
-                />
-              </div>
-              <div>
-                <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wide text-gray-500 dark:text-slate-400">Timeout ms</label>
-                <input
-                  type="number"
-                  min={1}
-                  value={findInputRowValue(node.data.inputRows, 'timeoutMs')}
-                  onChange={(event) => setField('timeoutMs', event.target.value, { removeWhenBlank: true })}
-                  placeholder="100"
-                  className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2.5 text-sm text-gray-900 outline-none transition-colors focus:border-primary-500 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
-                />
-              </div>
-            </div>
-            <div>
-              <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wide text-gray-500 dark:text-slate-400">Exports</label>
-              <input
-                value={formatStringListValue((payload as Record<string, unknown>).exports)}
-                onChange={(event) =>
-                  setField(
-                    'exports',
-                    JSON.stringify(
-                      event.target.value
-                        .split(',')
-                        .map((item) => item.trim())
-                        .filter(Boolean),
-                    ),
-                    { removeWhenBlank: true },
-                  )
-                }
-                placeholder="result, extra_value"
-                className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2.5 text-sm text-gray-900 outline-none transition-colors focus:border-primary-500 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
-              />
-            </div>
-            <div>
-              <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wide text-gray-500 dark:text-slate-400">Script</label>
-              <textarea
-                rows={10}
-                value={String((payload as Record<string, unknown>).script ?? '')}
-                onChange={(event) => setField('script', event.target.value)}
-                placeholder={'result = {"message": strings.upper(input["name"])}'}
-                className="w-full rounded-lg border border-gray-200 bg-slate-950 px-3 py-2 font-mono text-sm text-slate-100 outline-none transition-colors focus:border-primary-500 dark:border-slate-700"
-              />
-            </div>
-            <div>
-              <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wide text-gray-500 dark:text-slate-400">Data JSON</label>
-              <textarea
-                rows={6}
-                value={formatStructuredEditorValue((payload as Record<string, unknown>).data)}
-                onChange={(event) => setField('data', event.target.value, { removeWhenBlank: true })}
-                placeholder='{"name":"orchestra"}'
-                className="w-full rounded-lg border border-gray-200 bg-slate-950 px-3 py-2 font-mono text-sm text-slate-100 outline-none transition-colors focus:border-primary-500 dark:border-slate-700"
-              />
-            </div>
-            <div className="rounded-lg border border-dashed border-gray-300 p-3 text-[11px] text-gray-500 dark:border-slate-700 dark:text-slate-400">
-              Use the builtins <span className="font-mono">json</span>, <span className="font-mono">strings</span>, <span className="font-mono">collections</span>, <span className="font-mono">workflow</span>, and <span className="font-mono">asserts</span>. Workflow context is available in <span className="font-mono">ctx</span>.
-            </div>
-          </div>
-        )
+        return <ScriptActivityFields node={node} payload={payload} setField={setField} onUpdate={onUpdate} />
       default:
         return renderGenericRows()
     }
@@ -1024,16 +1167,16 @@ function WorkflowDesignerCanvas() {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   const reactFlowWrapper = useRef<HTMLDivElement | null>(null)
+  const contextMenuRef = useRef<HTMLDivElement | null>(null)
   const { screenToFlowPosition } = useReactFlow()
 
   const [workflowName, setWorkflowName] = useState('')
   const [workflowDescription, setWorkflowDescription] = useState('')
   const [notice, setNotice] = useState<string | null>(null)
   const [pageError, setPageError] = useState<string | null>(null)
-  const [activePaletteTab, setActivePaletteTab] = useState<PaletteTab>('all')
-  const [activeSidebarTab, setActiveSidebarTab] = useState<SidebarTab>('metadata')
   const [editingNodeID, setEditingNodeID] = useState<string | null>(null)
   const [isDesktop, setIsDesktop] = useState(() => (typeof window === 'undefined' ? true : window.innerWidth >= 1024))
+  const [contextMenu, setContextMenu] = useState<CanvasContextMenuState | null>(null)
 
   const activitiesQuery = useQuery({
     queryKey: ['workflow-activities'],
@@ -1048,14 +1191,8 @@ function WorkflowDesignerCanvas() {
 
   const activities = useMemo(() => activitiesQuery.data?.activities ?? [], [activitiesQuery.data?.activities])
   const activitiesByName = useMemo(() => new Map(activities.map((activity) => [activity.name, activity])), [activities])
-  const paletteTabs = useMemo(() => ['all', ...new Set(activities.map((activity) => activity.category))], [activities])
+  const activityCategories = useMemo(() => [...new Set(activities.map((activity) => activity.category))], [activities])
   const nodeTypes = useMemo(() => ({ activity: ActivityNode }), [])
-  const paletteActivities = useMemo(() => {
-    if (activePaletteTab === 'all') {
-      return activities
-    }
-    return activities.filter((activity) => activity.category === activePaletteTab)
-  }, [activePaletteTab, activities])
 
   const initialState = useMemo(() => initialGraph(), [])
   const [nodes, setNodes, onNodesChange] = useNodesState(initialState.nodes)
@@ -1115,6 +1252,32 @@ function WorkflowDesignerCanvas() {
     }
   }, [editingNode, editingNodeID])
 
+  useEffect(() => {
+    if (!contextMenu) {
+      return
+    }
+
+    const handlePointerDown = (event: MouseEvent) => {
+      if (contextMenuRef.current?.contains(event.target as Element)) {
+        return
+      }
+      setContextMenu(null)
+    }
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setContextMenu(null)
+      }
+    }
+
+    window.addEventListener('pointerdown', handlePointerDown)
+    window.addEventListener('keydown', handleKeyDown)
+    return () => {
+      window.removeEventListener('pointerdown', handlePointerDown)
+      window.removeEventListener('keydown', handleKeyDown)
+    }
+  }, [contextMenu])
+
   const updateNodeData = useCallback(
     (nodeID: string, updater: (data: ActivityNodeData) => ActivityNodeData) => {
       setNodes((currentNodes) =>
@@ -1147,17 +1310,24 @@ function WorkflowDesignerCanvas() {
     [edges, setEdges, setNodes],
   )
 
+  const addActivityToCanvas = useCallback(
+    (activity: WorkflowActivity, position: { x: number; y: number }) => {
+      insertNodeIntoTerminalPath(createActivityNode(activity, position))
+      setContextMenu(null)
+    },
+    [insertNodeIntoTerminalPath],
+  )
+
   const appendActivity = useCallback(
     (activity: WorkflowActivity) => {
       const terminalEdge = edges.find((edge) => edge.target === endNodeID)
       const tailNode = nodes.find((node) => node.id === (terminalEdge?.source ?? startNodeID))
-      const position = {
+      addActivityToCanvas(activity, {
         x: (tailNode?.position.x ?? 80) + 240,
         y: tailNode?.position.y ?? 220,
-      }
-      insertNodeIntoTerminalPath(createActivityNode(activity, position))
+      })
     },
-    [edges, insertNodeIntoTerminalPath, nodes],
+    [addActivityToCanvas, edges, nodes],
   )
 
   const onConnect = useCallback(
@@ -1185,29 +1355,31 @@ function WorkflowDesignerCanvas() {
     [setEdges],
   )
 
-  const onDragStart = useCallback((event: DragEvent<HTMLButtonElement>, activity: WorkflowActivity) => {
-    event.dataTransfer.setData('application/reactflow', activity.name)
-    event.dataTransfer.effectAllowed = 'move'
-  }, [])
-
-  const onDrop = useCallback(
-    (event: DragEvent<HTMLDivElement>) => {
+  const onPaneContextMenu = useCallback(
+    (event: ReactMouseEvent | MouseEvent) => {
       event.preventDefault()
-      const activityName = event.dataTransfer.getData('application/reactflow')
-      const activity = activitiesByName.get(activityName)
-      if (!activity || !reactFlowWrapper.current) {
+      if (!reactFlowWrapper.current) {
         return
       }
 
       const bounds = reactFlowWrapper.current.getBoundingClientRect()
-      const position = screenToFlowPosition({
-        x: event.clientX - bounds.left,
-        y: event.clientY - bounds.top,
-      })
+      const menuWidth = 256
+      const menuHeight = 320
+      const x = Math.min(Math.max(event.clientX - bounds.left, 8), Math.max(bounds.width - menuWidth - 8, 8))
+      const y = Math.min(Math.max(event.clientY - bounds.top, 8), Math.max(bounds.height - menuHeight - 8, 8))
 
-      insertNodeIntoTerminalPath(createActivityNode(activity, position))
+      setContextMenu({
+        x,
+        y,
+        flowPosition: screenToFlowPosition({
+          x: event.clientX - bounds.left,
+          y: event.clientY - bounds.top,
+        }),
+        category: null,
+      })
+      setPageError(null)
     },
-    [activitiesByName, insertNodeIntoTerminalPath, screenToFlowPosition],
+    [screenToFlowPosition],
   )
 
   const removeNodeByID = useCallback(
@@ -1344,7 +1516,7 @@ function WorkflowDesignerCanvas() {
             <div>
               <h1 className="text-xl font-bold text-gray-900 dark:text-slate-100">{definitionId ? 'Workflow designer' : 'New workflow designer'}</h1>
               <p className="mt-1 text-xs text-gray-500 dark:text-slate-400">
-                Build a workflow on the canvas, drag activities from the right palette, and save without editing raw JSON. The current compiler enforces one forward path from Start to End.
+                Right-click the canvas to add activities. Double-click a node to edit its properties.
               </p>
             </div>
           </div>
@@ -1405,8 +1577,51 @@ function WorkflowDesignerCanvas() {
         ) : null}
       </div>
 
-      <div className="grid min-h-0 flex-1 grid-cols-1 gap-0 xl:grid-cols-[minmax(0,1fr)_320px]">
-        <div ref={reactFlowWrapper} className="relative min-h-0 overflow-hidden border-r border-gray-200 bg-gray-100 dark:border-slate-800 dark:bg-slate-950">
+      <div className="shrink-0 border-b border-gray-200 bg-white px-4 py-2 dark:border-slate-800 dark:bg-slate-900">
+        <div className="flex items-center gap-3">
+          <div className="flex min-w-0 flex-1 items-center gap-2">
+            <label className="shrink-0 text-[11px] font-semibold uppercase tracking-wide text-gray-400 dark:text-slate-500">Name</label>
+            <input
+              value={workflowName}
+              onChange={(event) => setWorkflowName(event.target.value)}
+              placeholder="Workflow name"
+              className="min-w-0 flex-1 rounded-md border border-gray-200 bg-gray-50 px-2.5 py-1.5 text-sm font-medium text-gray-900 outline-none transition-colors focus:border-primary-500 focus:bg-white dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100 dark:focus:bg-slate-900"
+            />
+          </div>
+          <div className="flex min-w-0 flex-1 items-center gap-2">
+            <label className="shrink-0 text-[11px] font-semibold uppercase tracking-wide text-gray-400 dark:text-slate-500">Description</label>
+            <input
+              value={workflowDescription}
+              onChange={(event) => setWorkflowDescription(event.target.value)}
+              placeholder="Short description"
+              className="min-w-0 flex-1 rounded-md border border-gray-200 bg-gray-50 px-2.5 py-1.5 text-sm text-gray-700 outline-none transition-colors focus:border-primary-500 focus:bg-white dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 dark:focus:bg-slate-900"
+            />
+          </div>
+          {loadedDefinition ? (
+            <div className="flex shrink-0 items-center gap-1.5 text-[11px] text-gray-500 dark:text-slate-400">
+              <span className="rounded-full bg-gray-100 px-2 py-0.5 font-semibold dark:bg-slate-800">v{loadedDefinition.activeVersion} active</span>
+              {loadedDefinition.latestVersion !== loadedDefinition.activeVersion ? (
+                <span className="rounded-full bg-gray-100 px-2 py-0.5 dark:bg-slate-800">v{loadedDefinition.latestVersion} latest</span>
+              ) : null}
+              {loadedDefinition.draftVersion ? (
+                <span className="rounded-full bg-amber-100 px-2 py-0.5 font-semibold text-amber-700 dark:bg-amber-900/40 dark:text-amber-300">v{loadedDefinition.draftVersion} draft</span>
+              ) : null}
+            </div>
+          ) : null}
+          {selectedNode ? (
+            <button
+              type="button"
+              onClick={() => setEditingNodeID(selectedNode.id)}
+              className="shrink-0 rounded-md border border-primary-300 px-2.5 py-1.5 text-[11px] font-semibold text-primary-700 transition-colors hover:bg-primary-50 dark:border-primary-800 dark:text-primary-300 dark:hover:bg-primary-950/30"
+            >
+              Edit selected step
+            </button>
+          ) : null}
+        </div>
+      </div>
+
+      <div className="min-h-0 flex-1">
+        <div ref={reactFlowWrapper} className="relative h-full overflow-hidden bg-gray-100 dark:bg-slate-950">
           <ReactFlow
             nodes={nodes}
             edges={edges}
@@ -1417,12 +1632,9 @@ function WorkflowDesignerCanvas() {
                 setEditingNodeID(node.id)
               }
             }}
+            onPaneClick={() => setContextMenu(null)}
+            onPaneContextMenu={onPaneContextMenu}
             onConnect={onConnect}
-            onDrop={onDrop}
-            onDragOver={(event) => {
-              event.preventDefault()
-              event.dataTransfer.dropEffect = 'move'
-            }}
             fitView
             nodeTypes={nodeTypes}
             defaultEdgeOptions={{ type: 'smoothstep', markerEnd: { type: MarkerType.ArrowClosed } }}
@@ -1432,184 +1644,62 @@ function WorkflowDesignerCanvas() {
             <MiniMap pannable zoomable className="!bg-white dark:!bg-slate-900" />
             <Controls showInteractive={false} />
           </ReactFlow>
-        </div>
-
-        <aside className="flex min-h-0 flex-col overflow-hidden bg-white dark:bg-slate-900">
-            <div className="shrink-0 border-b border-gray-200 p-2 dark:border-slate-800">
-              <div className="grid grid-cols-2 gap-1 rounded-lg bg-gray-100 p-1 dark:bg-slate-800">
-                <button
-                  type="button"
-                  onClick={() => setActiveSidebarTab('metadata')}
-                  className={`rounded-md px-2 py-2 text-xs font-semibold transition-colors ${
-                   activeSidebarTab === 'metadata'
-                      ? 'bg-white text-gray-900 shadow-sm dark:bg-slate-700 dark:text-slate-100'
-                      : 'text-gray-500 hover:text-gray-900 dark:text-slate-400 dark:hover:text-slate-100'
-                  }`}
-                >
-                  Metadata
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setActiveSidebarTab('palette')}
-                  className={`rounded-md px-2 py-2 text-xs font-semibold transition-colors ${
-                   activeSidebarTab === 'palette'
-                      ? 'bg-white text-gray-900 shadow-sm dark:bg-slate-700 dark:text-slate-100'
-                      : 'text-gray-500 hover:text-gray-900 dark:text-slate-400 dark:hover:text-slate-100'
-                  }`}
-                >
-                  Activity palette
-                </button>
-              </div>
-            </div>
-
-            {activeSidebarTab === 'metadata' ? (
-              <div className="min-h-0 flex-1 overflow-y-auto p-3">
-                <div className="space-y-3">
-                  <div>
-                    <h2 className="text-sm font-semibold text-gray-900 dark:text-slate-100">Workflow metadata</h2>
-                    <p className="mt-1 text-xs text-gray-500 dark:text-slate-400">Name, description, and version details for this definition.</p>
+          {contextMenu ? (
+            <div
+              ref={contextMenuRef}
+              style={{ left: contextMenu.x, top: contextMenu.y }}
+              className="absolute z-20 w-64 rounded-xl border border-gray-200 bg-white p-2 shadow-2xl dark:border-slate-700 dark:bg-slate-900"
+            >
+              {contextMenu.category ? (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => setContextMenu((current) => (current ? { ...current, category: null } : null))}
+                    className="mb-2 flex w-full items-center justify-between rounded-lg px-2.5 py-2 text-left text-xs font-semibold text-gray-700 transition-colors hover:bg-gray-50 dark:text-slate-200 dark:hover:bg-slate-800"
+                  >
+                    <span>{formatCategory(contextMenu.category)}</span>
+                    <ArrowLeft className="h-3.5 w-3.5" />
+                  </button>
+                  <div className="space-y-1">
+                    {activities
+                      .filter((activity) => activity.category === contextMenu.category)
+                      .map((activity) => (
+                        <button
+                          key={activity.name}
+                          type="button"
+                          onClick={() => addActivityToCanvas(activity, contextMenu.flowPosition)}
+                          className="block w-full rounded-lg px-2.5 py-2 text-left transition-colors hover:bg-gray-50 dark:hover:bg-slate-800"
+                        >
+                          <div className="text-xs font-semibold text-gray-900 dark:text-slate-100">{activityDisplayName(activity)}</div>
+                          <div className="mt-1 text-[11px] text-gray-500 dark:text-slate-400">{activity.description}</div>
+                        </button>
+                      ))}
                   </div>
-                  <div>
-                    <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wide text-gray-500 dark:text-slate-400">Workflow name</label>
-                    <input
-                      value={workflowName}
-                      onChange={(event) => setWorkflowName(event.target.value)}
-                      placeholder="Workflow name"
-                      className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2.5 text-sm text-gray-900 outline-none transition-colors focus:border-primary-500 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
-                    />
+                </>
+              ) : (
+                <>
+                  <div className="px-2.5 py-2">
+                    <div className="text-xs font-semibold text-gray-900 dark:text-slate-100">Add activity</div>
+                    <div className="mt-1 text-[11px] text-gray-500 dark:text-slate-400">Choose a category first, then pick an activity to insert at this point.</div>
                   </div>
-                  <div>
-                    <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wide text-gray-500 dark:text-slate-400">Description</label>
-                    <textarea
-                      value={workflowDescription}
-                      onChange={(event) => setWorkflowDescription(event.target.value)}
-                      placeholder="Short description"
-                      rows={4}
-                      className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2.5 text-sm text-gray-900 outline-none transition-colors focus:border-primary-500 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
-                    />
-                  </div>
-                  {loadedDefinition ? (
-                    <div className="rounded-lg border border-gray-200 p-3 dark:border-slate-800">
-                      <div className="text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-slate-400">Current definition</div>
-                      <div className="mt-2 space-y-2 text-xs text-gray-600 dark:text-slate-300">
-                        <div><span className="font-semibold">ID:</span> {loadedDefinition.id}</div>
-                        <div><span className="font-semibold">Active version:</span> v{loadedDefinition.activeVersion}</div>
-                        <div><span className="font-semibold">Latest version:</span> v{loadedDefinition.latestVersion}</div>
-                        {loadedDefinition.draftVersion ? <div><span className="font-semibold">Draft version:</span> v{loadedDefinition.draftVersion}</div> : null}
-                      </div>
-                    </div>
-                  ) : (
-                    <div className="rounded-lg border border-dashed border-gray-300 p-3 text-xs text-gray-500 dark:border-slate-700 dark:text-slate-400">
-                      New workflow definitions start at version 1 when created.
-                    </div>
-                  )}
-                  <div className="rounded-lg border border-primary-200 bg-primary-50 p-3 text-xs text-primary-700 dark:border-primary-900/40 dark:bg-primary-950/20 dark:text-primary-200">
-                   Double-click any activity node on the canvas to open its custom properties editor.
-                   {selectedNode ? (
-                     <button
-                       type="button"
-                       onClick={() => setEditingNodeID(selectedNode.id)}
-                       className="mt-3 inline-flex rounded-lg border border-primary-300 px-2.5 py-1.5 text-[11px] font-semibold transition-colors hover:bg-primary-100 dark:border-primary-800 dark:hover:bg-primary-900/30"
-                     >
-                       Edit selected step
-                     </button>
-                   ) : null}
-                  </div>
-                </div>
-              </div>
-            ) : activeSidebarTab === 'palette' ? (
-              <>
-                <div className="shrink-0 border-b border-gray-200 p-3 dark:border-slate-800">
-                  <div className="flex items-center justify-between gap-2">
-                    <div>
-                      <h2 className="text-sm font-semibold text-gray-900 dark:text-slate-100">Activity palette</h2>
-                      <p className="mt-1 text-xs text-gray-500 dark:text-slate-400">Drag to canvas or add directly to the main path.</p>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => setActivePaletteTab('all')}
-                      className="rounded-lg border border-gray-200 px-2.5 py-1 text-[11px] font-semibold text-gray-700 transition-colors hover:bg-gray-50 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800"
-                    >
-                      Reset
-                    </button>
-                  </div>
-                  <div className="mt-3 flex flex-wrap gap-1.5">
-                    {paletteTabs.map((tab) => (
+                  <div className="space-y-1">
+                    {activityCategories.map((category) => (
                       <button
-                        key={tab}
+                        key={category}
                         type="button"
-                        onClick={() => setActivePaletteTab(tab)}
-                        className={`rounded-full px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wide transition-colors ${
-                          activePaletteTab === tab
-                            ? 'bg-primary-600 text-white'
-                            : 'border border-gray-200 text-gray-600 hover:bg-gray-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800'
-                        }`}
+                        onClick={() => setContextMenu((current) => (current ? { ...current, category } : null))}
+                        className="flex w-full items-center justify-between rounded-lg px-2.5 py-2 text-left text-xs font-semibold text-gray-700 transition-colors hover:bg-gray-50 dark:text-slate-200 dark:hover:bg-slate-800"
                       >
-                        {tab === 'all' ? 'All' : formatCategory(tab)}
+                        <span>{formatCategory(category)}</span>
+                        <ChevronRight className="h-3.5 w-3.5" />
                       </button>
                     ))}
                   </div>
-                </div>
-
-                <div className="min-h-0 flex-1 overflow-y-auto p-3">
-                  <div className="space-y-2">
-                    {paletteActivities.map((activity) => (
-                      <div key={activity.name} className="rounded-lg border border-gray-200 p-3 dark:border-slate-800">
-                        <div className="flex items-start justify-between gap-2">
-                          <div>
-                            <div className="text-xs font-semibold text-gray-900 dark:text-slate-100">{activityDisplayName(activity)}</div>
-                            <div className="mt-1 flex flex-wrap gap-1">
-                              <div className="inline-flex rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-700 dark:bg-slate-800 dark:text-slate-200">
-                                {formatCategory(activity.category)}
-                              </div>
-                              {activity.status ? (
-                                <div className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${
-                                  activity.status === 'beta'
-                                    ? 'bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-200'
-                                    : 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-200'
-                                }`}>
-                                  {activity.status}
-                                </div>
-                              ) : null}
-                            </div>
-                          </div>
-                          <button
-                            type="button"
-                            draggable
-                            onDragStart={(event) => onDragStart(event, activity)}
-                            className="rounded-lg border border-gray-200 px-2 py-1 text-[10px] font-semibold text-gray-600 transition-colors hover:bg-gray-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800"
-                          >
-                            Drag
-                          </button>
-                        </div>
-                        <p className="mt-2 text-[11px] text-gray-500 dark:text-slate-400">{activity.description}</p>
-                        {activity.tags && activity.tags.length > 0 ? (
-                          <div className="mt-2 flex flex-wrap gap-1">
-                            {activity.tags.map((tag) => (
-                              <span
-                                key={tag}
-                                className="inline-flex rounded-full border border-gray-200 px-2 py-0.5 text-[10px] text-gray-600 dark:border-slate-700 dark:text-slate-300"
-                              >
-                                {tag}
-                              </span>
-                            ))}
-                          </div>
-                        ) : null}
-                        <button
-                          type="button"
-                          onClick={() => appendActivity(activity)}
-                          className="mt-2 inline-flex items-center gap-1.5 rounded-lg bg-primary-600 px-2.5 py-1.5 text-[10px] font-semibold uppercase tracking-wide text-white transition-colors hover:bg-primary-700"
-                        >
-                          <Plus className="h-3 w-3" />
-                          Add to flow
-                        </button>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              </>
-            ) : null}
-          </aside>
+                </>
+              )}
+            </div>
+          ) : null}
+        </div>
       </div>
 
       {editingNode ? (

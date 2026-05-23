@@ -469,6 +469,80 @@ func parseVersion(raw string) (int, error) {
 	return version, nil
 }
 
+func (h *Handler) ListScripts(w http.ResponseWriter, r *http.Request) {
+	if h.workflow == nil {
+		writeError(w, http.StatusServiceUnavailable, "workflow service unavailable")
+		return
+	}
+	scripts, err := h.workflow.ListScripts(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	respondJSON(w, http.StatusOK, workflow.ScriptsResponse{Scripts: scripts})
+}
+
+func (h *Handler) CreateScript(w http.ResponseWriter, r *http.Request) {
+	if h.workflow == nil {
+		writeError(w, http.StatusServiceUnavailable, "workflow service unavailable")
+		return
+	}
+	var input workflow.CreateScriptInput
+	if err := decodeJSON(r, &input); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	script, err := h.workflow.CreateScript(r.Context(), input)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	respondJSON(w, http.StatusCreated, script)
+}
+
+func (h *Handler) GetScript(w http.ResponseWriter, r *http.Request, scriptID string) {
+	if h.workflow == nil {
+		writeError(w, http.StatusServiceUnavailable, "workflow service unavailable")
+		return
+	}
+	script, err := h.workflow.GetScript(r.Context(), scriptID)
+	if err != nil {
+		writeWorkflowError(w, err)
+		return
+	}
+	respondJSON(w, http.StatusOK, script)
+}
+
+func (h *Handler) UpdateScript(w http.ResponseWriter, r *http.Request, scriptID string) {
+	if h.workflow == nil {
+		writeError(w, http.StatusServiceUnavailable, "workflow service unavailable")
+		return
+	}
+	var input workflow.CreateScriptInput
+	if err := decodeJSON(r, &input); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	script, err := h.workflow.UpdateScript(r.Context(), scriptID, input)
+	if err != nil {
+		writeWorkflowError(w, err)
+		return
+	}
+	respondJSON(w, http.StatusOK, script)
+}
+
+func (h *Handler) DeleteScript(w http.ResponseWriter, r *http.Request, scriptID string) {
+	if h.workflow == nil {
+		writeError(w, http.StatusServiceUnavailable, "workflow service unavailable")
+		return
+	}
+	if err := h.workflow.DeleteScript(r.Context(), scriptID); err != nil {
+		writeWorkflowError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func (h *Handler) applyTaskAction(w http.ResponseWriter, r *http.Request, taskID int64, action func(context.Context, int64) (workflow.WorkflowTask, error)) {
 	if h.workflow == nil {
 		writeError(w, http.StatusServiceUnavailable, "workflow service unavailable")

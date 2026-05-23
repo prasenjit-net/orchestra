@@ -196,3 +196,28 @@ export interface WorkflowLiveEvent {
 }
 
 export type WorkflowLiveStatus = 'connecting' | 'connected' | 'reconnecting' | 'disconnected'
+
+export interface Script {
+  id: string
+  name: string
+  description: string
+  language: string
+  source: string
+  timeoutMs?: number
+  exports?: string[]
+  createdAt: string
+  updatedAt: string
+}
+
+export interface CreateScriptInput {
+  name: string
+  description: string
+  language: string
+  source: string
+  timeoutMs?: number
+  exports?: string[]
+}
+
+export interface ScriptsResponse {
+  scripts: Script[]
+}

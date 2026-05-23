@@ -67,7 +67,7 @@ func builtInActivities(cfg config.WorkflowConfig, logger *slog.Logger) []Activit
 		failActivity{},
 	}
 	if cfg.ScriptEnabled {
-		activities = append(activities, newScriptActivity(cfg))
+		activities = append(activities, newScriptActivity(cfg, nil))
 	}
 	return activities
 }

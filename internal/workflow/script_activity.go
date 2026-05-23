@@ -17,12 +17,14 @@ import (
 const scriptThreadLocalKey = "workflow-script-runtime"
 
 type scriptActivity struct {
-	cfg config.WorkflowConfig
+	cfg          config.WorkflowConfig
+	sourceLookup func(ctx context.Context, id string) (string, error)
 }
 
 type scriptActivityInput struct {
 	Language  string   `json:"language"`
 	Script    string   `json:"script"`
+	ScriptID  string   `json:"scriptId,omitempty"`
 	TimeoutMs int      `json:"timeoutMs"`
 	Exports   []string `json:"exports"`
 	Data      any      `json:"data"`
@@ -32,8 +34,8 @@ type scriptRuntimeContext struct {
 	context map[string]any
 }
 
-func newScriptActivity(cfg config.WorkflowConfig) Activity {
-	return scriptActivity{cfg: cfg}
+func newScriptActivity(cfg config.WorkflowConfig, lookup func(context.Context, string) (string, error)) Activity {
+	return scriptActivity{cfg: cfg, sourceLookup: lookup}
 }
 
 func (a scriptActivity) Descriptor() ActivityDescriptor {
@@ -66,6 +68,18 @@ func (a scriptActivity) Execute(ctx context.Context, req ActivityExecutionReques
 		if err := json.Unmarshal(req.Step.Input, &input); err != nil {
 			return ActivityResult{}, fmt.Errorf("decode script activity input: %w", err)
 		}
+	}
+
+	// Resolve source: saved script reference takes priority over inline body.
+	if input.ScriptID != "" {
+		if a.sourceLookup == nil {
+			return ActivityResult{}, fmt.Errorf("script activity: scriptId %q provided but script lookup is not configured", input.ScriptID)
+		}
+		fetched, err := a.sourceLookup(ctx, input.ScriptID)
+		if err != nil {
+			return ActivityResult{}, fmt.Errorf("script activity: lookup script %q: %w", input.ScriptID, err)
+		}
+		input.Script = fetched
 	}
 
 	language := strings.ToLower(strings.TrimSpace(input.Language))

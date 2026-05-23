@@ -1,7 +1,10 @@
 import type {
+  CreateScriptInput,
   ExampleResponse,
   HealthResponse,
   MetaResponse,
+  Script,
+  ScriptsResponse,
   WorkflowActivitiesResponse,
   WorkflowDefinitionDetails,
   WorkflowDefinitionDocument,
@@ -58,6 +61,38 @@ export const exampleApi = {
 
 export const metaApi = {
   get: async () => handleResponse<MetaResponse>(await fetch(buildApiUrl('/meta'))),
+}
+
+export const scriptsApi = {
+  list: async () => handleResponse<ScriptsResponse>(await fetch(buildApiUrl('/scripts'))),
+  create: async (input: CreateScriptInput) =>
+    handleResponse<Script>(
+      await fetch(buildApiUrl('/scripts'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(input),
+      }),
+    ),
+  get: async (id: string) => handleResponse<Script>(await fetch(buildApiUrl(`/scripts/${id}`))),
+  update: async (id: string, input: CreateScriptInput) =>
+    handleResponse<Script>(
+      await fetch(buildApiUrl(`/scripts/${id}`), {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(input),
+      }),
+    ),
+  delete: async (id: string) => {
+    const response = await fetch(buildApiUrl(`/scripts/${id}`), { method: 'DELETE' })
+    if (!response.ok) {
+      let message = `HTTP ${response.status}`
+      try {
+        const payload = await response.json()
+        if (payload?.error) message = payload.error
+      } catch { /* ignore */ }
+      throw new Error(message)
+    }
+  },
 }
 
 export const workflowApi = {

@@ -136,6 +136,9 @@ func NewService(cfg config.WorkflowConfig, logger *slog.Logger, buses ...*livebu
 	for _, activity := range builtInActivities(cfg, svc.logger) {
 		svc.activities[activity.Descriptor().Name] = activity
 	}
+	// Always register script activity with DB-backed lookup so saved scripts work
+	// regardless of the scriptEnabled config flag.
+	svc.activities["script"] = newScriptActivity(cfg, svc.lookupScriptSource)
 
 	if err := svc.initSchema(context.Background()); err != nil {
 		_ = db.Close()
@@ -2779,6 +2782,17 @@ func (s *Service) initSchema(ctx context.Context) error {
 		`CREATE INDEX IF NOT EXISTS idx_workflow_events_workflow_sequence ON workflow_events(workflow_id, sequence)`,
 		`CREATE INDEX IF NOT EXISTS idx_workflow_signals_workflow_created_at ON workflow_signals(workflow_id, created_at)`,
 		`CREATE INDEX IF NOT EXISTS idx_workflow_instances_updated_at ON workflow_instances(updated_at)`,
+		`CREATE TABLE IF NOT EXISTS scripts (
+			id TEXT PRIMARY KEY,
+			name TEXT NOT NULL,
+			description TEXT NOT NULL DEFAULT '',
+			language TEXT NOT NULL DEFAULT 'starlark',
+			source TEXT NOT NULL DEFAULT '',
+			timeout_ms INTEGER NOT NULL DEFAULT 0,
+			exports_json TEXT NOT NULL DEFAULT '[]',
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL
+		)`,
 	}
 
 	for _, statement := range statements {

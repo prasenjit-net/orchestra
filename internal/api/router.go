@@ -26,6 +26,19 @@ func NewRouter(cfg config.Config, logger *slog.Logger, build version.Info, live 
 		r.Get("/ws", h.WorkflowStream)
 	}
 	if workflowService != nil {
+		r.Get("/scripts", h.ListScripts)
+		r.Post("/scripts", h.CreateScript)
+		r.Route("/scripts/{scriptID}", func(r chi.Router) {
+			r.Get("/", func(w http.ResponseWriter, r *http.Request) {
+				h.GetScript(w, r, chi.URLParam(r, "scriptID"))
+			})
+			r.Put("/", func(w http.ResponseWriter, r *http.Request) {
+				h.UpdateScript(w, r, chi.URLParam(r, "scriptID"))
+			})
+			r.Delete("/", func(w http.ResponseWriter, r *http.Request) {
+				h.DeleteScript(w, r, chi.URLParam(r, "scriptID"))
+			})
+		})
 		r.Get("/workflows/activities", h.ListWorkflowActivities)
 		r.Get("/workflows", h.ListWorkflows)
 		r.Get("/workflows/events", h.ListWorkflowOperations)
