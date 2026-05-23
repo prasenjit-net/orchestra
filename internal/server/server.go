@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"fmt"
 	"io/fs"
 	"log/slog"
@@ -84,7 +85,11 @@ func newDevProxy(rawURL string, logger *slog.Logger) http.Handler {
 	}
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		proxy.ServeHTTP(w, r)
+		proxyReq := r.Clone(r.Context())
+		if shouldServeDevSPAIndex(proxyReq) {
+			proxyReq.URL.Path = "/"
+		}
+		proxy.ServeHTTP(w, proxyReq)
 	})
 }
 
@@ -111,9 +116,13 @@ func (h *spaHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	indexReq := r.Clone(r.Context())
-	indexReq.URL.Path = "/index.html"
-	h.fileServer.ServeHTTP(w, indexReq)
+	indexBytes, err := fs.ReadFile(h.fsys, "index.html")
+	if err != nil {
+		http.Error(w, "index.html missing from embedded UI", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	http.ServeContent(w, r, "index.html", time.Time{}, bytes.NewReader(indexBytes))
 }
 
 func fileExists(fsys fs.FS, name string) bool {
@@ -129,6 +138,24 @@ func fileExists(fsys fs.FS, name string) bool {
 	}
 
 	return !info.IsDir()
+}
+
+func shouldServeDevSPAIndex(r *http.Request) bool {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		return false
+	}
+	cleanPath := path.Clean(r.URL.Path)
+	if cleanPath == "/" || cleanPath == "." {
+		return false
+	}
+	if strings.HasPrefix(cleanPath, "/api/") || cleanPath == "/api" {
+		return false
+	}
+	if strings.HasPrefix(cleanPath, "/@") || strings.HasPrefix(cleanPath, "/__vite") {
+		return false
+	}
+	base := path.Base(cleanPath)
+	return !strings.Contains(base, ".")
 }
 
 func requestLogger(logger *slog.Logger) func(http.Handler) http.Handler {
