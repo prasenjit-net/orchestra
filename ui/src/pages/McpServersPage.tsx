@@ -26,7 +26,7 @@ export default function McpServersPage() {
     <div className="space-y-8 p-8">
       <div className="flex items-center justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900 dark:text-slate-100">MCP Servers</h1>
+          <h1 className="text-2xl font-bold text-gray-900 dark:text-slate-100">Connectors</h1>
           <p className="mt-1 text-sm text-gray-500 dark:text-slate-400">
             Reusable Model Context Protocol connectors you can attach to agents.
           </p>
@@ -37,7 +37,7 @@ export default function McpServersPage() {
           className="inline-flex items-center gap-2 rounded-lg bg-primary-600 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-primary-700"
         >
           <Plus className="h-4 w-4" />
-          New MCP Server
+          New Connector
         </button>
       </div>
 
@@ -54,7 +54,7 @@ export default function McpServersPage() {
             className="mt-6 inline-flex items-center gap-2 rounded-lg bg-primary-600 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-primary-700"
           >
             <Plus className="h-4 w-4" />
-            New MCP Server
+            New Connector
           </button>
         </div>
       ) : (

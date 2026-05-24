@@ -147,11 +147,11 @@ export default function McpServerEditorPage() {
               className="inline-flex items-center gap-1.5 text-sm font-medium text-gray-500 transition-colors hover:text-gray-900 dark:text-slate-400 dark:hover:text-slate-100"
             >
               <ArrowLeft className="h-4 w-4" />
-              MCP Servers
+              Connectors
             </Link>
             <span className="text-gray-300 dark:text-slate-700">/</span>
             <span className="text-sm font-semibold text-gray-900 dark:text-slate-100">
-              {name || (isNew ? 'New MCP Server' : '…')}
+              {name || (isNew ? 'New Connector' : '…')}
             </span>
           </div>
           <div className="flex items-center gap-2">
