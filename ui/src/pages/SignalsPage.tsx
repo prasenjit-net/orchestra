@@ -12,7 +12,6 @@ import { formatDate, statusClasses } from './workflowUi'
 const PAGE_SIZE = 20
 
 const waitingActivityList = ['wait-signal', 'approval', 'manual-task', 'human-wait']
-const waitingActivities = new Set(waitingActivityList)
 
 type WaitingSignalWorkflow = {
   workflow: WorkflowInstance

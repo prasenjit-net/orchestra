@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Activity, Clock3, Play, Workflow } from 'lucide-react'
 import { Link } from 'react-router-dom'
 import Pagination from '../components/Pagination'
@@ -29,17 +29,6 @@ export default function RunsPage() {
   const tasksQuery = useQuery({
     queryKey: ['workflow-tasks'],
     queryFn: () => workflowApi.listTasks(),
-  })
-
-  const startMutation = useMutation({
-    mutationFn: (definitionId: string) => workflowApi.startWorkflow(definitionId),
-    onSuccess: async () => {
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ['workflows'] }),
-        queryClient.invalidateQueries({ queryKey: ['workflow-tasks'] }),
-      ])
-      setPage(0)
-    },
   })
 
   if (workflowsQuery.isLoading || tasksQuery.isLoading) {

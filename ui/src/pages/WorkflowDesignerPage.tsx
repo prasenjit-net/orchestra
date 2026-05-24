@@ -1966,18 +1966,6 @@ function WorkflowDesignerCanvas() {
     [insertNodeIntoTerminalPath],
   )
 
-  const appendActivity = useCallback(
-    (activity: WorkflowActivity) => {
-      const terminalEdge = edges.find((edge) => edge.target === endNodeID)
-      const tailNode = nodes.find((node) => node.id === (terminalEdge?.source ?? startNodeID))
-      addActivityToCanvas(activity, {
-        x: (tailNode?.position.x ?? 80) + 240,
-        y: tailNode?.position.y ?? 220,
-      })
-    },
-    [addActivityToCanvas, edges, nodes],
-  )
-
   const onConnect = useCallback(
     (connection: Connection) => {
       if (!connection.source || !connection.target) {
