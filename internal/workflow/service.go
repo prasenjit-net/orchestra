@@ -676,15 +676,46 @@ func (s *Service) StartWorkflow(ctx context.Context, definitionID string) (Workf
 	return result, nil
 }
 
-func (s *Service) ListWorkflows(ctx context.Context) ([]WorkflowInstance, error) {
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, definition_id, definition_version, status, current_step_index, current_step_name,
+// ListWorkflowsInput controls filtering and pagination for ListWorkflows.
+// A zero Limit returns all rows (no LIMIT clause).
+type ListWorkflowsInput struct {
+	Limit  int
+	Offset int
+	Status string // empty = all statuses
+}
+
+// ListWorkflowsResult holds a page of workflow instances and the total row count.
+type ListWorkflowsResult struct {
+	Workflows []WorkflowInstance
+	Total     int
+}
+
+func (s *Service) ListWorkflows(ctx context.Context, input ListWorkflowsInput) (ListWorkflowsResult, error) {
+	where := ""
+	args := []any{}
+	if input.Status != "" {
+		where = "WHERE status = ?"
+		args = append(args, input.Status)
+	}
+
+	// total count
+	var total int
+	if err := s.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM workflow_instances "+where, args...).Scan(&total); err != nil {
+		return ListWorkflowsResult{}, fmt.Errorf("count workflow instances: %w", err)
+	}
+
+	query := `SELECT id, definition_id, definition_version, status, current_step_index, current_step_name,
 		       current_activity, snapshot_json, last_event_sequence, last_error, created_at, updated_at
-		FROM workflow_instances
-		ORDER BY updated_at DESC, created_at DESC
-	`)
+		FROM workflow_instances ` + where + ` ORDER BY updated_at DESC, created_at DESC`
+
+	if input.Limit > 0 {
+		query += " LIMIT ? OFFSET ?"
+		args = append(args, input.Limit, input.Offset)
+	}
+
+	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
-		return nil, fmt.Errorf("query workflow instances: %w", err)
+		return ListWorkflowsResult{}, fmt.Errorf("query workflow instances: %w", err)
 	}
 	defer rows.Close()
 
@@ -692,16 +723,16 @@ func (s *Service) ListWorkflows(ctx context.Context) ([]WorkflowInstance, error)
 	for rows.Next() {
 		instance, err := scanWorkflowInstance(rows)
 		if err != nil {
-			return nil, err
+			return ListWorkflowsResult{}, err
 		}
 		workflows = append(workflows, instance)
 	}
 
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate workflow instances: %w", err)
+		return ListWorkflowsResult{}, fmt.Errorf("iterate workflow instances: %w", err)
 	}
 
-	return workflows, nil
+	return ListWorkflowsResult{Workflows: workflows, Total: total}, nil
 }
 
 func (s *Service) GetWorkflow(ctx context.Context, workflowID string) (WorkflowInstance, error) {
@@ -1014,9 +1045,25 @@ func (s *Service) ListRecentEvents(ctx context.Context, limit int) ([]WorkflowEv
 	return events, nil
 }
 
-func (s *Service) ListTasks(ctx context.Context) ([]WorkflowTask, error) {
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, workflow_id, step_index, step_name, activity_name, status, attempts, max_attempts,
+// ListTasksInput controls pagination for ListTasks. A zero Limit returns all rows.
+type ListTasksInput struct {
+	Limit  int
+	Offset int
+}
+
+// ListTasksResult holds a page of tasks and the total row count.
+type ListTasksResult struct {
+	Tasks []WorkflowTask
+	Total int
+}
+
+func (s *Service) ListTasks(ctx context.Context, input ListTasksInput) (ListTasksResult, error) {
+	var total int
+	if err := s.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM workflow_tasks").Scan(&total); err != nil {
+		return ListTasksResult{}, fmt.Errorf("count workflow tasks: %w", err)
+	}
+
+	query := `SELECT id, workflow_id, step_index, step_name, activity_name, status, attempts, max_attempts,
 		       run_at, last_error, lease_owner, lease_expires_at, state_json, created_at, updated_at
 		FROM workflow_tasks
 		ORDER BY CASE status
@@ -1024,10 +1071,17 @@ func (s *Service) ListTasks(ctx context.Context) ([]WorkflowTask, error) {
 			WHEN 'pending' THEN 1
 			WHEN 'failed' THEN 2
 			ELSE 3
-		END, run_at ASC, id ASC
-	`)
+		END, run_at ASC, id ASC`
+
+	args := []any{}
+	if input.Limit > 0 {
+		query += " LIMIT ? OFFSET ?"
+		args = append(args, input.Limit, input.Offset)
+	}
+
+	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
-		return nil, fmt.Errorf("query workflow tasks: %w", err)
+		return ListTasksResult{}, fmt.Errorf("query workflow tasks: %w", err)
 	}
 	defer rows.Close()
 
@@ -1035,16 +1089,16 @@ func (s *Service) ListTasks(ctx context.Context) ([]WorkflowTask, error) {
 	for rows.Next() {
 		task, err := scanWorkflowTask(rows)
 		if err != nil {
-			return nil, err
+			return ListTasksResult{}, err
 		}
 		tasks = append(tasks, task)
 	}
 
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate workflow tasks: %w", err)
+		return ListTasksResult{}, fmt.Errorf("iterate workflow tasks: %w", err)
 	}
 
-	return tasks, nil
+	return ListTasksResult{Tasks: tasks, Total: total}, nil
 }
 
 func (s *Service) RetryTask(ctx context.Context, taskID int64) (WorkflowTask, error) {

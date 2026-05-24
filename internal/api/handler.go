@@ -274,13 +274,39 @@ func (h *Handler) ListWorkflows(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	workflows, err := h.workflow.ListWorkflows(r.Context())
+	input := workflow.ListWorkflowsInput{Status: r.URL.Query().Get("status")}
+	if raw := r.URL.Query().Get("limit"); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil || n <= 0 {
+			writeError(w, http.StatusBadRequest, "invalid limit")
+			return
+		}
+		if n > 500 {
+			n = 500
+		}
+		input.Limit = n
+	}
+	if raw := r.URL.Query().Get("offset"); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil || n < 0 {
+			writeError(w, http.StatusBadRequest, "invalid offset")
+			return
+		}
+		input.Offset = n
+	}
+
+	result, err := h.workflow.ListWorkflows(r.Context(), input)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	respondJSON(w, http.StatusOK, map[string]any{"workflows": workflows})
+	respondJSON(w, http.StatusOK, map[string]any{
+		"workflows": result.Workflows,
+		"total":     result.Total,
+		"limit":     input.Limit,
+		"offset":    input.Offset,
+	})
 }
 
 func (h *Handler) ListWorkflowOperations(w http.ResponseWriter, r *http.Request) {
@@ -403,13 +429,39 @@ func (h *Handler) ListWorkflowTasks(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tasks, err := h.workflow.ListTasks(r.Context())
+	input := workflow.ListTasksInput{}
+	if raw := r.URL.Query().Get("limit"); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil || n <= 0 {
+			writeError(w, http.StatusBadRequest, "invalid limit")
+			return
+		}
+		if n > 500 {
+			n = 500
+		}
+		input.Limit = n
+	}
+	if raw := r.URL.Query().Get("offset"); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil || n < 0 {
+			writeError(w, http.StatusBadRequest, "invalid offset")
+			return
+		}
+		input.Offset = n
+	}
+
+	result, err := h.workflow.ListTasks(r.Context(), input)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	respondJSON(w, http.StatusOK, map[string]any{"tasks": tasks})
+	respondJSON(w, http.StatusOK, map[string]any{
+		"tasks":  result.Tasks,
+		"total":  result.Total,
+		"limit":  input.Limit,
+		"offset": input.Offset,
+	})
 }
 
 func (h *Handler) RetryWorkflowTask(w http.ResponseWriter, r *http.Request, taskID int64) {

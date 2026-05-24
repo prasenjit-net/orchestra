@@ -19,11 +19,11 @@ export default function WorkflowListPage() {
   })
   const workflowsQuery = useQuery({
     queryKey: ['workflows'],
-    queryFn: workflowApi.listWorkflows,
+    queryFn: () => workflowApi.listWorkflows(),
   })
   const tasksQuery = useQuery({
     queryKey: ['workflow-tasks'],
-    queryFn: workflowApi.listTasks,
+    queryFn: () => workflowApi.listTasks(),
   })
 
   const startWorkflowMutation = useMutation({

@@ -178,7 +178,7 @@ export default function RunDetailsPage() {
   })
   const tasksQuery = useQuery({
     queryKey: ['workflow-tasks'],
-    queryFn: workflowApi.listTasks,
+    queryFn: () => workflowApi.listTasks(),
   })
 
   const taskActionMutation = useMutation({

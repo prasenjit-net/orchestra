@@ -134,6 +134,9 @@ export interface WorkflowInstance {
 
 export interface WorkflowsResponse {
   workflows: WorkflowInstance[]
+  total: number
+  limit: number
+  offset: number
 }
 
 export interface WorkflowEvent {
@@ -171,6 +174,9 @@ export interface WorkflowTask {
 
 export interface WorkflowTasksResponse {
   tasks: WorkflowTask[]
+  total: number
+  limit: number
+  offset: number
 }
 
 export type WorkflowTaskAction = 'retry' | 'requeue' | 'pause' | 'resume' | 'cancel'

@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { AlertTriangle, ChevronDown, ChevronRight, Wifi, WifiOff } from 'lucide-react'
 import { Link } from 'react-router-dom'
+import Pagination from '../components/Pagination'
 import { useLiveBus } from '../live/WorkflowLiveProvider'
 import { workflowApi } from '../services/api'
 import type { WorkflowEvent, WorkflowTask, WorkflowTaskAction } from '../types'
@@ -9,7 +10,6 @@ import {
   actionLabel,
   availableTaskActions,
   eventFilterMatches,
-  formatDate,
   formatEventType,
   payloadSummary,
   statusClasses,
@@ -161,11 +161,14 @@ const EVENT_FILTER_LABELS: { key: EventFilter; label: string }[] = [
   { key: 'queue', label: 'Queue' },
 ]
 
+const TASK_PAGE_SIZE = 20
+
 export default function OperationsPage() {
   const { status } = useLiveBus()
   const queryClient = useQueryClient()
   const [eventFilter, setEventFilter] = useState<EventFilter>('all')
   const [showCompleted, setShowCompleted] = useState(false)
+  const [taskPage, setTaskPage] = useState(0)
 
   const operationsQuery = useQuery({
     queryKey: ['workflow-operations'],
@@ -173,17 +176,18 @@ export default function OperationsPage() {
   })
   const workflowsQuery = useQuery({
     queryKey: ['workflows'],
-    queryFn: workflowApi.listWorkflows,
+    queryFn: () => workflowApi.listWorkflows(),
   })
   const tasksQuery = useQuery({
     queryKey: ['workflow-tasks'],
-    queryFn: workflowApi.listTasks,
+    queryFn: () => workflowApi.listTasks(),
   })
 
   const taskActionMutation = useMutation({
     mutationFn: ({ taskId, action }: { taskId: number; action: WorkflowTaskAction }) =>
       workflowApi.applyTaskAction(taskId, action),
     onSuccess: async () => {
+      setTaskPage(0)
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ['workflow-tasks'] }),
         queryClient.invalidateQueries({ queryKey: ['workflows'] }),
@@ -208,6 +212,8 @@ export default function OperationsPage() {
     .filter((t) => t.status !== 'completed')
     .sort((a, b) => taskUrgency(a) - taskUrgency(b))
   const completedTasks = allTasks.filter((t) => t.status === 'completed')
+
+  const activeTaskPage = activeTasks.slice(taskPage * TASK_PAGE_SIZE, (taskPage + 1) * TASK_PAGE_SIZE)
 
   const filteredEvents = allEvents.filter((e) => eventFilterMatches(eventFilter, e.eventType))
 
@@ -263,7 +269,7 @@ export default function OperationsPage() {
               No active tasks.
             </div>
           ) : (
-            activeTasks.map((task) => (
+            activeTaskPage.map((task) => (
               <TaskRow
                 key={task.id}
                 task={task}
@@ -273,6 +279,17 @@ export default function OperationsPage() {
             ))
           )}
         </div>
+
+        {activeTasks.length > TASK_PAGE_SIZE && (
+          <div className="mt-3">
+            <Pagination
+              page={taskPage}
+              pageSize={TASK_PAGE_SIZE}
+              total={activeTasks.length}
+              onChange={setTaskPage}
+            />
+          </div>
+        )}
 
         {completedTasks.length > 0 && (
           <button

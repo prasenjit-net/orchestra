@@ -11,7 +11,7 @@ export default function QueuesPage() {
   const queryClient = useQueryClient()
   const tasksQuery = useQuery({
     queryKey: ['workflow-tasks'],
-    queryFn: workflowApi.listTasks,
+    queryFn: () => workflowApi.listTasks(),
   })
 
   const taskActionMutation = useMutation({

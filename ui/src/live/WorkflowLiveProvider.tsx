@@ -1,7 +1,7 @@
 /* eslint-disable react-refresh/only-export-components */
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
-import type { HealthResponse, WorkflowLiveEvent, WorkflowLiveStatus, WorkflowTask, WorkflowTasksResponse } from '../types'
+import type { HealthResponse, WorkflowLiveEvent, WorkflowLiveStatus } from '../types'
 import { liveBus } from './liveBus'
 
 interface WorkflowLiveContextValue {
@@ -22,20 +22,6 @@ function getWorkflowId(event: WorkflowLiveEvent): string | undefined {
     return String((event.payload as Record<string, unknown>).workflowId)
   }
   return undefined
-}
-
-function patchTaskInCache(queryClient: QC, task: WorkflowTask) {
-  queryClient.setQueryData<WorkflowTasksResponse>(['workflow-tasks'], (old) => {
-    if (!old) return old
-    const idx = old.tasks.findIndex((t) => t.id === task.id)
-    if (idx === -1) {
-      // New task: prepend it
-      return { ...old, tasks: [task, ...old.tasks] }
-    }
-    const tasks = [...old.tasks]
-    tasks[idx] = task
-    return { ...old, tasks }
-  })
 }
 
 function handleWorkflowLiveEvent(queryClient: QC, event: WorkflowLiveEvent) {
@@ -61,12 +47,7 @@ function handleWorkflowLiveEvent(queryClient: QC, event: WorkflowLiveEvent) {
 
     case 'task': {
       const workflowId = getWorkflowId(event)
-      // task.updated carries the full task — patch in-place to avoid a refetch round-trip
-      if (event.type === 'task.updated' && event.payload && typeof event.payload === 'object' && 'id' in event.payload) {
-        patchTaskInCache(queryClient, event.payload as WorkflowTask)
-      } else {
-        void queryClient.invalidateQueries({ queryKey: ['workflow-tasks'] })
-      }
+      void queryClient.invalidateQueries({ queryKey: ['workflow-tasks'] })
       void queryClient.invalidateQueries({ queryKey: ['workflow-operations'] })
       if (workflowId) {
         void queryClient.invalidateQueries({ queryKey: ['workflow', workflowId] })

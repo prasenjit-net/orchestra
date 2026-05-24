@@ -219,7 +219,14 @@ export const workflowApi = {
         method: 'POST',
       }),
     ),
-  listWorkflows: async () => handleResponse<WorkflowsResponse>(await fetch(buildApiUrl('/workflows'))),
+  listWorkflows: async (params?: { limit?: number; offset?: number; status?: string }) => {
+    const qs = new URLSearchParams()
+    if (params?.limit) qs.set('limit', String(params.limit))
+    if (params?.offset) qs.set('offset', String(params.offset))
+    if (params?.status) qs.set('status', params.status)
+    const query = qs.toString()
+    return handleResponse<WorkflowsResponse>(await fetch(buildApiUrl(query ? `/workflows?${query}` : '/workflows')))
+  },
   listOperations: async (limit = 50) => {
     const response = await fetch(buildApiUrl(`/workflows/events?limit=${limit}`))
     if (response.status === 404) {
@@ -246,7 +253,13 @@ export const workflowApi = {
     ),
   replayWorkflow: async (workflowId: string) =>
     handleResponse<WorkflowReplay>(await fetch(buildApiUrl(`/workflows/${workflowId}/replay`))),
-  listTasks: async () => handleResponse<WorkflowTasksResponse>(await fetch(buildApiUrl('/workflows/tasks'))),
+  listTasks: async (params?: { limit?: number; offset?: number }) => {
+    const qs = new URLSearchParams()
+    if (params?.limit) qs.set('limit', String(params.limit))
+    if (params?.offset) qs.set('offset', String(params.offset))
+    const query = qs.toString()
+    return handleResponse<WorkflowTasksResponse>(await fetch(buildApiUrl(query ? `/workflows/tasks?${query}` : '/workflows/tasks')))
+  },
   applyTaskAction: async (taskId: number, action: WorkflowTaskAction) =>
     handleResponse<WorkflowTask>(
       await fetch(buildApiUrl(`/workflows/tasks/${taskId}/${action}`), {
