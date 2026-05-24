@@ -23,7 +23,7 @@ import {
   useNodesState,
   useReactFlow,
 } from '@xyflow/react'
-import { AlertCircle, ArrowLeft, CheckCircle2, ChevronDown, ChevronRight, Clock3, FileText, Globe, Grip, Plus, Save, Send, SquareTerminal, Trash2, TriangleAlert, X } from 'lucide-react'
+import { AlertCircle, ArrowLeft, Bot, CheckCircle2, ChevronDown, ChevronRight, ClipboardList, Clock3, Code2, FileText, GitBranch, Globe, Grip, Plus, Radio, Save, Send, Shuffle, SquareTerminal, Trash2, TriangleAlert, UserCheck, Users, Webhook, X } from 'lucide-react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { agentsApi, scriptsApi, workflowApi } from '../services/api'
 import type { Agent, Script, WorkflowActivity, WorkflowDefinitionDocument, WorkflowStepTransition, WorkflowTransitionCondition } from '../types'
@@ -336,6 +336,7 @@ function getPrecedingSteps(
 
 function activityVisual(activityName: string) {
   switch (activityName) {
+    // ── Integration ──────────────────────────────────────────────────────
     case 'http-request':
       return {
         width: 240,
@@ -345,6 +346,60 @@ function activityVisual(activityName: string) {
         iconClass: 'bg-sky-100 text-sky-700 dark:bg-sky-900/40 dark:text-sky-200',
         icon: Globe,
         shapeStyle: undefined as CSSProperties | undefined,
+      }
+    case 'webhook':
+      return {
+        width: 232,
+        minHeight: 104,
+        containerClass: 'rounded-2xl border-blue-300 bg-blue-50 text-blue-900 dark:border-blue-700 dark:bg-blue-950/40 dark:text-blue-100',
+        badgeClass: 'bg-blue-100 text-blue-700 dark:bg-blue-900/50 dark:text-blue-200',
+        iconClass: 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-200',
+        icon: Webhook,
+        shapeStyle: undefined as CSSProperties | undefined,
+      }
+    // ── AI ───────────────────────────────────────────────────────────────
+    case 'agent':
+      return {
+        width: 232,
+        minHeight: 108,
+        containerClass: 'rounded-2xl border-purple-300 bg-purple-50 text-purple-900 dark:border-purple-700 dark:bg-purple-950/40 dark:text-purple-100',
+        badgeClass: 'bg-purple-100 text-purple-700 dark:bg-purple-900/50 dark:text-purple-200',
+        iconClass: 'bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-200',
+        icon: Bot,
+        shapeStyle: undefined as CSSProperties | undefined,
+      }
+    // ── Compute ───────────────────────────────────────────────────────────
+    case 'script':
+      return {
+        width: 216,
+        minHeight: 100,
+        containerClass: 'rounded-lg border-emerald-300 bg-emerald-50 text-emerald-900 dark:border-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-100',
+        badgeClass: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/50 dark:text-emerald-200',
+        iconClass: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-200',
+        icon: Code2,
+        shapeStyle: undefined as CSSProperties | undefined,
+      }
+    case 'transform':
+      return {
+        width: 208,
+        minHeight: 96,
+        containerClass: 'rounded-xl border-lime-300 bg-lime-50 text-lime-900 dark:border-lime-700 dark:bg-lime-950/40 dark:text-lime-100',
+        badgeClass: 'bg-lime-100 text-lime-700 dark:bg-lime-900/50 dark:text-lime-200',
+        iconClass: 'bg-lime-100 text-lime-700 dark:bg-lime-900/40 dark:text-lime-200',
+        icon: Shuffle,
+        shapeStyle: undefined as CSSProperties | undefined,
+      }
+    // ── Control flow ──────────────────────────────────────────────────────
+    case 'branch':
+      return {
+        width: 196,
+        minHeight: 116,
+        containerClass: 'border-orange-300 bg-orange-50 text-orange-900 dark:border-orange-700 dark:bg-orange-950/40 dark:text-orange-100',
+        badgeClass: 'bg-orange-100 text-orange-700 dark:bg-orange-900/50 dark:text-orange-200',
+        iconClass: 'bg-orange-100 text-orange-700 dark:bg-orange-900/40 dark:text-orange-200',
+        icon: GitBranch,
+        // Hexagon — universally recognised as a decision/routing node
+        shapeStyle: { clipPath: 'polygon(14% 0%, 86% 0%, 100% 50%, 86% 100%, 14% 100%, 0% 50%)' } as CSSProperties,
       }
     case 'delay':
       return {
@@ -364,7 +419,8 @@ function activityVisual(activityName: string) {
         badgeClass: 'bg-red-100 text-red-700 dark:bg-red-900/50 dark:text-red-200',
         iconClass: 'bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-200',
         icon: TriangleAlert,
-        shapeStyle: { clipPath: 'polygon(14% 0%, 86% 0%, 100% 50%, 86% 100%, 14% 100%, 0% 50%)' } as CSSProperties,
+        // Arrow-right chevron — "dead end, hard stop"
+        shapeStyle: { clipPath: 'polygon(0% 0%, 82% 0%, 100% 50%, 82% 100%, 0% 100%)' } as CSSProperties,
       }
     case 'log':
       return {
@@ -386,6 +442,48 @@ function activityVisual(activityName: string) {
         icon: SquareTerminal,
         shapeStyle: undefined as CSSProperties | undefined,
       }
+    // ── Signals / human ───────────────────────────────────────────────────
+    case 'wait-signal':
+      return {
+        width: 216,
+        minHeight: 96,
+        containerClass: 'rounded-xl border-indigo-300 bg-indigo-50 text-indigo-900 dark:border-indigo-700 dark:bg-indigo-950/40 dark:text-indigo-100',
+        badgeClass: 'bg-indigo-100 text-indigo-700 dark:bg-indigo-900/50 dark:text-indigo-200',
+        iconClass: 'bg-indigo-100 text-indigo-700 dark:bg-indigo-900/40 dark:text-indigo-200',
+        icon: Radio,
+        shapeStyle: undefined as CSSProperties | undefined,
+      }
+    case 'approval':
+      return {
+        width: 216,
+        minHeight: 96,
+        containerClass: 'rounded-xl border-teal-300 bg-teal-50 text-teal-900 dark:border-teal-700 dark:bg-teal-950/40 dark:text-teal-100',
+        badgeClass: 'bg-teal-100 text-teal-700 dark:bg-teal-900/50 dark:text-teal-200',
+        iconClass: 'bg-teal-100 text-teal-700 dark:bg-teal-900/40 dark:text-teal-200',
+        icon: UserCheck,
+        shapeStyle: undefined as CSSProperties | undefined,
+      }
+    case 'manual-task':
+      return {
+        width: 216,
+        minHeight: 96,
+        containerClass: 'rounded-xl border-rose-300 bg-rose-50 text-rose-900 dark:border-rose-700 dark:bg-rose-950/40 dark:text-rose-100',
+        badgeClass: 'bg-rose-100 text-rose-700 dark:bg-rose-900/50 dark:text-rose-200',
+        iconClass: 'bg-rose-100 text-rose-700 dark:bg-rose-900/40 dark:text-rose-200',
+        icon: ClipboardList,
+        shapeStyle: undefined as CSSProperties | undefined,
+      }
+    case 'human-wait':
+      return {
+        width: 216,
+        minHeight: 96,
+        containerClass: 'rounded-xl border-cyan-300 bg-cyan-50 text-cyan-900 dark:border-cyan-700 dark:bg-cyan-950/40 dark:text-cyan-100',
+        badgeClass: 'bg-cyan-100 text-cyan-700 dark:bg-cyan-900/50 dark:text-cyan-200',
+        iconClass: 'bg-cyan-100 text-cyan-700 dark:bg-cyan-900/40 dark:text-cyan-200',
+        icon: Users,
+        shapeStyle: undefined as CSSProperties | undefined,
+      }
+    // ── Fallback (custom/unknown activities) ──────────────────────────────
     default:
       return {
         width: 204,
