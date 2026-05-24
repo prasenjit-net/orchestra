@@ -11,7 +11,8 @@ import { formatDate, statusClasses } from './workflowUi'
 
 const PAGE_SIZE = 20
 
-const waitingActivities = new Set(['wait-signal', 'approval', 'manual-task', 'human-wait'])
+const waitingActivityList = ['wait-signal', 'approval', 'manual-task', 'human-wait']
+const waitingActivities = new Set(waitingActivityList)
 
 type WaitingSignalWorkflow = {
   workflow: WorkflowInstance
@@ -39,19 +40,56 @@ function resolveSignalName(activity: string, input: unknown) {
   }
 }
 
-async function loadWaitingSignalWorkflows() {
-  const workflowsResponse = await workflowApi.listWorkflows({ status: 'running' })
-  const waitingWorkflows = (workflowsResponse.workflows ?? []).filter(
-    (workflow) => workflow.status === 'running' && waitingActivities.has(workflow.currentActivity),
-  )
+async function loadWaitingSignalWorkflows(page: number, limit: number): Promise<{ items: WaitingSignalWorkflow[]; total: number; activityCounts: Record<string, number> }> {
+  const response = await workflowApi.listWorkflows({
+    status: 'running',
+    currentActivities: waitingActivityList,
+    limit,
+    offset: page * limit,
+  })
 
-  const definitionIDs = [...new Set(waitingWorkflows.map((workflow) => workflow.definitionId))]
+  const workflows = response.workflows ?? []
+  const total = response.total ?? 0
+  const activityCounts = response.activityCounts ?? {}
+
+  const definitionIDs = [...new Set(workflows.map((workflow) => workflow.definitionId))]
   const definitionEntries = await Promise.all(
     definitionIDs.map(async (definitionId) => [definitionId, await workflowApi.getDefinition(definitionId)] as const),
   )
   const definitions = new Map<string, WorkflowDefinitionDetails>(definitionEntries)
 
-  return waitingWorkflows.map((workflow) => {
+  const items = workflows.map((workflow) => {
+    const definition = definitions.get(workflow.definitionId)
+    const step =
+      definition?.document.steps.find((candidate) => candidate.name === workflow.currentStepName) ??
+      definition?.document.steps[workflow.currentStepIndex]
+
+    return {
+      workflow,
+      step,
+      signalName: resolveSignalName(workflow.currentActivity, step?.input),
+    } satisfies WaitingSignalWorkflow
+  })
+
+  return { items, total, activityCounts }
+}
+
+async function loadAllWaitingSignalWorkflows(): Promise<WaitingSignalWorkflow[]> {
+  const response = await workflowApi.listWorkflows({
+    status: 'running',
+    currentActivities: waitingActivityList,
+    limit: 10000,
+    offset: 0,
+  })
+
+  const workflows = response.workflows ?? []
+  const definitionIDs = [...new Set(workflows.map((workflow) => workflow.definitionId))]
+  const definitionEntries = await Promise.all(
+    definitionIDs.map(async (definitionId) => [definitionId, await workflowApi.getDefinition(definitionId)] as const),
+  )
+  const definitions = new Map<string, WorkflowDefinitionDetails>(definitionEntries)
+
+  return workflows.map((workflow) => {
     const definition = definitions.get(workflow.definitionId)
     const step =
       definition?.document.steps.find((candidate) => candidate.name === workflow.currentStepName) ??
@@ -81,32 +119,26 @@ export default function SignalsPage() {
   const [page, setPage] = useState(0)
 
   const waitingQuery = useQuery({
-    queryKey: ['waiting-signal-workflows'],
-    queryFn: loadWaitingSignalWorkflows,
+    queryKey: ['waiting-signal-workflows', { page, limit: PAGE_SIZE }],
+    queryFn: () => loadWaitingSignalWorkflows(page, PAGE_SIZE),
   })
 
-  const waitingWorkflows = useMemo(() => waitingQuery.data ?? [], [waitingQuery.data])
-  const pageWorkflows = useMemo(
-    () => waitingWorkflows.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE),
-    [waitingWorkflows, page],
-  )
+  const pageItems = useMemo(() => waitingQuery.data?.items ?? [], [waitingQuery.data])
+  const total = waitingQuery.data?.total ?? 0
+  const activityCounts = useMemo(() => waitingQuery.data?.activityCounts ?? {}, [waitingQuery.data])
 
   const signalOneMutation = useMutation({
     mutationFn: async ({ workflowId, signalName, payload }: { workflowId: string; signalName: string; payload: unknown }) =>
       workflowApi.signalWorkflow(workflowId, { name: signalName, payload }),
     onSuccess: (_, variables) => {
       setPageError(null)
-      setPage(0)
       setNotice(`Sent ${variables.signalName} to ${variables.workflowId}.`)
-      // Cancel any in-flight refetch before applying the optimistic removal so the
-      // result of that fetch cannot overwrite our update.
       void queryClient.cancelQueries({ queryKey: ['waiting-signal-workflows'] })
-      queryClient.setQueryData<WaitingSignalWorkflow[]>(['waiting-signal-workflows'], (old) =>
-        (old ?? []).filter((item) => item.workflow.id !== variables.workflowId),
+      queryClient.setQueryData<{ items: WaitingSignalWorkflow[]; total: number; activityCounts: Record<string, number> }>(
+        ['waiting-signal-workflows', { page, limit: PAGE_SIZE }],
+        (old) => old ? { ...old, items: old.items.filter((item) => item.workflow.id !== variables.workflowId), total: Math.max(0, old.total - 1) } : old,
       )
       void queryClient.invalidateQueries({ queryKey: ['workflows'] })
-      // Re-validate the waiting list after a short delay so the backend worker has
-      // had time to advance the workflow before we query again.
       setTimeout(() => void queryClient.invalidateQueries({ queryKey: ['waiting-signal-workflows'] }), 2500)
     },
     onError: (error: Error) => {
@@ -116,16 +148,16 @@ export default function SignalsPage() {
   })
 
   const signalAllMutation = useMutation({
-    mutationFn: async ({ items, payload }: { items: WaitingSignalWorkflow[]; payload: unknown }) => {
-      await Promise.all(items.map((item) => workflowApi.signalWorkflow(item.workflow.id, { name: item.signalName, payload })))
-      return items.length
+    mutationFn: async ({ payload }: { payload: unknown }) => {
+      const allItems = await loadAllWaitingSignalWorkflows()
+      await Promise.all(allItems.map((item) => workflowApi.signalWorkflow(item.workflow.id, { name: item.signalName, payload })))
+      return allItems.length
     },
     onSuccess: (count) => {
       setPageError(null)
       setPage(0)
       setNotice(`Sent signals to ${count} waiting workflow${count === 1 ? '' : 's'}.`)
       void queryClient.cancelQueries({ queryKey: ['waiting-signal-workflows'] })
-      queryClient.setQueryData<WaitingSignalWorkflow[]>(['waiting-signal-workflows'], [])
       void queryClient.invalidateQueries({ queryKey: ['workflows'] })
       setTimeout(() => void queryClient.invalidateQueries({ queryKey: ['waiting-signal-workflows'] }), 2500)
     },
@@ -139,7 +171,7 @@ export default function SignalsPage() {
     try {
       const payload = parseSignalPayload(payloadText)
       setPageError(null)
-      signalAllMutation.mutate({ items: waitingWorkflows, payload })
+      signalAllMutation.mutate({ payload })
     } catch (error) {
       setNotice(null)
       setPageError(error instanceof Error ? error.message : 'Signal payload must be valid JSON.')
@@ -174,7 +206,7 @@ export default function SignalsPage() {
           <button
             type="button"
             onClick={submitAllSignals}
-            disabled={waitingWorkflows.length === 0 || signalAllMutation.isPending}
+            disabled={total === 0 || signalAllMutation.isPending}
             className="inline-flex items-center gap-2 rounded-lg bg-primary-600 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-primary-700 disabled:cursor-not-allowed disabled:opacity-60"
           >
             <Send className="h-4 w-4" />
@@ -195,10 +227,10 @@ export default function SignalsPage() {
       ) : null}
 
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
-        <StatCard label="Waiting runs" value={String(waitingWorkflows.length)} description="Workflows currently blocked on a signal step." icon={Workflow} tone="bg-sky-50 text-sky-600 dark:bg-sky-900/20 dark:text-sky-300" />
-        <StatCard label="Approval waits" value={String(waitingWorkflows.filter((item) => item.workflow.currentActivity === 'approval').length)} description="Runs waiting for an approval decision." icon={CheckCircle2} tone="bg-emerald-50 text-emerald-600 dark:bg-emerald-900/20 dark:text-emerald-300" />
-        <StatCard label="Manual waits" value={String(waitingWorkflows.filter((item) => item.workflow.currentActivity === 'manual-task' || item.workflow.currentActivity === 'human-wait').length)} description="Runs waiting for manual or resume signals." icon={BellRing} tone="bg-amber-50 text-amber-600 dark:bg-amber-900/20 dark:text-amber-300" />
-        <StatCard label="Custom signal waits" value={String(waitingWorkflows.filter((item) => item.workflow.currentActivity === 'wait-signal').length)} description="Runs waiting on an explicit signal name." icon={Clock3} tone="bg-violet-50 text-violet-600 dark:bg-violet-900/20 dark:text-violet-300" />
+        <StatCard label="Waiting runs" value={String(total)} description="Workflows currently blocked on a signal step." icon={Workflow} tone="bg-sky-50 text-sky-600 dark:bg-sky-900/20 dark:text-sky-300" />
+        <StatCard label="Approval waits" value={String(activityCounts['approval'] ?? 0)} description="Runs waiting for an approval decision." icon={CheckCircle2} tone="bg-emerald-50 text-emerald-600 dark:bg-emerald-900/20 dark:text-emerald-300" />
+        <StatCard label="Manual waits" value={String((activityCounts['manual-task'] ?? 0) + (activityCounts['human-wait'] ?? 0))} description="Runs waiting for manual or resume signals." icon={BellRing} tone="bg-amber-50 text-amber-600 dark:bg-amber-900/20 dark:text-amber-300" />
+        <StatCard label="Custom signal waits" value={String(activityCounts['wait-signal'] ?? 0)} description="Runs waiting on an explicit signal name." icon={Clock3} tone="bg-violet-50 text-violet-600 dark:bg-violet-900/20 dark:text-violet-300" />
       </div>
 
       <section className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900">
@@ -223,12 +255,12 @@ export default function SignalsPage() {
         </div>
 
         <div className="mt-4 space-y-3">
-          {waitingWorkflows.length === 0 ? (
+          {total === 0 ? (
             <div className="rounded-lg border border-dashed border-gray-300 p-6 text-sm text-gray-500 dark:border-slate-700 dark:text-slate-400">
               No workflows are currently waiting on signals.
             </div>
           ) : (
-            pageWorkflows.map((item) => (
+            pageItems.map((item) => (
               <div key={item.workflow.id} className="flex flex-col gap-4 rounded-lg border border-gray-200 p-4 dark:border-slate-800 lg:flex-row lg:items-center lg:justify-between">
                 <div className="min-w-0">
                   <div className="flex flex-wrap items-center gap-2">
@@ -269,9 +301,9 @@ export default function SignalsPage() {
           )}
         </div>
 
-        {waitingWorkflows.length > PAGE_SIZE && (
+        {total > PAGE_SIZE && (
           <div className="mt-6 border-t border-gray-100 pt-4 dark:border-slate-800">
-            <Pagination page={page} pageSize={PAGE_SIZE} total={waitingWorkflows.length} onChange={setPage} />
+            <Pagination page={page} pageSize={PAGE_SIZE} total={total} onChange={setPage} />
           </div>
         )}
       </section>

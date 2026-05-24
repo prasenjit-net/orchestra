@@ -219,18 +219,19 @@ export const workflowApi = {
         method: 'POST',
       }),
     ),
-  listWorkflows: async (params?: { limit?: number; offset?: number; status?: string }) => {
+  listWorkflows: async (params?: { limit?: number; offset?: number; status?: string; currentActivities?: string[] }) => {
     const qs = new URLSearchParams()
     if (params?.limit) qs.set('limit', String(params.limit))
     if (params?.offset) qs.set('offset', String(params.offset))
     if (params?.status) qs.set('status', params.status)
+    if (params?.currentActivities?.length) qs.set('currentActivities', params.currentActivities.join(','))
     const query = qs.toString()
     return handleResponse<WorkflowsResponse>(await fetch(buildApiUrl(query ? `/workflows?${query}` : '/workflows')))
   },
-  listOperations: async (limit = 50) => {
-    const response = await fetch(buildApiUrl(`/workflows/events?limit=${limit}`))
+  listOperations: async (limit = 50, offset = 0) => {
+    const response = await fetch(buildApiUrl(`/workflows/events?limit=${limit}&offset=${offset}`))
     if (response.status === 404) {
-      return { events: [] } satisfies WorkflowOperationsResponse
+      return { events: [], total: 0, limit, offset } satisfies WorkflowOperationsResponse
     }
     return handleResponse<WorkflowOperationsResponse>(response)
   },
@@ -253,10 +254,12 @@ export const workflowApi = {
     ),
   replayWorkflow: async (workflowId: string) =>
     handleResponse<WorkflowReplay>(await fetch(buildApiUrl(`/workflows/${workflowId}/replay`))),
-  listTasks: async (params?: { limit?: number; offset?: number }) => {
+  listTasks: async (params?: { limit?: number; offset?: number; status?: string; excludeCompleted?: boolean }) => {
     const qs = new URLSearchParams()
     if (params?.limit) qs.set('limit', String(params.limit))
     if (params?.offset) qs.set('offset', String(params.offset))
+    if (params?.status) qs.set('status', params.status)
+    if (params?.excludeCompleted) qs.set('excludeCompleted', 'true')
     const query = qs.toString()
     return handleResponse<WorkflowTasksResponse>(await fetch(buildApiUrl(query ? `/workflows/tasks?${query}` : '/workflows/tasks')))
   },

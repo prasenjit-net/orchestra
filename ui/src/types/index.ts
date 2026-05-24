@@ -137,6 +137,7 @@ export interface WorkflowsResponse {
   total: number
   limit: number
   offset: number
+  activityCounts?: Record<string, number>
 }
 
 export interface WorkflowEvent {
@@ -153,6 +154,9 @@ export interface WorkflowHistoryResponse {
 
 export interface WorkflowOperationsResponse {
   events: WorkflowEvent[]
+  total: number
+  limit: number
+  offset: number
 }
 
 export interface WorkflowTask {
@@ -177,6 +181,7 @@ export interface WorkflowTasksResponse {
   total: number
   limit: number
   offset: number
+  counts: Record<string, number>
 }
 
 export type WorkflowTaskAction = 'retry' | 'requeue' | 'pause' | 'resume' | 'cancel'

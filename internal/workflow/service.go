@@ -679,41 +679,83 @@ func (s *Service) StartWorkflow(ctx context.Context, definitionID string) (Workf
 // ListWorkflowsInput controls filtering and pagination for ListWorkflows.
 // A zero Limit returns all rows (no LIMIT clause).
 type ListWorkflowsInput struct {
-	Limit  int
-	Offset int
-	Status string // empty = all statuses
+	Limit             int
+	Offset            int
+	Status            string   // empty = all statuses
+	CurrentActivities []string // when non-empty, filter to these activity names
 }
 
-// ListWorkflowsResult holds a page of workflow instances and the total row count.
+// ListWorkflowsResult holds a page of workflow instances and related counts.
 type ListWorkflowsResult struct {
-	Workflows []WorkflowInstance
-	Total     int
+	Workflows      []WorkflowInstance
+	Total          int
+	ActivityCounts map[string]int // counts per current_activity; populated when CurrentActivities filter is used
 }
 
 func (s *Service) ListWorkflows(ctx context.Context, input ListWorkflowsInput) (ListWorkflowsResult, error) {
-	where := ""
+	// Build the WHERE clause.
+	conditions := []string{}
 	args := []any{}
 	if input.Status != "" {
-		where = "WHERE status = ?"
+		conditions = append(conditions, "status = ?")
 		args = append(args, input.Status)
 	}
+	if len(input.CurrentActivities) > 0 {
+		ph := strings.Repeat("?,", len(input.CurrentActivities))
+		conditions = append(conditions, "current_activity IN ("+ph[:len(ph)-1]+")")
+		for _, a := range input.CurrentActivities {
+			args = append(args, a)
+		}
+	}
+	where := ""
+	if len(conditions) > 0 {
+		where = "WHERE " + strings.Join(conditions, " AND ")
+	}
 
-	// total count
+	// Total count.
 	var total int
 	if err := s.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM workflow_instances "+where, args...).Scan(&total); err != nil {
 		return ListWorkflowsResult{}, fmt.Errorf("count workflow instances: %w", err)
+	}
+
+	// Per-activity counts (only when filtering by activities — used by the signals page).
+	var activityCounts map[string]int
+	if len(input.CurrentActivities) > 0 {
+		activityCounts = make(map[string]int)
+		countArgs := make([]any, 0, len(args))
+		countArgs = append(countArgs, args...)
+		countRows, err := s.db.QueryContext(ctx,
+			"SELECT current_activity, COUNT(*) FROM workflow_instances "+where+" GROUP BY current_activity",
+			countArgs...)
+		if err != nil {
+			return ListWorkflowsResult{}, fmt.Errorf("count workflow activities: %w", err)
+		}
+		defer countRows.Close()
+		for countRows.Next() {
+			var activity string
+			var count int
+			if err := countRows.Scan(&activity, &count); err != nil {
+				return ListWorkflowsResult{}, err
+			}
+			activityCounts[activity] = count
+		}
+		if err := countRows.Err(); err != nil {
+			return ListWorkflowsResult{}, fmt.Errorf("iterate activity counts: %w", err)
+		}
 	}
 
 	query := `SELECT id, definition_id, definition_version, status, current_step_index, current_step_name,
 		       current_activity, snapshot_json, last_event_sequence, last_error, created_at, updated_at
 		FROM workflow_instances ` + where + ` ORDER BY updated_at DESC, created_at DESC`
 
+	pageArgs := make([]any, len(args))
+	copy(pageArgs, args)
 	if input.Limit > 0 {
 		query += " LIMIT ? OFFSET ?"
-		args = append(args, input.Limit, input.Offset)
+		pageArgs = append(pageArgs, input.Limit, input.Offset)
 	}
 
-	rows, err := s.db.QueryContext(ctx, query, args...)
+	rows, err := s.db.QueryContext(ctx, query, pageArgs...)
 	if err != nil {
 		return ListWorkflowsResult{}, fmt.Errorf("query workflow instances: %w", err)
 	}
@@ -732,7 +774,7 @@ func (s *Service) ListWorkflows(ctx context.Context, input ListWorkflowsInput) (
 		return ListWorkflowsResult{}, fmt.Errorf("iterate workflow instances: %w", err)
 	}
 
-	return ListWorkflowsResult{Workflows: workflows, Total: total}, nil
+	return ListWorkflowsResult{Workflows: workflows, Total: total, ActivityCounts: activityCounts}, nil
 }
 
 func (s *Service) GetWorkflow(ctx context.Context, workflowID string) (WorkflowInstance, error) {
@@ -1004,26 +1046,41 @@ func (s *Service) ReplayWorkflow(ctx context.Context, workflowID string) (Workfl
 	return replay, nil
 }
 
-func (s *Service) ListRecentEvents(ctx context.Context, limit int) ([]WorkflowEvent, error) {
-	if limit <= 0 {
-		limit = 50
+type ListRecentEventsInput struct {
+	Limit  int
+	Offset int
+}
+
+type ListRecentEventsResult struct {
+	Events []WorkflowEvent
+	Total  int
+}
+
+func (s *Service) ListRecentEvents(ctx context.Context, input ListRecentEventsInput) (ListRecentEventsResult, error) {
+	if input.Limit <= 0 {
+		input.Limit = 50
 	}
-	if limit > 200 {
-		limit = 200
+	if input.Limit > 200 {
+		input.Limit = 200
+	}
+
+	var total int
+	if err := s.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM workflow_events").Scan(&total); err != nil {
+		return ListRecentEventsResult{}, fmt.Errorf("count workflow events: %w", err)
 	}
 
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT workflow_id, sequence, event_type, payload, created_at
 		FROM workflow_events
 		ORDER BY id DESC
-		LIMIT ?
-	`, limit)
+		LIMIT ? OFFSET ?
+	`, input.Limit, input.Offset)
 	if err != nil {
-		return nil, fmt.Errorf("query recent workflow events: %w", err)
+		return ListRecentEventsResult{}, fmt.Errorf("query recent workflow events: %w", err)
 	}
 	defer rows.Close()
 
-	var events []WorkflowEvent
+	events := make([]WorkflowEvent, 0)
 	for rows.Next() {
 		var (
 			event       WorkflowEvent
@@ -1031,7 +1088,7 @@ func (s *Service) ListRecentEvents(ctx context.Context, limit int) ([]WorkflowEv
 			createdAt   string
 		)
 		if err := rows.Scan(&event.WorkflowID, &event.Sequence, &event.EventType, &payloadText, &createdAt); err != nil {
-			return nil, fmt.Errorf("scan recent workflow event: %w", err)
+			return ListRecentEventsResult{}, fmt.Errorf("scan recent workflow event: %w", err)
 		}
 		event.Payload = json.RawMessage(payloadText)
 		event.CreatedAt = mustParseTime(createdAt)
@@ -1039,47 +1096,86 @@ func (s *Service) ListRecentEvents(ctx context.Context, limit int) ([]WorkflowEv
 	}
 
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate recent workflow events: %w", err)
+		return ListRecentEventsResult{}, fmt.Errorf("iterate recent workflow events: %w", err)
 	}
 
-	return events, nil
+	return ListRecentEventsResult{Events: events, Total: total}, nil
 }
 
-// ListTasksInput controls pagination for ListTasks. A zero Limit returns all rows.
+// ListTasksInput controls filtering and pagination for ListTasks. A zero Limit returns all rows.
 type ListTasksInput struct {
-	Limit  int
-	Offset int
+	Limit           int
+	Offset          int
+	Status          string // empty = all statuses
+	ExcludeCompleted bool  // when true, tasks with status = 'completed' are excluded
 }
 
-// ListTasksResult holds a page of tasks and the total row count.
+// ListTasksResult holds a page of tasks, the total for the current filter, and global status counts.
 type ListTasksResult struct {
-	Tasks []WorkflowTask
-	Total int
+	Tasks  []WorkflowTask
+	Total  int
+	Counts map[string]int // global counts per status regardless of the Status filter
 }
 
 func (s *Service) ListTasks(ctx context.Context, input ListTasksInput) (ListTasksResult, error) {
+	// Global status counts (always across all tasks, ignoring the Status filter).
+	counts := make(map[string]int)
+	countRows, err := s.db.QueryContext(ctx, "SELECT status, COUNT(*) FROM workflow_tasks GROUP BY status")
+	if err != nil {
+		return ListTasksResult{}, fmt.Errorf("count workflow tasks by status: %w", err)
+	}
+	defer countRows.Close()
+	for countRows.Next() {
+		var st string
+		var n int
+		if err := countRows.Scan(&st, &n); err != nil {
+			return ListTasksResult{}, err
+		}
+		counts[st] = n
+	}
+	if err := countRows.Err(); err != nil {
+		return ListTasksResult{}, fmt.Errorf("iterate task counts: %w", err)
+	}
+
+	// Filtered total.
+	var conds []string
+	var filterArgs []any
+	if input.Status != "" {
+		conds = append(conds, "status = ?")
+		filterArgs = append(filterArgs, input.Status)
+	}
+	if input.ExcludeCompleted {
+		conds = append(conds, "status != 'completed'")
+	}
+	where := ""
+	if len(conds) > 0 {
+		where = "WHERE " + strings.Join(conds, " AND ")
+	}
 	var total int
-	if err := s.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM workflow_tasks").Scan(&total); err != nil {
+	if err := s.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM workflow_tasks "+where, filterArgs...).Scan(&total); err != nil {
 		return ListTasksResult{}, fmt.Errorf("count workflow tasks: %w", err)
 	}
 
 	query := `SELECT id, workflow_id, step_index, step_name, activity_name, status, attempts, max_attempts,
 		       run_at, last_error, lease_owner, lease_expires_at, state_json, created_at, updated_at
-		FROM workflow_tasks
+		FROM workflow_tasks ` + where + `
 		ORDER BY CASE status
-			WHEN 'running' THEN 0
-			WHEN 'pending' THEN 1
-			WHEN 'failed' THEN 2
-			ELSE 3
+			WHEN 'failed'  THEN 0
+			WHEN 'paused'  THEN 1
+			WHEN 'waiting' THEN 2
+			WHEN 'running' THEN 3
+			WHEN 'pending' THEN 4
+			ELSE 5
 		END, run_at ASC, id ASC`
 
-	args := []any{}
+	pageArgs := make([]any, len(filterArgs))
+	copy(pageArgs, filterArgs)
 	if input.Limit > 0 {
 		query += " LIMIT ? OFFSET ?"
-		args = append(args, input.Limit, input.Offset)
+		pageArgs = append(pageArgs, input.Limit, input.Offset)
 	}
 
-	rows, err := s.db.QueryContext(ctx, query, args...)
+	rows, err := s.db.QueryContext(ctx, query, pageArgs...)
 	if err != nil {
 		return ListTasksResult{}, fmt.Errorf("query workflow tasks: %w", err)
 	}
@@ -1098,7 +1194,7 @@ func (s *Service) ListTasks(ctx context.Context, input ListTasksInput) (ListTask
 		return ListTasksResult{}, fmt.Errorf("iterate workflow tasks: %w", err)
 	}
 
-	return ListTasksResult{Tasks: tasks, Total: total}, nil
+	return ListTasksResult{Tasks: tasks, Total: total, Counts: counts}, nil
 }
 
 func (s *Service) RetryTask(ctx context.Context, taskID int64) (WorkflowTask, error) {

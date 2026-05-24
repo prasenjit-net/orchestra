@@ -34,9 +34,6 @@ function eventDotClass(eventType: string) {
   return 'bg-violet-400'
 }
 
-const TASK_URGENCY: Record<string, number> = { failed: 0, paused: 1, waiting: 2, running: 3, pending: 4 }
-function taskUrgency(t: WorkflowTask) { return TASK_URGENCY[t.status] ?? 9 }
-
 // ─── sub-components ───────────────────────────────────────────────────────────
 
 function MetricChip({ label, value, color }: { label: string; value: number; color: string }) {
@@ -123,7 +120,7 @@ function EventRow({ event }: { event: WorkflowEvent }) {
         className={`flex w-full items-center gap-3 px-3 py-2 text-left transition-colors ${hasPayload ? 'hover:bg-gray-50 dark:hover:bg-slate-800/50' : ''}`}
       >
         <span className={`mt-0.5 h-2 w-2 shrink-0 rounded-full ${eventDotClass(event.eventType)}`} />
-        <span className="flex-1 min-w-0">
+        <span className="min-w-0 flex-1">
           <span className="text-sm font-medium text-gray-900 dark:text-slate-100">{formatEventType(event.eventType)}</span>
           {summary && <span className="ml-2 text-xs text-gray-500 dark:text-slate-400">{summary}</span>}
           {event.workflowId && (
@@ -162,6 +159,7 @@ const EVENT_FILTER_LABELS: { key: EventFilter; label: string }[] = [
 ]
 
 const TASK_PAGE_SIZE = 20
+const EVENT_PAGE_SIZE = 50
 
 export default function OperationsPage() {
   const { status } = useLiveBus()
@@ -169,18 +167,22 @@ export default function OperationsPage() {
   const [eventFilter, setEventFilter] = useState<EventFilter>('all')
   const [showCompleted, setShowCompleted] = useState(false)
   const [taskPage, setTaskPage] = useState(0)
+  const [eventPage, setEventPage] = useState(0)
+
+  const tasksQuery = useQuery({
+    queryKey: ['workflow-tasks', { page: taskPage, limit: TASK_PAGE_SIZE, excludeCompleted: true }],
+    queryFn: () => workflowApi.listTasks({ limit: TASK_PAGE_SIZE, offset: taskPage * TASK_PAGE_SIZE, excludeCompleted: true }),
+  })
+
+  const completedTasksQuery = useQuery({
+    queryKey: ['workflow-tasks', { status: 'completed', limit: 50 }],
+    queryFn: () => workflowApi.listTasks({ status: 'completed', limit: 50 }),
+    enabled: showCompleted,
+  })
 
   const operationsQuery = useQuery({
-    queryKey: ['workflow-operations'],
-    queryFn: () => workflowApi.listOperations(80),
-  })
-  const workflowsQuery = useQuery({
-    queryKey: ['workflows'],
-    queryFn: () => workflowApi.listWorkflows(),
-  })
-  const tasksQuery = useQuery({
-    queryKey: ['workflow-tasks'],
-    queryFn: () => workflowApi.listTasks(),
+    queryKey: ['workflow-operations', { page: eventPage, limit: EVENT_PAGE_SIZE }],
+    queryFn: () => workflowApi.listOperations(EVENT_PAGE_SIZE, eventPage * EVENT_PAGE_SIZE),
   })
 
   const taskActionMutation = useMutation({
@@ -196,31 +198,29 @@ export default function OperationsPage() {
     },
   })
 
-  if (operationsQuery.isLoading || workflowsQuery.isLoading || tasksQuery.isLoading) {
+  const tasks = tasksQuery.data?.tasks ?? []
+  const taskTotal = tasksQuery.data?.total ?? 0
+  const counts = tasksQuery.data?.counts ?? {}
+
+  const completedTasks = completedTasksQuery.data?.tasks ?? []
+  const completedCount = counts.completed ?? 0
+
+  const allEvents = operationsQuery.data?.events ?? []
+  const eventTotal = operationsQuery.data?.total ?? 0
+  const filteredEvents = allEvents.filter((e) => eventFilterMatches(eventFilter, e.eventType))
+
+  const running = counts.running ?? 0
+  const pending = counts.pending ?? 0
+  const waiting = (counts.waiting ?? 0) + (counts.paused ?? 0)
+  const failures = counts.failed ?? 0
+
+  if (operationsQuery.isLoading || tasksQuery.isLoading) {
     return <div className="p-8 text-sm text-gray-500 dark:text-slate-400">Loading operations…</div>
   }
 
-  if (operationsQuery.error || workflowsQuery.error || tasksQuery.error) {
+  if (operationsQuery.error || tasksQuery.error) {
     return <div className="p-8 text-sm text-red-600 dark:text-red-300">Unable to load workflow operations.</div>
   }
-
-  const allEvents = operationsQuery.data?.events ?? []
-  const workflows = workflowsQuery.data?.workflows ?? []
-  const allTasks = tasksQuery.data?.tasks ?? []
-
-  const activeTasks = allTasks
-    .filter((t) => t.status !== 'completed')
-    .sort((a, b) => taskUrgency(a) - taskUrgency(b))
-  const completedTasks = allTasks.filter((t) => t.status === 'completed')
-
-  const activeTaskPage = activeTasks.slice(taskPage * TASK_PAGE_SIZE, (taskPage + 1) * TASK_PAGE_SIZE)
-
-  const filteredEvents = allEvents.filter((e) => eventFilterMatches(eventFilter, e.eventType))
-
-  const running = workflows.filter((w) => w.status === 'running').length
-  const pending = allTasks.filter((t) => t.status === 'pending').length
-  const waiting = allTasks.filter((t) => t.status === 'waiting' || t.status === 'paused').length
-  const failures = allTasks.filter((t) => t.status === 'failed').length
 
   return (
     <div className="space-y-6 p-8">
@@ -244,7 +244,7 @@ export default function OperationsPage() {
 
       {/* Metrics strip */}
       <div className="flex flex-wrap gap-3">
-        <MetricChip label="running workflows" value={running} color="text-sky-600 dark:text-sky-400" />
+        <MetricChip label="running tasks" value={running} color="text-sky-600 dark:text-sky-400" />
         <MetricChip label="pending tasks" value={pending} color="text-violet-600 dark:text-violet-400" />
         <MetricChip label="waiting / paused" value={waiting} color="text-amber-600 dark:text-amber-400" />
         <MetricChip label="failed tasks" value={failures} color={failures > 0 ? 'text-red-600 dark:text-red-400' : 'text-gray-400 dark:text-slate-500'} />
@@ -255,21 +255,21 @@ export default function OperationsPage() {
         <div className="flex items-center justify-between gap-3">
           <h2 className="text-sm font-semibold text-gray-900 dark:text-slate-100">
             Active tasks
-            {activeTasks.length > 0 && (
+            {taskTotal > 0 && (
               <span className="ml-2 rounded-full bg-gray-100 px-2 py-0.5 text-xs font-semibold text-gray-600 dark:bg-slate-800 dark:text-slate-300">
-                {activeTasks.length}
+                {taskTotal}
               </span>
             )}
           </h2>
         </div>
 
         <div className="mt-2 space-y-2">
-          {activeTasks.length === 0 ? (
+          {tasks.length === 0 ? (
             <div className="rounded-lg border border-dashed border-gray-300 p-4 text-center text-sm text-gray-500 dark:border-slate-700 dark:text-slate-400">
               No active tasks.
             </div>
           ) : (
-            activeTaskPage.map((task) => (
+            tasks.map((task) => (
               <TaskRow
                 key={task.id}
                 task={task}
@@ -280,25 +280,25 @@ export default function OperationsPage() {
           )}
         </div>
 
-        {activeTasks.length > TASK_PAGE_SIZE && (
+        {taskTotal > TASK_PAGE_SIZE && (
           <div className="mt-3">
             <Pagination
               page={taskPage}
               pageSize={TASK_PAGE_SIZE}
-              total={activeTasks.length}
+              total={taskTotal}
               onChange={setTaskPage}
             />
           </div>
         )}
 
-        {completedTasks.length > 0 && (
+        {completedCount > 0 && (
           <button
             type="button"
             onClick={() => setShowCompleted((v) => !v)}
             className="mt-2 flex items-center gap-1.5 text-xs text-gray-500 hover:text-gray-700 dark:text-slate-400 dark:hover:text-slate-200"
           >
             {showCompleted ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
-            {showCompleted ? 'Hide' : 'Show'} {completedTasks.length} completed task{completedTasks.length !== 1 ? 's' : ''}
+            {showCompleted ? 'Hide' : 'Show'} {completedCount} completed task{completedCount !== 1 ? 's' : ''}
           </button>
         )}
 
@@ -330,7 +330,7 @@ export default function OperationsPage() {
               <button
                 key={key}
                 type="button"
-                onClick={() => setEventFilter(key)}
+                onClick={() => { setEventFilter(key); setEventPage(0) }}
                 className={`rounded-md px-3 py-1 text-xs font-semibold transition-colors ${
                   eventFilter === key
                     ? 'bg-white text-gray-900 shadow-sm dark:bg-slate-700 dark:text-slate-100'
@@ -347,13 +347,20 @@ export default function OperationsPage() {
           {filteredEvents.length === 0 ? (
             <p className="p-4 text-sm text-gray-500 dark:text-slate-400">No events match this filter.</p>
           ) : (
-            [...filteredEvents].reverse().map((event) => (
+            filteredEvents.map((event) => (
               <EventRow key={`${event.workflowId ?? 'global'}-${event.sequence}`} event={event} />
             ))
           )}
         </div>
+
+        {eventTotal > EVENT_PAGE_SIZE && (
+          <div className="mt-3">
+            <Pagination page={eventPage} pageSize={EVENT_PAGE_SIZE} total={eventTotal} onChange={setEventPage} />
+          </div>
+        )}
+
         <p className="mt-1.5 text-right text-xs text-gray-400 dark:text-slate-500">
-          Showing last {allEvents.length} events · newest first
+          {eventPage === 0 ? `Showing newest ${Math.min(EVENT_PAGE_SIZE, eventTotal)} of ${eventTotal} events` : `Page ${eventPage + 1} · newest first`}
         </p>
       </section>
     </div>

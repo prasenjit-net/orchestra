@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/coder/websocket"
@@ -275,6 +276,9 @@ func (h *Handler) ListWorkflows(w http.ResponseWriter, r *http.Request) {
 	}
 
 	input := workflow.ListWorkflowsInput{Status: r.URL.Query().Get("status")}
+	if raw := r.URL.Query().Get("currentActivities"); raw != "" {
+		input.CurrentActivities = strings.Split(raw, ",")
+	}
 	if raw := r.URL.Query().Get("limit"); raw != "" {
 		n, err := strconv.Atoi(raw)
 		if err != nil || n <= 0 {
@@ -302,10 +306,11 @@ func (h *Handler) ListWorkflows(w http.ResponseWriter, r *http.Request) {
 	}
 
 	respondJSON(w, http.StatusOK, map[string]any{
-		"workflows": result.Workflows,
-		"total":     result.Total,
-		"limit":     input.Limit,
-		"offset":    input.Offset,
+		"workflows":      result.Workflows,
+		"total":          result.Total,
+		"limit":          input.Limit,
+		"offset":         input.Offset,
+		"activityCounts": result.ActivityCounts,
 	})
 }
 
@@ -315,23 +320,36 @@ func (h *Handler) ListWorkflowOperations(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	limit := 50
+	input := workflow.ListRecentEventsInput{Limit: 50}
 	if raw := r.URL.Query().Get("limit"); raw != "" {
 		parsed, err := strconv.Atoi(raw)
 		if err != nil || parsed <= 0 {
 			writeError(w, http.StatusBadRequest, "invalid limit")
 			return
 		}
-		limit = parsed
+		input.Limit = parsed
+	}
+	if raw := r.URL.Query().Get("offset"); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed < 0 {
+			writeError(w, http.StatusBadRequest, "invalid offset")
+			return
+		}
+		input.Offset = parsed
 	}
 
-	events, err := h.workflow.ListRecentEvents(r.Context(), limit)
+	result, err := h.workflow.ListRecentEvents(r.Context(), input)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	respondJSON(w, http.StatusOK, map[string]any{"events": events})
+	respondJSON(w, http.StatusOK, map[string]any{
+		"events": result.Events,
+		"total":  result.Total,
+		"limit":  input.Limit,
+		"offset": input.Offset,
+	})
 }
 
 func (h *Handler) GetWorkflow(w http.ResponseWriter, r *http.Request, workflowID string) {
@@ -429,7 +447,10 @@ func (h *Handler) ListWorkflowTasks(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	input := workflow.ListTasksInput{}
+	input := workflow.ListTasksInput{
+		Status:           r.URL.Query().Get("status"),
+		ExcludeCompleted: r.URL.Query().Get("excludeCompleted") == "true",
+	}
 	if raw := r.URL.Query().Get("limit"); raw != "" {
 		n, err := strconv.Atoi(raw)
 		if err != nil || n <= 0 {
@@ -461,6 +482,7 @@ func (h *Handler) ListWorkflowTasks(w http.ResponseWriter, r *http.Request) {
 		"total":  result.Total,
 		"limit":  input.Limit,
 		"offset": input.Offset,
+		"counts": result.Counts,
 	})
 }
 

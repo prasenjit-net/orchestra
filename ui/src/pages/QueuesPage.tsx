@@ -16,8 +16,8 @@ export default function QueuesPage() {
   const [page, setPage] = useState(0)
 
   const tasksQuery = useQuery({
-    queryKey: ['workflow-tasks'],
-    queryFn: () => workflowApi.listTasks(),
+    queryKey: ['workflow-tasks', { page, limit: PAGE_SIZE }],
+    queryFn: () => workflowApi.listTasks({ limit: PAGE_SIZE, offset: page * PAGE_SIZE }),
   })
 
   const taskActionMutation = useMutation({
@@ -41,7 +41,8 @@ export default function QueuesPage() {
   }
 
   const tasks = tasksQuery.data?.tasks ?? []
-  const pageTasks = tasks.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE)
+  const total = tasksQuery.data?.total ?? 0
+  const counts = tasksQuery.data?.counts ?? {}
 
   return (
     <div className="space-y-8 p-8">
@@ -59,11 +60,11 @@ export default function QueuesPage() {
       />
 
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
-        <StatCard label="Pending" value={String(tasks.filter((task) => task.status === 'pending').length)} description="Tasks waiting to be claimed." icon={Clock3} tone="bg-amber-50 text-amber-600 dark:bg-amber-900/20 dark:text-amber-300" />
-        <StatCard label="Running" value={String(tasks.filter((task) => task.status === 'running').length)} description="Tasks currently leased by a worker." icon={Play} tone="bg-sky-50 text-sky-600 dark:bg-sky-900/20 dark:text-sky-300" />
-        <StatCard label="Waiting" value={String(tasks.filter((task) => task.status === 'waiting').length)} description="Tasks parked until an external signal arrives." icon={BellRing} tone="bg-violet-50 text-violet-600 dark:bg-violet-900/20 dark:text-violet-300" />
-        <StatCard label="Paused" value={String(tasks.filter((task) => task.status === 'paused').length)} description="Tasks paused by an operator." icon={PauseCircle} tone="bg-indigo-50 text-indigo-600 dark:bg-indigo-900/20 dark:text-indigo-300" />
-        <StatCard label="Failed" value={String(tasks.filter((task) => task.status === 'failed').length)} description="Failed tasks awaiting action." icon={RotateCcw} tone="bg-red-50 text-red-600 dark:bg-red-900/20 dark:text-red-300" />
+        <StatCard label="Pending" value={String(counts.pending ?? 0)} description="Tasks waiting to be claimed." icon={Clock3} tone="bg-amber-50 text-amber-600 dark:bg-amber-900/20 dark:text-amber-300" />
+        <StatCard label="Running" value={String(counts.running ?? 0)} description="Tasks currently leased by a worker." icon={Play} tone="bg-sky-50 text-sky-600 dark:bg-sky-900/20 dark:text-sky-300" />
+        <StatCard label="Waiting" value={String(counts.waiting ?? 0)} description="Tasks parked until an external signal arrives." icon={BellRing} tone="bg-violet-50 text-violet-600 dark:bg-violet-900/20 dark:text-violet-300" />
+        <StatCard label="Paused" value={String(counts.paused ?? 0)} description="Tasks paused by an operator." icon={PauseCircle} tone="bg-indigo-50 text-indigo-600 dark:bg-indigo-900/20 dark:text-indigo-300" />
+        <StatCard label="Failed" value={String(counts.failed ?? 0)} description="Failed tasks awaiting action." icon={RotateCcw} tone="bg-red-50 text-red-600 dark:bg-red-900/20 dark:text-red-300" />
       </div>
 
       <section className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900">
@@ -72,7 +73,7 @@ export default function QueuesPage() {
           {tasks.length === 0 ? (
             <p className="text-sm text-gray-500 dark:text-slate-400">No queued tasks.</p>
           ) : (
-            pageTasks.map((task) => (
+            tasks.map((task) => (
               <div key={task.id} className="rounded-lg border border-gray-200 p-4 dark:border-slate-800">
                 <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
                   <div className="min-w-0">
@@ -110,9 +111,9 @@ export default function QueuesPage() {
           )}
         </div>
 
-        {tasks.length > PAGE_SIZE && (
+        {total > PAGE_SIZE && (
           <div className="mt-6 border-t border-gray-100 pt-4 dark:border-slate-800">
-            <Pagination page={page} pageSize={PAGE_SIZE} total={tasks.length} onChange={setPage} />
+            <Pagination page={page} pageSize={PAGE_SIZE} total={total} onChange={setPage} />
           </div>
         )}
       </section>
