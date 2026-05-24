@@ -1,14 +1,20 @@
+import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { BellRing, Clock3, PauseCircle, Play, RotateCcw } from 'lucide-react'
 import { Link } from 'react-router-dom'
+import Pagination from '../components/Pagination'
 import SectionHeader from '../components/SectionHeader'
 import StatCard from '../components/StatCard'
 import { workflowApi } from '../services/api'
 import type { WorkflowTaskAction } from '../types'
 import { actionLabel, availableTaskActions, formatDate, statusClasses } from './workflowUi'
 
+const PAGE_SIZE = 20
+
 export default function QueuesPage() {
   const queryClient = useQueryClient()
+  const [page, setPage] = useState(0)
+
   const tasksQuery = useQuery({
     queryKey: ['workflow-tasks'],
     queryFn: () => workflowApi.listTasks(),
@@ -17,6 +23,7 @@ export default function QueuesPage() {
   const taskActionMutation = useMutation({
     mutationFn: ({ taskId, action }: { taskId: number; action: WorkflowTaskAction }) => workflowApi.applyTaskAction(taskId, action),
     onSuccess: async () => {
+      setPage(0)
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ['workflow-tasks'] }),
         queryClient.invalidateQueries({ queryKey: ['workflows'] }),
@@ -34,6 +41,7 @@ export default function QueuesPage() {
   }
 
   const tasks = tasksQuery.data?.tasks ?? []
+  const pageTasks = tasks.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE)
 
   return (
     <div className="space-y-8 p-8">
@@ -64,7 +72,7 @@ export default function QueuesPage() {
           {tasks.length === 0 ? (
             <p className="text-sm text-gray-500 dark:text-slate-400">No queued tasks.</p>
           ) : (
-            tasks.map((task) => (
+            pageTasks.map((task) => (
               <div key={task.id} className="rounded-lg border border-gray-200 p-4 dark:border-slate-800">
                 <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
                   <div className="min-w-0">
@@ -101,6 +109,12 @@ export default function QueuesPage() {
             ))
           )}
         </div>
+
+        {tasks.length > PAGE_SIZE && (
+          <div className="mt-6 border-t border-gray-100 pt-4 dark:border-slate-800">
+            <Pagination page={page} pageSize={PAGE_SIZE} total={tasks.length} onChange={setPage} />
+          </div>
+        )}
       </section>
     </div>
   )

@@ -2,11 +2,14 @@ import { useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { BellRing, CheckCircle2, Clock3, Send, Workflow } from 'lucide-react'
 import { Link } from 'react-router-dom'
+import Pagination from '../components/Pagination'
 import SectionHeader from '../components/SectionHeader'
 import StatCard from '../components/StatCard'
 import { workflowApi } from '../services/api'
 import type { WorkflowDefinitionDetails, WorkflowInstance, WorkflowStepDefinition } from '../types'
 import { formatDate, statusClasses } from './workflowUi'
+
+const PAGE_SIZE = 20
 
 const waitingActivities = new Set(['wait-signal', 'approval', 'manual-task', 'human-wait'])
 
@@ -75,6 +78,7 @@ export default function SignalsPage() {
   const [payloadText, setPayloadText] = useState('{\n  "approved": true\n}')
   const [notice, setNotice] = useState<string | null>(null)
   const [pageError, setPageError] = useState<string | null>(null)
+  const [page, setPage] = useState(0)
 
   const waitingQuery = useQuery({
     queryKey: ['waiting-signal-workflows'],
@@ -82,12 +86,17 @@ export default function SignalsPage() {
   })
 
   const waitingWorkflows = useMemo(() => waitingQuery.data ?? [], [waitingQuery.data])
+  const pageWorkflows = useMemo(
+    () => waitingWorkflows.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE),
+    [waitingWorkflows, page],
+  )
 
   const signalOneMutation = useMutation({
     mutationFn: async ({ workflowId, signalName, payload }: { workflowId: string; signalName: string; payload: unknown }) =>
       workflowApi.signalWorkflow(workflowId, { name: signalName, payload }),
     onSuccess: (_, variables) => {
       setPageError(null)
+      setPage(0)
       setNotice(`Sent ${variables.signalName} to ${variables.workflowId}.`)
       // Cancel any in-flight refetch before applying the optimistic removal so the
       // result of that fetch cannot overwrite our update.
@@ -113,6 +122,7 @@ export default function SignalsPage() {
     },
     onSuccess: (count) => {
       setPageError(null)
+      setPage(0)
       setNotice(`Sent signals to ${count} waiting workflow${count === 1 ? '' : 's'}.`)
       void queryClient.cancelQueries({ queryKey: ['waiting-signal-workflows'] })
       queryClient.setQueryData<WaitingSignalWorkflow[]>(['waiting-signal-workflows'], [])
@@ -218,7 +228,7 @@ export default function SignalsPage() {
               No workflows are currently waiting on signals.
             </div>
           ) : (
-            waitingWorkflows.map((item) => (
+            pageWorkflows.map((item) => (
               <div key={item.workflow.id} className="flex flex-col gap-4 rounded-lg border border-gray-200 p-4 dark:border-slate-800 lg:flex-row lg:items-center lg:justify-between">
                 <div className="min-w-0">
                   <div className="flex flex-wrap items-center gap-2">
@@ -258,6 +268,12 @@ export default function SignalsPage() {
             ))
           )}
         </div>
+
+        {waitingWorkflows.length > PAGE_SIZE && (
+          <div className="mt-6 border-t border-gray-100 pt-4 dark:border-slate-800">
+            <Pagination page={page} pageSize={PAGE_SIZE} total={waitingWorkflows.length} onChange={setPage} />
+          </div>
+        )}
       </section>
     </div>
   )
