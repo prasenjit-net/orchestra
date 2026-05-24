@@ -4,6 +4,7 @@ import { ArrowLeft, Eye, Pencil, Save, Trash2 } from 'lucide-react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import Editor from '@monaco-editor/react'
 import ReactMarkdown from 'react-markdown'
+import { useMonacoTheme } from '../hooks/useMonacoTheme'
 import { agentsApi, mcpServersApi } from '../services/api'
 import type { CreateAgentInput } from '../types'
 
@@ -133,6 +134,7 @@ export default function AgentEditorPage() {
     return <div className="p-8 text-sm text-red-600 dark:text-red-300">Could not load agent.</div>
   }
 
+  const monacoTheme = useMonacoTheme()
   const isSaving = createMutation.isPending || updateMutation.isPending
 
   return (
@@ -253,18 +255,18 @@ export default function AgentEditorPage() {
         </div>
 
         {/* Right panel */}
-        <div className="flex flex-1 flex-col overflow-hidden bg-slate-950">
+        <div className="flex flex-1 flex-col overflow-hidden bg-white dark:bg-slate-950">
           {/* System prompt header with edit/preview toggle */}
           <div className="shrink-0 flex items-center justify-between px-4 pt-4 pb-2">
-            <label className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">System Prompt</label>
-            <div className="flex items-center rounded-lg bg-slate-800 p-0.5">
+            <label className="text-[11px] font-semibold uppercase tracking-wide text-gray-400 dark:text-slate-400">System Prompt</label>
+            <div className="flex items-center rounded-lg bg-gray-100 p-0.5 dark:bg-slate-800">
               <button
                 type="button"
                 onClick={() => setPromptMode('edit')}
                 className={`inline-flex items-center gap-1.5 rounded-md px-3 py-1 text-xs font-medium transition-colors ${
                   promptMode === 'edit'
-                    ? 'bg-slate-600 text-slate-100'
-                    : 'text-slate-400 hover:text-slate-200'
+                    ? 'bg-white text-gray-900 shadow-sm dark:bg-slate-600 dark:text-slate-100'
+                    : 'text-gray-500 hover:text-gray-900 dark:text-slate-400 dark:hover:text-slate-200'
                 }`}
               >
                 <Pencil className="h-3 w-3" />
@@ -275,8 +277,8 @@ export default function AgentEditorPage() {
                 onClick={() => setPromptMode('preview')}
                 className={`inline-flex items-center gap-1.5 rounded-md px-3 py-1 text-xs font-medium transition-colors ${
                   promptMode === 'preview'
-                    ? 'bg-slate-600 text-slate-100'
-                    : 'text-slate-400 hover:text-slate-200'
+                    ? 'bg-white text-gray-900 shadow-sm dark:bg-slate-600 dark:text-slate-100'
+                    : 'text-gray-500 hover:text-gray-900 dark:text-slate-400 dark:hover:text-slate-200'
                 }`}
               >
                 <Eye className="h-3 w-3" />
@@ -293,7 +295,7 @@ export default function AgentEditorPage() {
                 language="markdown"
                 value={systemPrompt}
                 onChange={(val) => setSystemPrompt(val ?? '')}
-                theme="vs-dark"
+                theme={monacoTheme}
                 options={{
                   minimap: { enabled: false },
                   fontSize: 13,
@@ -309,29 +311,29 @@ export default function AgentEditorPage() {
             ) : (
               <div className="h-full overflow-y-auto px-6 py-4">
                 {systemPrompt.trim() ? (
-                  <div className="prose prose-sm prose-invert max-w-none">
+                  <div className="prose prose-sm max-w-none dark:prose-invert">
                     <ReactMarkdown>{systemPrompt}</ReactMarkdown>
                   </div>
                 ) : (
-                  <p className="text-sm text-slate-500">Nothing to preview — write a system prompt in the editor.</p>
+                  <p className="text-sm text-gray-400 dark:text-slate-500">Nothing to preview — write a system prompt in the editor.</p>
                 )}
               </div>
             )}
           </div>
 
           {/* Connectors — below the editor */}
-          <div className="shrink-0 border-t border-slate-800 bg-slate-900 px-4 py-4">
-            <label className="mb-2 block text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+          <div className="shrink-0 border-t border-gray-200 bg-gray-50 px-4 py-4 dark:border-slate-800 dark:bg-slate-900">
+            <label className="mb-2 block text-[11px] font-semibold uppercase tracking-wide text-gray-500 dark:text-slate-400">
               Attached Connectors
             </label>
             {isNew ? (
-              <p className="text-[11px] text-slate-500">Save the agent first to attach connectors.</p>
+              <p className="text-[11px] text-gray-400 dark:text-slate-500">Save the agent first to attach connectors.</p>
             ) : allMCPServersQuery.isLoading ? (
-              <p className="text-[11px] text-slate-500">Loading…</p>
+              <p className="text-[11px] text-gray-400 dark:text-slate-500">Loading…</p>
             ) : (allMCPServersQuery.data?.servers ?? []).length === 0 ? (
-              <p className="text-[11px] text-slate-500">
+              <p className="text-[11px] text-gray-400 dark:text-slate-500">
                 No connectors defined yet.{' '}
-                <a href="/connectors/new" className="text-primary-400 underline">Add one</a>.
+                <a href="/connectors/new" className="text-primary-600 underline dark:text-primary-400">Add one</a>.
               </p>
             ) : (
               <div className="flex flex-wrap gap-2">
@@ -344,11 +346,11 @@ export default function AgentEditorPage() {
                       onClick={() => toggleMCPServer(srv.id)}
                       className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-medium transition-colors ${
                         checked
-                          ? 'border-primary-500 bg-primary-900/30 text-primary-300'
-                          : 'border-slate-700 bg-slate-800 text-slate-400 hover:border-slate-600 hover:text-slate-200'
+                          ? 'border-primary-500 bg-primary-50 text-primary-700 dark:bg-primary-900/30 dark:text-primary-300'
+                          : 'border-gray-300 bg-white text-gray-500 hover:border-gray-400 hover:text-gray-700 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-400 dark:hover:border-slate-600 dark:hover:text-slate-200'
                       } ${!srv.enabled ? 'opacity-50' : ''}`}
                     >
-                      <span className={`h-1.5 w-1.5 rounded-full ${checked ? 'bg-primary-400' : 'bg-slate-600'}`} />
+                      <span className={`h-1.5 w-1.5 rounded-full ${checked ? 'bg-primary-500 dark:bg-primary-400' : 'bg-gray-300 dark:bg-slate-600'}`} />
                       {srv.name}
                       {srv.tools && srv.tools.length > 0 && (
                         <span className="text-[10px] opacity-60">{srv.tools.length}t</span>
@@ -358,8 +360,8 @@ export default function AgentEditorPage() {
                 })}
               </div>
             )}
-            <p className="mt-2 text-[10px] text-slate-600">
-              Highlighted servers are attached — their tools are available to this agent at runtime.
+            <p className="mt-2 text-[10px] text-gray-400 dark:text-slate-600">
+              Highlighted connectors are attached — their tools are available to this agent at runtime.
             </p>
           </div>
         </div>

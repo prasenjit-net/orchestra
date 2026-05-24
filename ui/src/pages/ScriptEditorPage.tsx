@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ArrowLeft, Save, Trash2 } from 'lucide-react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import Editor from '@monaco-editor/react'
+import { useMonacoTheme } from '../hooks/useMonacoTheme'
 import { scriptsApi } from '../services/api'
 import type { CreateScriptInput } from '../types'
 
@@ -125,6 +126,7 @@ export default function ScriptEditorPage() {
     return <div className="p-8 text-sm text-red-600 dark:text-red-300">Could not load script.</div>
   }
 
+  const monacoTheme = useMonacoTheme()
   const isSaving = createMutation.isPending || updateMutation.isPending
 
   return (
@@ -242,9 +244,9 @@ export default function ScriptEditorPage() {
         </div>
 
         {/* Right panel — Monaco source editor */}
-        <div className="flex flex-1 flex-col overflow-hidden bg-slate-950">
+        <div className="flex flex-1 flex-col overflow-hidden bg-white dark:bg-slate-950">
           <div className="shrink-0 px-4 pt-4 pb-2">
-            <label className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">Source</label>
+            <label className="text-[11px] font-semibold uppercase tracking-wide text-gray-400 dark:text-slate-400">Source</label>
           </div>
           <div className="flex-1 overflow-hidden">
             <Editor
@@ -252,7 +254,7 @@ export default function ScriptEditorPage() {
               language="python"
               value={source}
               onChange={(val) => setSource(val ?? '')}
-              theme="vs-dark"
+              theme={monacoTheme}
               options={{
                 minimap: { enabled: false },
                 fontSize: 13,
