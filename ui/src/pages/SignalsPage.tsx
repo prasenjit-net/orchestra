@@ -38,7 +38,7 @@ function resolveSignalName(activity: string, input: unknown) {
 
 async function loadWaitingSignalWorkflows() {
   const workflowsResponse = await workflowApi.listWorkflows({ status: 'running' })
-  const waitingWorkflows = workflowsResponse.workflows.filter(
+  const waitingWorkflows = (workflowsResponse.workflows ?? []).filter(
     (workflow) => workflow.status === 'running' && waitingActivities.has(workflow.currentActivity),
   )
 

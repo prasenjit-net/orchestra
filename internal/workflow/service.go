@@ -719,7 +719,7 @@ func (s *Service) ListWorkflows(ctx context.Context, input ListWorkflowsInput) (
 	}
 	defer rows.Close()
 
-	var workflows []WorkflowInstance
+	workflows := make([]WorkflowInstance, 0)
 	for rows.Next() {
 		instance, err := scanWorkflowInstance(rows)
 		if err != nil {
@@ -1085,7 +1085,7 @@ func (s *Service) ListTasks(ctx context.Context, input ListTasksInput) (ListTask
 	}
 	defer rows.Close()
 
-	var tasks []WorkflowTask
+	tasks := make([]WorkflowTask, 0)
 	for rows.Next() {
 		task, err := scanWorkflowTask(rows)
 		if err != nil {
