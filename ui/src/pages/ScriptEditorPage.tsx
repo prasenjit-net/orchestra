@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ArrowLeft, Save, Trash2 } from 'lucide-react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
+import Editor from '@monaco-editor/react'
 import { scriptsApi } from '../services/api'
 import type { CreateScriptInput } from '../types'
 
@@ -240,16 +241,31 @@ export default function ScriptEditorPage() {
           </div>
         </div>
 
-        {/* Right panel — source editor */}
-        <div className="flex flex-1 flex-col overflow-hidden bg-slate-950 p-4">
-          <label className="mb-2 block text-[11px] font-semibold uppercase tracking-wide text-slate-400">Source</label>
-          <textarea
-            value={source}
-            onChange={(e) => setSource(e.target.value)}
-            placeholder={'result = {"message": strings.upper(input["name"])}'}
-            spellCheck={false}
-            className="flex-1 resize-none rounded-lg border border-slate-700 bg-slate-900 p-4 font-mono text-sm leading-relaxed text-slate-100 outline-none transition-colors focus:border-primary-500"
-          />
+        {/* Right panel — Monaco source editor */}
+        <div className="flex flex-1 flex-col overflow-hidden bg-slate-950">
+          <div className="shrink-0 px-4 pt-4 pb-2">
+            <label className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">Source</label>
+          </div>
+          <div className="flex-1 overflow-hidden">
+            <Editor
+              height="100%"
+              language="python"
+              value={source}
+              onChange={(val) => setSource(val ?? '')}
+              theme="vs-dark"
+              options={{
+                minimap: { enabled: false },
+                fontSize: 13,
+                lineHeight: 20,
+                padding: { top: 8, bottom: 16 },
+                scrollBeyondLastLine: false,
+                wordWrap: 'on',
+                renderLineHighlight: 'line',
+                smoothScrolling: true,
+                cursorBlinking: 'smooth',
+              }}
+            />
+          </div>
         </div>
       </div>
     </div>

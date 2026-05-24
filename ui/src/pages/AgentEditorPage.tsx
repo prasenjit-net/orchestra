@@ -1,9 +1,13 @@
 import { useState, useEffect } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ArrowLeft, Save, Trash2 } from 'lucide-react'
+import { ArrowLeft, Eye, Pencil, Save, Trash2 } from 'lucide-react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
+import Editor from '@monaco-editor/react'
+import ReactMarkdown from 'react-markdown'
 import { agentsApi, mcpServersApi } from '../services/api'
 import type { CreateAgentInput } from '../types'
+
+type PromptMode = 'edit' | 'preview'
 
 export default function AgentEditorPage() {
   const { agentId } = useParams<{ agentId: string }>()
@@ -17,6 +21,7 @@ export default function AgentEditorPage() {
   const [systemPrompt, setSystemPrompt] = useState('')
   const [maxTokens, setMaxTokens] = useState('')
   const [temperature, setTemperature] = useState('')
+  const [promptMode, setPromptMode] = useState<PromptMode>('edit')
   const [pageError, setPageError] = useState<string | null>(null)
   const [saved, setSaved] = useState(false)
   const [checkedMCPIds, setCheckedMCPIds] = useState<Set<string>>(new Set())
@@ -248,65 +253,113 @@ export default function AgentEditorPage() {
         </div>
 
         {/* Right panel */}
-        <div className="flex flex-1 flex-col gap-4 overflow-y-auto p-5">
-          <div className="flex flex-1 flex-col">
-            <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wide text-gray-500 dark:text-slate-400">System Prompt</label>
-            <textarea
-              value={systemPrompt}
-              onChange={(e) => setSystemPrompt(e.target.value)}
-              placeholder="You are a helpful assistant. Respond concisely and accurately."
-              spellCheck={false}
-              className="min-h-[200px] flex-1 resize-none rounded-lg border border-gray-200 bg-white p-4 text-sm leading-relaxed text-gray-900 outline-none transition-colors focus:border-primary-500 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
-            />
+        <div className="flex flex-1 flex-col overflow-hidden bg-slate-950">
+          {/* System prompt header with edit/preview toggle */}
+          <div className="shrink-0 flex items-center justify-between px-4 pt-4 pb-2">
+            <label className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">System Prompt</label>
+            <div className="flex items-center rounded-lg bg-slate-800 p-0.5">
+              <button
+                type="button"
+                onClick={() => setPromptMode('edit')}
+                className={`inline-flex items-center gap-1.5 rounded-md px-3 py-1 text-xs font-medium transition-colors ${
+                  promptMode === 'edit'
+                    ? 'bg-slate-600 text-slate-100'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                <Pencil className="h-3 w-3" />
+                Edit
+              </button>
+              <button
+                type="button"
+                onClick={() => setPromptMode('preview')}
+                className={`inline-flex items-center gap-1.5 rounded-md px-3 py-1 text-xs font-medium transition-colors ${
+                  promptMode === 'preview'
+                    ? 'bg-slate-600 text-slate-100'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                <Eye className="h-3 w-3" />
+                Preview
+              </button>
+            </div>
           </div>
 
-          {/* MCP Servers */}
-          <div>
-            <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wide text-gray-500 dark:text-slate-400">
+          {/* Editor / Preview area */}
+          <div className="flex-1 overflow-hidden">
+            {promptMode === 'edit' ? (
+              <Editor
+                height="100%"
+                language="markdown"
+                value={systemPrompt}
+                onChange={(val) => setSystemPrompt(val ?? '')}
+                theme="vs-dark"
+                options={{
+                  minimap: { enabled: false },
+                  fontSize: 13,
+                  lineHeight: 20,
+                  padding: { top: 8, bottom: 16 },
+                  scrollBeyondLastLine: false,
+                  wordWrap: 'on',
+                  renderLineHighlight: 'line',
+                  smoothScrolling: true,
+                  cursorBlinking: 'smooth',
+                }}
+              />
+            ) : (
+              <div className="h-full overflow-y-auto px-6 py-4">
+                {systemPrompt.trim() ? (
+                  <div className="prose prose-sm prose-invert max-w-none">
+                    <ReactMarkdown>{systemPrompt}</ReactMarkdown>
+                  </div>
+                ) : (
+                  <p className="text-sm text-slate-500">Nothing to preview — write a system prompt in the editor.</p>
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* MCP Servers — below the editor */}
+          <div className="shrink-0 border-t border-slate-800 bg-slate-900 px-4 py-4">
+            <label className="mb-2 block text-[11px] font-semibold uppercase tracking-wide text-slate-400">
               Attached MCP Servers
             </label>
             {isNew ? (
-              <p className="text-[11px] text-gray-400 dark:text-slate-500">Save the agent first to attach MCP servers.</p>
+              <p className="text-[11px] text-slate-500">Save the agent first to attach MCP servers.</p>
             ) : allMCPServersQuery.isLoading ? (
-              <p className="text-[11px] text-gray-400 dark:text-slate-500">Loading…</p>
+              <p className="text-[11px] text-slate-500">Loading…</p>
             ) : (allMCPServersQuery.data?.servers ?? []).length === 0 ? (
-              <p className="text-[11px] text-gray-400 dark:text-slate-500">
+              <p className="text-[11px] text-slate-500">
                 No MCP servers defined yet.{' '}
-                <a href="/mcp-servers/new" className="text-primary-600 underline dark:text-primary-400">Add one</a>.
+                <a href="/mcp-servers/new" className="text-primary-400 underline">Add one</a>.
               </p>
             ) : (
-              <div className="space-y-1 rounded-lg border border-gray-200 p-3 dark:border-slate-700">
-                {(allMCPServersQuery.data?.servers ?? []).map((srv) => (
-                  <label key={srv.id} className="flex cursor-pointer items-center gap-3 rounded-md px-2 py-1.5 transition-colors hover:bg-gray-50 dark:hover:bg-slate-800">
-                    <input
-                      type="checkbox"
-                      checked={checkedMCPIds.has(srv.id)}
-                      onChange={() => toggleMCPServer(srv.id)}
-                      className="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
-                    />
-                    <span className="flex-1 text-sm text-gray-800 dark:text-slate-200">{srv.name}</span>
-                    <span className="truncate text-xs text-gray-400 dark:text-slate-500">{srv.url}</span>
-                    {srv.group ? (
-                      <span className="shrink-0 rounded-full bg-blue-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-blue-700 dark:bg-blue-900/30 dark:text-blue-300">
-                        {srv.group}
-                      </span>
-                    ) : null}
-                    {!srv.enabled ? (
-                      <span className="shrink-0 rounded-full bg-gray-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-gray-500 dark:bg-slate-800 dark:text-slate-400">
-                        disabled
-                      </span>
-                    ) : null}
-                    {srv.tools && srv.tools.length > 0 ? (
-                      <span className="shrink-0 text-[10px] text-gray-400 dark:text-slate-500">
-                        {srv.tools.length} tools
-                      </span>
-                    ) : null}
-                  </label>
-                ))}
+              <div className="flex flex-wrap gap-2">
+                {(allMCPServersQuery.data?.servers ?? []).map((srv) => {
+                  const checked = checkedMCPIds.has(srv.id)
+                  return (
+                    <button
+                      key={srv.id}
+                      type="button"
+                      onClick={() => toggleMCPServer(srv.id)}
+                      className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-medium transition-colors ${
+                        checked
+                          ? 'border-primary-500 bg-primary-900/30 text-primary-300'
+                          : 'border-slate-700 bg-slate-800 text-slate-400 hover:border-slate-600 hover:text-slate-200'
+                      } ${!srv.enabled ? 'opacity-50' : ''}`}
+                    >
+                      <span className={`h-1.5 w-1.5 rounded-full ${checked ? 'bg-primary-400' : 'bg-slate-600'}`} />
+                      {srv.name}
+                      {srv.tools && srv.tools.length > 0 && (
+                        <span className="text-[10px] opacity-60">{srv.tools.length}t</span>
+                      )}
+                    </button>
+                  )
+                })}
               </div>
             )}
-            <p className="mt-1 text-[11px] text-gray-400 dark:text-slate-500">
-              Checked servers will have their tools available to this agent at runtime.
+            <p className="mt-2 text-[10px] text-slate-600">
+              Highlighted servers are attached — their tools are available to this agent at runtime.
             </p>
           </div>
         </div>
