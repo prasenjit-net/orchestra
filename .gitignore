@@ -8,7 +8,9 @@ coverage.html
 .env.local
 .env.*.local
 
-# Config overrides (keep config.yaml as the example default)
+# Local config files (copy example.config.toml → config.toml to get started)
+config.yaml
+config.toml
 config.local.yaml
 config.*.local.yaml
 

@@ -139,6 +139,7 @@ func NewService(cfg config.WorkflowConfig, logger *slog.Logger, buses ...*livebu
 	// Always register script activity with DB-backed lookup so saved scripts work
 	// regardless of the scriptEnabled config flag.
 	svc.activities["script"] = newScriptActivity(cfg, svc.lookupScriptSource)
+	svc.activities["agent"] = newAgentActivity(cfg, svc.lookupAgent, svc.GetAgentMCPServers)
 
 	if err := svc.initSchema(context.Background()); err != nil {
 		_ = db.Close()
@@ -2793,6 +2794,36 @@ func (s *Service) initSchema(ctx context.Context) error {
 			created_at TEXT NOT NULL,
 			updated_at TEXT NOT NULL
 		)`,
+		`CREATE TABLE IF NOT EXISTS agents (
+			id TEXT PRIMARY KEY,
+			name TEXT NOT NULL,
+			description TEXT NOT NULL DEFAULT '',
+			model TEXT NOT NULL DEFAULT 'gpt-4o',
+			system_prompt TEXT NOT NULL DEFAULT '',
+			max_tokens INTEGER NOT NULL DEFAULT 0,
+			temperature REAL NOT NULL DEFAULT 0,
+			tools_json TEXT NOT NULL DEFAULT '[]',
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL
+		)`,
+		`CREATE TABLE IF NOT EXISTS mcp_servers (
+			id          TEXT PRIMARY KEY,
+			name        TEXT NOT NULL,
+			description TEXT NOT NULL DEFAULT '',
+			group_name  TEXT NOT NULL DEFAULT '',
+			url         TEXT NOT NULL,
+			headers_json TEXT NOT NULL DEFAULT '{}',
+			enabled     INTEGER NOT NULL DEFAULT 1,
+			tools_json  TEXT NOT NULL DEFAULT '[]',
+			explored_at TEXT,
+			created_at  TEXT NOT NULL,
+			updated_at  TEXT NOT NULL
+		)`,
+		`CREATE TABLE IF NOT EXISTS agent_mcp_servers (
+			agent_id  TEXT NOT NULL,
+			server_id TEXT NOT NULL,
+			PRIMARY KEY (agent_id, server_id)
+		)`,
 	}
 
 	for _, statement := range statements {
@@ -2805,6 +2836,9 @@ func (s *Service) initSchema(ctx context.Context) error {
 		return err
 	}
 	if err := ensureWorkflowDefinitionVersionColumns(ctx, s.db); err != nil {
+		return err
+	}
+	if err := ensureMCPServerColumns(ctx, s.db); err != nil {
 		return err
 	}
 
@@ -2902,6 +2936,51 @@ func ensureWorkflowDefinitionVersionColumns(ctx context.Context, db *sql.DB) err
 	}
 	if _, err := db.ExecContext(ctx, `UPDATE workflow_definition_versions SET published_at = created_at WHERE status = 'published' AND (published_at IS NULL OR published_at = '')`); err != nil {
 		return fmt.Errorf("backfill workflow_definition_versions.published_at: %w", err)
+	}
+	return nil
+}
+
+func ensureMCPServerColumns(ctx context.Context, db *sql.DB) error {
+	rows, err := db.QueryContext(ctx, `PRAGMA table_info(mcp_servers)`)
+	if err != nil {
+		return fmt.Errorf("inspect mcp_servers schema: %w", err)
+	}
+	defer rows.Close()
+
+	hasToolsJSON := false
+	hasExploredAt := false
+	for rows.Next() {
+		var (
+			cid        int
+			name       string
+			dataType   string
+			notNull    int
+			defaultVal sql.NullString
+			primaryKey int
+		)
+		if err := rows.Scan(&cid, &name, &dataType, &notNull, &defaultVal, &primaryKey); err != nil {
+			return fmt.Errorf("scan mcp_servers schema: %w", err)
+		}
+		switch name {
+		case "tools_json":
+			hasToolsJSON = true
+		case "explored_at":
+			hasExploredAt = true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterate mcp_servers schema: %w", err)
+	}
+
+	if !hasToolsJSON {
+		if _, err := db.ExecContext(ctx, `ALTER TABLE mcp_servers ADD COLUMN tools_json TEXT NOT NULL DEFAULT '[]'`); err != nil {
+			return fmt.Errorf("add mcp_servers.tools_json column: %w", err)
+		}
+	}
+	if !hasExploredAt {
+		if _, err := db.ExecContext(ctx, `ALTER TABLE mcp_servers ADD COLUMN explored_at TEXT`); err != nil {
+			return fmt.Errorf("add mcp_servers.explored_at column: %w", err)
+		}
 	}
 	return nil
 }

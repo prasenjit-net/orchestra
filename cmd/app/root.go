@@ -35,7 +35,7 @@ func Execute(files fs.FS) {
 func init() {
 	cobra.OnInitialize(initConfig)
 
-	rootCmd.PersistentFlags().StringVarP(&cfgFile, "config", "c", "", "config file (default: ./config.yaml)")
+	rootCmd.PersistentFlags().StringVarP(&cfgFile, "config", "c", "", "config file (default: ./config.yaml or ./config.toml)")
 	rootCmd.AddCommand(serveCmd)
 	rootCmd.AddCommand(initCmd)
 	rootCmd.AddCommand(versionCmd)
@@ -61,7 +61,6 @@ func initConfig() {
 		v.SetConfigFile(cfgFile)
 	} else {
 		v.SetConfigName("config")
-		v.SetConfigType("yaml")
 		v.AddConfigPath(cwd)
 	}
 

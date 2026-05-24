@@ -5,6 +5,10 @@ import OperationsPage from './pages/OperationsPage'
 import QueuesPage from './pages/QueuesPage'
 import RunDetailsPage from './pages/RunDetailsPage'
 import RunsPage from './pages/RunsPage'
+import AgentEditorPage from './pages/AgentEditorPage'
+import AgentsPage from './pages/AgentsPage'
+import McpServerEditorPage from './pages/McpServerEditorPage'
+import McpServersPage from './pages/McpServersPage'
 import ScriptEditorPage from './pages/ScriptEditorPage'
 import ScriptsPage from './pages/ScriptsPage'
 import SignalsPage from './pages/SignalsPage'
@@ -27,6 +31,12 @@ function App() {
         <Route path="scripts" element={<ScriptsPage />} />
         <Route path="scripts/new" element={<ScriptEditorPage />} />
         <Route path="scripts/:scriptId/editor" element={<ScriptEditorPage />} />
+        <Route path="agents" element={<AgentsPage />} />
+        <Route path="agents/new" element={<AgentEditorPage />} />
+        <Route path="agents/:agentId/editor" element={<AgentEditorPage />} />
+        <Route path="mcp-servers" element={<McpServersPage />} />
+        <Route path="mcp-servers/new" element={<McpServerEditorPage />} />
+        <Route path="mcp-servers/:serverId/editor" element={<McpServerEditorPage />} />
         <Route path="runs" element={<RunsPage />} />
         <Route path="runs/:workflowId" element={<RunDetailsPage />} />
         <Route path="signals" element={<SignalsPage />} />

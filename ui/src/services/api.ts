@@ -1,5 +1,11 @@
 import type {
+  Agent,
+  AgentsResponse,
+  CreateAgentInput,
+  CreateMCPServerInput,
   CreateScriptInput,
+  MCPServer,
+  MCPServersResponse,
   ExampleResponse,
   HealthResponse,
   MetaResponse,
@@ -93,6 +99,91 @@ export const scriptsApi = {
       throw new Error(message)
     }
   },
+}
+
+export const agentsApi = {
+  list: async () => handleResponse<AgentsResponse>(await fetch(buildApiUrl('/agents'))),
+  create: async (input: CreateAgentInput) =>
+    handleResponse<Agent>(
+      await fetch(buildApiUrl('/agents'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(input),
+      }),
+    ),
+  get: async (id: string) => handleResponse<Agent>(await fetch(buildApiUrl(`/agents/${id}`))),
+  update: async (id: string, input: CreateAgentInput) =>
+    handleResponse<Agent>(
+      await fetch(buildApiUrl(`/agents/${id}`), {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(input),
+      }),
+    ),
+  delete: async (id: string) => {
+    const response = await fetch(buildApiUrl(`/agents/${id}`), { method: 'DELETE' })
+    if (!response.ok) {
+      let message = `HTTP ${response.status}`
+      try {
+        const payload = await response.json()
+        if (payload?.error) message = payload.error
+      } catch { /* ignore */ }
+      throw new Error(message)
+    }
+  },
+  getMCPServers: async (id: string) =>
+    handleResponse<MCPServersResponse>(await fetch(buildApiUrl(`/agents/${id}/mcp-servers`))),
+  setMCPServers: async (id: string, serverIds: string[]) => {
+    const response = await fetch(buildApiUrl(`/agents/${id}/mcp-servers`), {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ serverIds }),
+    })
+    if (!response.ok) {
+      let message = `HTTP ${response.status}`
+      try {
+        const payload = await response.json()
+        if (payload?.error) message = payload.error
+      } catch { /* ignore */ }
+      throw new Error(message)
+    }
+  },
+}
+
+export const mcpServersApi = {
+  list: async () => handleResponse<MCPServersResponse>(await fetch(buildApiUrl('/mcp-servers'))),
+  create: async (input: CreateMCPServerInput) =>
+    handleResponse<MCPServer>(
+      await fetch(buildApiUrl('/mcp-servers'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(input),
+      }),
+    ),
+  get: async (id: string) => handleResponse<MCPServer>(await fetch(buildApiUrl(`/mcp-servers/${id}`))),
+  update: async (id: string, input: CreateMCPServerInput) =>
+    handleResponse<MCPServer>(
+      await fetch(buildApiUrl(`/mcp-servers/${id}`), {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(input),
+      }),
+    ),
+  delete: async (id: string) => {
+    const response = await fetch(buildApiUrl(`/mcp-servers/${id}`), { method: 'DELETE' })
+    if (!response.ok) {
+      let message = `HTTP ${response.status}`
+      try {
+        const payload = await response.json()
+        if (payload?.error) message = payload.error
+      } catch { /* ignore */ }
+      throw new Error(message)
+    }
+  },
+  explore: async (id: string) =>
+    handleResponse<MCPServer>(
+      await fetch(buildApiUrl(`/mcp-servers/${id}/explore`), { method: 'POST' }),
+    ),
 }
 
 export const workflowApi = {

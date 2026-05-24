@@ -35,7 +35,7 @@ make lint-ui       # eslint
 # Format Go code
 make fmt
 
-# Initialise a project directory (writes config.yaml, .env, data/)
+# Initialise a project directory (writes config.toml, .env, data/)
 make init
 ```
 
@@ -59,7 +59,7 @@ HTTP request
 | Package | Role |
 |---|---|
 | `cmd/app` | Cobra CLI (`serve`, `init`, `version`). Wires config → services → HTTP server. |
-| `internal/config` | Viper-based config. Reads `config.yaml`, then env vars prefixed `APP_` (dots → underscores). |
+| `internal/config` | Viper-based config. Reads `config.toml` (or `config.yaml`), then env vars prefixed `APP_` (dots → underscores). |
 | `internal/server` | Mounts `/api` sub-router and serves the embedded SPA or proxies to Vite. |
 | `internal/api` | Chi router + handler. All REST endpoints live here. |
 | `internal/workflow` | Core engine: SQLite-backed state machine, task poller, activity execution, signals. |
@@ -88,15 +88,16 @@ React SPA in `ui/src/`, built with Vite + TypeScript + Tailwind + `@xyflow/react
 
 ### Configuration
 
-Config is resolved in order: defaults (`config.Default()`) → `config.yaml` → `.env` / `.env.local` → `APP_*` environment variables. The `--config` flag overrides the config file path.
+Config is resolved in order: defaults (`config.Default()`) → `config.toml` (or `config.yaml`) → `.env` / `.env.local` → `APP_*` environment variables. The `--config` flag overrides the config file path. Copy `example.config.toml` → `config.toml` to get started.
 
 Key config knobs for development:
 
-```yaml
-ui:
-  devProxyURL: http://localhost:5173   # used when --dev flag is passed
+```toml
+[ui]
+devProxyURL = "http://localhost:5173"   # used when --dev flag is passed
 
-workflow:
-  databasePath: data/workflows.db
-  scriptEnabled: false                 # enable to use the starlark script activity
+[workflow]
+databasePath  = "data/workflows.db"
+scriptEnabled = false                   # enable to use the starlark script activity
+openaiAPIKey  = ""                      # or set APP_WORKFLOW_OPENAI_API_KEY
 ```

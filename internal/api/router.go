@@ -39,6 +39,41 @@ func NewRouter(cfg config.Config, logger *slog.Logger, build version.Info, live 
 				h.DeleteScript(w, r, chi.URLParam(r, "scriptID"))
 			})
 		})
+		r.Get("/agents", h.ListAgents)
+		r.Post("/agents", h.CreateAgent)
+		r.Route("/agents/{agentID}", func(r chi.Router) {
+			r.Get("/", func(w http.ResponseWriter, r *http.Request) {
+				h.GetAgent(w, r, chi.URLParam(r, "agentID"))
+			})
+			r.Put("/", func(w http.ResponseWriter, r *http.Request) {
+				h.UpdateAgent(w, r, chi.URLParam(r, "agentID"))
+			})
+			r.Delete("/", func(w http.ResponseWriter, r *http.Request) {
+				h.DeleteAgent(w, r, chi.URLParam(r, "agentID"))
+			})
+			r.Get("/mcp-servers", func(w http.ResponseWriter, r *http.Request) {
+				h.GetAgentMCPServers(w, r, chi.URLParam(r, "agentID"))
+			})
+			r.Put("/mcp-servers", func(w http.ResponseWriter, r *http.Request) {
+				h.SetAgentMCPServers(w, r, chi.URLParam(r, "agentID"))
+			})
+		})
+		r.Get("/mcp-servers", h.ListMCPServers)
+		r.Post("/mcp-servers", h.CreateMCPServer)
+		r.Route("/mcp-servers/{serverID}", func(r chi.Router) {
+			r.Get("/", func(w http.ResponseWriter, r *http.Request) {
+				h.GetMCPServer(w, r, chi.URLParam(r, "serverID"))
+			})
+			r.Put("/", func(w http.ResponseWriter, r *http.Request) {
+				h.UpdateMCPServer(w, r, chi.URLParam(r, "serverID"))
+			})
+			r.Delete("/", func(w http.ResponseWriter, r *http.Request) {
+				h.DeleteMCPServer(w, r, chi.URLParam(r, "serverID"))
+			})
+			r.Post("/explore", func(w http.ResponseWriter, r *http.Request) {
+				h.ExploreMCPServer(w, r, chi.URLParam(r, "serverID"))
+			})
+		})
 		r.Get("/workflows/activities", h.ListWorkflowActivities)
 		r.Get("/workflows", h.ListWorkflows)
 		r.Get("/workflows/events", h.ListWorkflowOperations)

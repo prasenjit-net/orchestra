@@ -21,8 +21,8 @@ import {
 } from '@xyflow/react'
 import { AlertCircle, ArrowLeft, CheckCircle2, ChevronDown, ChevronRight, Clock3, FileText, Globe, Grip, Save, Send, SquareTerminal, Trash2, TriangleAlert, X } from 'lucide-react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
-import { scriptsApi, workflowApi } from '../services/api'
-import type { Script, WorkflowActivity, WorkflowDefinitionDocument } from '../types'
+import { agentsApi, scriptsApi, workflowApi } from '../services/api'
+import type { Agent, Script, WorkflowActivity, WorkflowDefinitionDocument } from '../types'
 
 type InputRow = {
   id: string
@@ -572,6 +572,97 @@ function ScriptActivityFields({
   )
 }
 
+function AgentActivityFields({
+  node,
+  payload,
+  setField,
+  onUpdate,
+}: {
+  node: ActivityFlowNode
+  payload: unknown
+  setField: (key: string, value: string, options?: { removeWhenBlank?: boolean }) => void
+  onUpdate: (updater: (data: ActivityNodeData) => ActivityNodeData) => void
+}) {
+  const agentsQuery = useQuery({
+    queryKey: ['agents'],
+    queryFn: agentsApi.list,
+  })
+
+  const agents: Agent[] = agentsQuery.data?.agents ?? []
+  const selectedAgentId = findInputRowValue(node.data.inputRows, 'agentId')
+  const selectedAgent = agents.find((a) => a.id === selectedAgentId)
+
+  const selectAgent = (agent: Agent) => {
+    onUpdate((data) => {
+      const rows = upsertInputRow(data.inputRows, 'agentId', agent.id)
+      return { ...data, inputRows: rows }
+    })
+  }
+
+  return (
+    <div className="space-y-3">
+      <div>
+        <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wide text-gray-500 dark:text-slate-400">Agent</label>
+        <select
+          value={selectedAgentId}
+          onChange={(event) => {
+            const a = agents.find((ag) => ag.id === event.target.value)
+            if (a) selectAgent(a)
+          }}
+          className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2.5 text-sm text-gray-900 outline-none transition-colors focus:border-primary-500 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
+        >
+          <option value="">— choose a saved agent —</option>
+          {agents.map((a) => (
+            <option key={a.id} value={a.id}>
+              {a.name} ({a.model})
+            </option>
+          ))}
+        </select>
+      </div>
+      {selectedAgent ? (
+        <div className="rounded-lg border border-gray-200 bg-gray-50 p-3 text-[11px] dark:border-slate-700 dark:bg-slate-900">
+          <p className="font-semibold text-gray-700 dark:text-slate-300">{selectedAgent.model}</p>
+          {selectedAgent.systemPrompt ? (
+            <p className="mt-1 line-clamp-3 text-gray-500 dark:text-slate-400">{selectedAgent.systemPrompt}</p>
+          ) : null}
+        </div>
+      ) : null}
+      <div>
+        <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wide text-gray-500 dark:text-slate-400">Prompt</label>
+        <textarea
+          rows={4}
+          value={String((payload as Record<string, unknown>).prompt ?? '')}
+          onChange={(event) => setField('prompt', event.target.value)}
+          placeholder="Summarize the following: {{.input}}"
+          className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2.5 text-sm text-gray-900 outline-none transition-colors focus:border-primary-500 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
+        />
+        <p className="mt-1 text-[11px] text-gray-400 dark:text-slate-500">Go template — workflow context is available as <span className="font-mono">.</span></p>
+      </div>
+      <div>
+        <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wide text-gray-500 dark:text-slate-400">Messages (conversation history JSON)</label>
+        <textarea
+          rows={4}
+          value={formatStructuredEditorValue((payload as Record<string, unknown>).messages)}
+          onChange={(event) => setField('messages', event.target.value, { removeWhenBlank: true })}
+          placeholder='[{"role":"assistant","content":"Hello!"}]'
+          className="w-full rounded-lg border border-gray-200 bg-slate-950 px-3 py-2 font-mono text-sm text-slate-100 outline-none transition-colors focus:border-primary-500 dark:border-slate-700"
+        />
+        <p className="mt-1 text-[11px] text-gray-400 dark:text-slate-500">Optional prior turns injected before the prompt. Leave blank for single-turn.</p>
+      </div>
+      <div>
+        <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wide text-gray-500 dark:text-slate-400">Data JSON</label>
+        <textarea
+          rows={3}
+          value={formatStructuredEditorValue((payload as Record<string, unknown>).data)}
+          onChange={(event) => setField('data', event.target.value, { removeWhenBlank: true })}
+          placeholder='{"key":"value"}'
+          className="w-full rounded-lg border border-gray-200 bg-slate-950 px-3 py-2 font-mono text-sm text-slate-100 outline-none transition-colors focus:border-primary-500 dark:border-slate-700"
+        />
+      </div>
+    </div>
+  )
+}
+
 function ActivityPropertiesModal({
   node,
   contextReferences,
@@ -830,6 +921,8 @@ function ActivityPropertiesModal({
         )
       case 'script':
         return <ScriptActivityFields node={node} payload={payload} setField={setField} onUpdate={onUpdate} />
+      case 'agent':
+        return <AgentActivityFields node={node} payload={payload} setField={setField} onUpdate={onUpdate} />
       default:
         return renderGenericRows()
     }

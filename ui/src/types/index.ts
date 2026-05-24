@@ -221,3 +221,64 @@ export interface CreateScriptInput {
 export interface ScriptsResponse {
   scripts: Script[]
 }
+
+export interface Agent {
+  id: string
+  name: string
+  description: string
+  model: string
+  systemPrompt: string
+  maxTokens?: number
+  temperature?: number
+  tools?: unknown[]
+  mcpServerIds?: string[]
+  createdAt: string
+  updatedAt: string
+}
+
+export interface CreateAgentInput {
+  name: string
+  description: string
+  model: string
+  systemPrompt: string
+  maxTokens?: number
+  temperature?: number
+  tools?: unknown[]
+}
+
+export interface AgentsResponse {
+  agents: Agent[]
+}
+
+export interface MCPTool {
+  name: string
+  description?: string
+  inputSchema: Record<string, unknown>
+}
+
+export interface MCPServer {
+  id: string
+  name: string
+  description: string
+  group: string
+  url: string
+  headers?: Record<string, string>
+  enabled: boolean
+  tools?: MCPTool[]
+  exploredAt?: string
+  createdAt: string
+  updatedAt: string
+}
+
+export interface CreateMCPServerInput {
+  name: string
+  description: string
+  group: string
+  url: string
+  headers?: Record<string, string>
+  enabled: boolean
+}
+
+export interface MCPServersResponse {
+  servers: MCPServer[]
+}

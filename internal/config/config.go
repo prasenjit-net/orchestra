@@ -53,6 +53,7 @@ type WorkflowConfig struct {
 	ScriptMaxSourceBytes    int           `mapstructure:"scriptMaxSourceBytes" yaml:"scriptMaxSourceBytes"`
 	ScriptMaxOutputBytes    int           `mapstructure:"scriptMaxOutputBytes" yaml:"scriptMaxOutputBytes"`
 	ScriptMaxExecutionSteps uint64        `mapstructure:"scriptMaxExecutionSteps" yaml:"scriptMaxExecutionSteps"`
+	OpenAIAPIKey            string        `mapstructure:"openaiAPIKey" yaml:"openaiAPIKey"`
 }
 
 func Default() Config {
@@ -142,7 +143,7 @@ func InitProject(dir string, force bool) error {
 	}
 
 	files := map[string]string{
-		filepath.Join(dir, "config.yaml"):  DefaultConfigYAML,
+		filepath.Join(dir, "config.toml"):  DefaultConfigTOML,
 		filepath.Join(dir, ".env.example"): DefaultEnvExample,
 		filepath.Join(dir, ".env"):         DefaultEnvExample,
 	}
@@ -173,37 +174,38 @@ func fileExists(path string) bool {
 	return err == nil
 }
 
-const DefaultConfigYAML = `app:
-  name: Orchestra
-  env: development
-  url: http://localhost:8080
-  description: Durable workflow engine with Go at the repo root and an embedded React UI.
+const DefaultConfigTOML = `[app]
+name        = "Orchestra"
+env         = "development"
+url         = "http://localhost:8080"
+description = "Durable workflow engine with Go at the repo root and an embedded React UI."
 
-server:
-  host: 0.0.0.0
-  port: 8080
-  readTimeout: 15s
-  writeTimeout: 15s
-  idleTimeout: 60s
-  shutdownTimeout: 10s
+[server]
+host            = "0.0.0.0"
+port            = 8080
+readTimeout     = "15s"
+writeTimeout    = "15s"
+idleTimeout     = "60s"
+shutdownTimeout = "10s"
 
-logging:
-  level: info
-  format: text
+[logging]
+level  = "info"
+format = "text"
 
-ui:
-  devProxyURL: http://localhost:5173
+[ui]
+devProxyURL = "http://localhost:5173"
 
-workflow:
-  enabled: true
-  databasePath: data/workflows.db
-  pollInterval: 1s
-  leaseDuration: 30s
-  scriptEnabled: false
-  scriptTimeout: 250ms
-  scriptMaxSourceBytes: 16384
-  scriptMaxOutputBytes: 262144
-  scriptMaxExecutionSteps: 25000
+[workflow]
+enabled                 = true
+databasePath            = "data/workflows.db"
+pollInterval            = "1s"
+leaseDuration           = "30s"
+scriptEnabled           = false
+scriptTimeout           = "250ms"
+scriptMaxSourceBytes    = 16384
+scriptMaxOutputBytes    = 262144
+scriptMaxExecutionSteps = 25000
+# openaiAPIKey = ""   # set via APP_WORKFLOW_OPENAI_API_KEY env var or here
 `
 
 const DefaultEnvExample = `APP_ENV=development
@@ -222,4 +224,5 @@ APP_WORKFLOW_SCRIPT_TIMEOUT=250ms
 APP_WORKFLOW_SCRIPT_MAX_SOURCE_BYTES=16384
 APP_WORKFLOW_SCRIPT_MAX_OUTPUT_BYTES=262144
 APP_WORKFLOW_SCRIPT_MAX_EXECUTION_STEPS=25000
+APP_WORKFLOW_OPENAI_API_KEY=
 `
