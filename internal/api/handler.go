@@ -134,6 +134,9 @@ func (h *Handler) WorkflowStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	heartbeat := time.NewTicker(30 * time.Second)
+	defer heartbeat.Stop()
+
 	for {
 		select {
 		case <-r.Context().Done():
@@ -145,6 +148,10 @@ func (h *Handler) WorkflowStream(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			if err := wsjson.Write(r.Context(), conn, event); err != nil {
+				return
+			}
+		case <-heartbeat.C:
+			if err := wsjson.Write(r.Context(), conn, livebus.NewEvent("heartbeat", "connection", "", nil)); err != nil {
 				return
 			}
 		}

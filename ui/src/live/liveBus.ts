@@ -4,9 +4,14 @@ import type { WorkflowLiveEvent, WorkflowLiveStatus } from '../types'
 type EventListener = (event: WorkflowLiveEvent) => void
 type StatusListener = (status: WorkflowLiveStatus) => void
 
+const WATCHDOG_INTERVAL_MS = 10_000
+const WATCHDOG_TIMEOUT_MS = 45_000
+
 class LiveBus {
   private socket: WebSocket | null = null
   private reconnectTimer: number | null = null
+  private watchdogTimer: number | null = null
+  private lastMessageAt = 0
   private reconnectAttempts = 0
   private connected = false
   private status: WorkflowLiveStatus = 'disconnected'
@@ -24,6 +29,7 @@ class LiveBus {
 
   disconnect() {
     this.connected = false
+    this.clearWatchdog()
     if (this.reconnectTimer) {
       window.clearTimeout(this.reconnectTimer)
       this.reconnectTimer = null
@@ -31,6 +37,24 @@ class LiveBus {
     this.socket?.close()
     this.socket = null
     this.setStatus('disconnected')
+  }
+
+  private startWatchdog() {
+    this.clearWatchdog()
+    this.lastMessageAt = Date.now()
+    this.watchdogTimer = window.setInterval(() => {
+      if (this.status === 'connected' && Date.now() - this.lastMessageAt > WATCHDOG_TIMEOUT_MS) {
+        // Silent connection death — force reconnect
+        this.socket?.close()
+      }
+    }, WATCHDOG_INTERVAL_MS)
+  }
+
+  private clearWatchdog() {
+    if (this.watchdogTimer !== null) {
+      window.clearInterval(this.watchdogTimer)
+      this.watchdogTimer = null
+    }
   }
 
   subscribe(listener: EventListener) {
@@ -63,11 +87,15 @@ class LiveBus {
     this.socket.onopen = () => {
       this.reconnectAttempts = 0
       this.setStatus('connected')
+      this.startWatchdog()
     }
 
     this.socket.onmessage = (message) => {
+      this.lastMessageAt = Date.now()
       try {
         const event = JSON.parse(message.data) as WorkflowLiveEvent
+        // heartbeat events keep the connection alive; no need to broadcast them
+        if (event.type === 'heartbeat') return
         this.eventListeners.forEach((listener) => listener(event))
       } catch {
         // ignore malformed bus events
@@ -80,6 +108,7 @@ class LiveBus {
 
     this.socket.onclose = () => {
       this.socket = null
+      this.clearWatchdog()
       if (!this.connected) {
         this.setStatus('disconnected')
         return
