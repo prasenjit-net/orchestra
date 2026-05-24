@@ -122,6 +122,8 @@ export default function AgentEditorPage() {
     })
   }
 
+  const monacoTheme = useMonacoTheme()
+
   const handleDelete = () => {
     if (!window.confirm('Delete this agent? Workflow steps that reference it will fail at runtime.')) return
     deleteMutation.mutate()
@@ -134,7 +136,6 @@ export default function AgentEditorPage() {
     return <div className="p-8 text-sm text-red-600 dark:text-red-300">Could not load agent.</div>
   }
 
-  const monacoTheme = useMonacoTheme()
   const isSaving = createMutation.isPending || updateMutation.isPending
 
   return (

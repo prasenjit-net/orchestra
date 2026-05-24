@@ -111,6 +111,8 @@ export default function ScriptEditorPage() {
     }
   }
 
+  const monacoTheme = useMonacoTheme()
+
   const handleDelete = () => {
     if (!window.confirm('Delete this script? Workflow steps that reference it will fail at runtime.')) {
       return
@@ -126,7 +128,6 @@ export default function ScriptEditorPage() {
     return <div className="p-8 text-sm text-red-600 dark:text-red-300">Could not load script.</div>
   }
 
-  const monacoTheme = useMonacoTheme()
   const isSaving = createMutation.isPending || updateMutation.isPending
 
   return (
