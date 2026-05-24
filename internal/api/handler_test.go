@@ -192,16 +192,16 @@ func TestRetryWorkflowTaskEndpoint(t *testing.T) {
 		t.Fatalf("RunOnce returned error: %v", err)
 	}
 
-	tasks, err := service.ListTasks(context.Background())
+	tasksResult, err := service.ListTasks(context.Background(), workflow.ListTasksInput{})
 	if err != nil {
 		t.Fatalf("ListTasks returned error: %v", err)
 	}
-	if len(tasks) == 0 {
+	if len(tasksResult.Tasks) == 0 {
 		t.Fatal("expected failed task to exist")
 	}
 
 	router := NewRouter(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), version.Current(), livebus.New(), service)
-	req := httptest.NewRequest(http.MethodPost, "/workflows/tasks/"+strconv.FormatInt(tasks[0].ID, 10)+"/retry", nil)
+	req := httptest.NewRequest(http.MethodPost, "/workflows/tasks/"+strconv.FormatInt(tasksResult.Tasks[0].ID, 10)+"/retry", nil)
 	res := httptest.NewRecorder()
 
 	router.ServeHTTP(res, req)
@@ -239,15 +239,15 @@ func TestWorkflowOperationsEndpoint(t *testing.T) {
 		t.Fatalf("StartWorkflow returned error: %v", err)
 	}
 
-	tasks, err := service.ListTasks(context.Background())
+	tasksResult, err := service.ListTasks(context.Background(), workflow.ListTasksInput{})
 	if err != nil {
 		t.Fatalf("ListTasks returned error: %v", err)
 	}
-	if len(tasks) == 0 {
+	if len(tasksResult.Tasks) == 0 {
 		t.Fatal("expected task to exist")
 	}
 
-	if _, err := service.PauseTask(context.Background(), tasks[0].ID); err != nil {
+	if _, err := service.PauseTask(context.Background(), tasksResult.Tasks[0].ID); err != nil {
 		t.Fatalf("PauseTask returned error: %v", err)
 	}
 

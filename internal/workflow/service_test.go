@@ -286,15 +286,15 @@ func TestPauseAndResumeTask(t *testing.T) {
 		t.Fatalf("StartWorkflow returned error: %v", err)
 	}
 
-	tasks, err := service.ListTasks(context.Background())
+	tasksResult, err := service.ListTasks(context.Background(), ListTasksInput{})
 	if err != nil {
 		t.Fatalf("ListTasks returned error: %v", err)
 	}
-	if len(tasks) == 0 {
+	if len(tasksResult.Tasks) == 0 {
 		t.Fatal("expected at least one task")
 	}
 
-	task, err := service.PauseTask(context.Background(), tasks[0].ID)
+	task, err := service.PauseTask(context.Background(), tasksResult.Tasks[0].ID)
 	if err != nil {
 		t.Fatalf("PauseTask returned error: %v", err)
 	}
@@ -354,15 +354,15 @@ func TestRetryFailedTask(t *testing.T) {
 		t.Fatalf("RunOnce returned error: %v", err)
 	}
 
-	tasks, err := service.ListTasks(context.Background())
+	tasksResult, err := service.ListTasks(context.Background(), ListTasksInput{})
 	if err != nil {
 		t.Fatalf("ListTasks returned error: %v", err)
 	}
-	if len(tasks) == 0 {
+	if len(tasksResult.Tasks) == 0 {
 		t.Fatal("expected failed task")
 	}
 
-	task, err := service.RetryTask(context.Background(), tasks[0].ID)
+	task, err := service.RetryTask(context.Background(), tasksResult.Tasks[0].ID)
 	if err != nil {
 		t.Fatalf("RetryTask returned error: %v", err)
 	}
@@ -417,12 +417,12 @@ func TestDelayActivityWaitsDurably(t *testing.T) {
 		t.Fatal("expected first delayed task to process")
 	}
 
-	tasks, err := service.ListTasks(context.Background())
+	tasksResult, err := service.ListTasks(context.Background(), ListTasksInput{})
 	if err != nil {
 		t.Fatalf("ListTasks returned error: %v", err)
 	}
-	if len(tasks) == 0 || tasks[0].Status != StatusPending {
-		t.Fatalf("expected delayed task to remain pending, got %+v", tasks)
+	if len(tasksResult.Tasks) == 0 || tasksResult.Tasks[0].Status != StatusPending {
+		t.Fatalf("expected delayed task to remain pending, got %+v", tasksResult.Tasks)
 	}
 
 	time.Sleep(70 * time.Millisecond)
@@ -1059,12 +1059,12 @@ func TestWaitSignalActivityCompletesAfterSignal(t *testing.T) {
 	if _, err := service.RunOnce(context.Background()); err != nil {
 		t.Fatalf("RunOnce returned error: %v", err)
 	}
-	tasks, err := service.ListTasks(context.Background())
+	tasksResult, err := service.ListTasks(context.Background(), ListTasksInput{})
 	if err != nil {
 		t.Fatalf("ListTasks returned error: %v", err)
 	}
-	if len(tasks) != 1 || tasks[0].Status != StatusWaiting {
-		t.Fatalf("expected waiting task after initial signal wait, got %+v", tasks)
+	if len(tasksResult.Tasks) != 1 || tasksResult.Tasks[0].Status != StatusWaiting {
+		t.Fatalf("expected waiting task after initial signal wait, got %+v", tasksResult.Tasks)
 	}
 	processed, err := service.RunOnce(context.Background())
 	if err != nil {
@@ -1198,12 +1198,12 @@ func TestCancelWorkflowCancelsOpenTasks(t *testing.T) {
 		t.Fatalf("expected canceled workflow, got %s", instance.Status)
 	}
 
-	tasks, err := service.ListTasks(context.Background())
+	tasksResult, err := service.ListTasks(context.Background(), ListTasksInput{})
 	if err != nil {
 		t.Fatalf("ListTasks returned error: %v", err)
 	}
-	if len(tasks) == 0 || tasks[0].Status != StatusCanceled {
-		t.Fatalf("expected canceled task, got %+v", tasks)
+	if len(tasksResult.Tasks) == 0 || tasksResult.Tasks[0].Status != StatusCanceled {
+		t.Fatalf("expected canceled task, got %+v", tasksResult.Tasks)
 	}
 }
 
