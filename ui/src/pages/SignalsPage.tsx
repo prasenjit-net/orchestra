@@ -89,6 +89,11 @@ export default function SignalsPage() {
     onSuccess: (_, variables) => {
       setPageError(null)
       setNotice(`Sent ${variables.signalName} to ${variables.workflowId}.`)
+      // Optimistically remove the signaled workflow so the list updates immediately
+      // without waiting for the backend worker to process the signal.
+      queryClient.setQueryData<WaitingSignalWorkflow[]>(['waiting-signal-workflows'], (old) =>
+        (old ?? []).filter((item) => item.workflow.id !== variables.workflowId),
+      )
       void Promise.all([
         queryClient.invalidateQueries({ queryKey: ['workflows'] }),
         queryClient.invalidateQueries({ queryKey: ['waiting-signal-workflows'] }),
@@ -108,6 +113,8 @@ export default function SignalsPage() {
     onSuccess: (count) => {
       setPageError(null)
       setNotice(`Sent signals to ${count} waiting workflow${count === 1 ? '' : 's'}.`)
+      // Optimistically clear the list.
+      queryClient.setQueryData<WaitingSignalWorkflow[]>(['waiting-signal-workflows'], [])
       void Promise.all([
         queryClient.invalidateQueries({ queryKey: ['workflows'] }),
         queryClient.invalidateQueries({ queryKey: ['waiting-signal-workflows'] }),
