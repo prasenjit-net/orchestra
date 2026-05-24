@@ -230,7 +230,6 @@ export interface Agent {
   systemPrompt: string
   maxTokens?: number
   temperature?: number
-  tools?: unknown[]
   mcpServerIds?: string[]
   createdAt: string
   updatedAt: string
@@ -243,7 +242,6 @@ export interface CreateAgentInput {
   systemPrompt: string
   maxTokens?: number
   temperature?: number
-  tools?: unknown[]
 }
 
 export interface AgentsResponse {

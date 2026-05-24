@@ -3,7 +3,6 @@ package workflow
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -17,7 +16,6 @@ type Agent struct {
 	SystemPrompt string    `json:"systemPrompt"`
 	MaxTokens    int       `json:"maxTokens,omitempty"`
 	Temperature  float64   `json:"temperature,omitempty"`
-	Tools        []any     `json:"tools,omitempty"`
 	MCPServerIDs []string  `json:"mcpServerIds,omitempty"`
 	CreatedAt    time.Time `json:"createdAt"`
 	UpdatedAt    time.Time `json:"updatedAt"`
@@ -30,7 +28,6 @@ type CreateAgentInput struct {
 	SystemPrompt string  `json:"systemPrompt"`
 	MaxTokens    int     `json:"maxTokens,omitempty"`
 	Temperature  float64 `json:"temperature,omitempty"`
-	Tools        []any   `json:"tools,omitempty"`
 }
 
 type AgentsResponse struct {
@@ -44,19 +41,11 @@ func (s *Service) CreateAgent(ctx context.Context, input CreateAgentInput) (Agen
 	if model == "" {
 		model = "gpt-4o"
 	}
-	tools := input.Tools
-	if tools == nil {
-		tools = []any{}
-	}
-	toolsJSON, err := json.Marshal(tools)
-	if err != nil {
-		return Agent{}, fmt.Errorf("encode tools: %w", err)
-	}
 	ts := formatTime(now)
 	if _, err := s.db.ExecContext(ctx, `
-		INSERT INTO agents (id, name, description, model, system_prompt, max_tokens, temperature, tools_json, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, id, input.Name, input.Description, model, input.SystemPrompt, input.MaxTokens, input.Temperature, string(toolsJSON), ts, ts); err != nil {
+		INSERT INTO agents (id, name, description, model, system_prompt, max_tokens, temperature, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, id, input.Name, input.Description, model, input.SystemPrompt, input.MaxTokens, input.Temperature, ts, ts); err != nil {
 		return Agent{}, fmt.Errorf("insert agent: %w", err)
 	}
 	agent := Agent{
@@ -67,7 +56,6 @@ func (s *Service) CreateAgent(ctx context.Context, input CreateAgentInput) (Agen
 		SystemPrompt: input.SystemPrompt,
 		MaxTokens:    input.MaxTokens,
 		Temperature:  input.Temperature,
-		Tools:        tools,
 		CreatedAt:    now,
 		UpdatedAt:    now,
 	}
@@ -77,7 +65,7 @@ func (s *Service) CreateAgent(ctx context.Context, input CreateAgentInput) (Agen
 
 func (s *Service) ListAgents(ctx context.Context) ([]Agent, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, name, description, model, system_prompt, max_tokens, temperature, tools_json, created_at, updated_at
+		SELECT id, name, description, model, system_prompt, max_tokens, temperature, created_at, updated_at
 		FROM agents ORDER BY created_at DESC
 	`)
 	if err != nil {
@@ -104,7 +92,7 @@ func (s *Service) ListAgents(ctx context.Context) ([]Agent, error) {
 
 func (s *Service) GetAgent(ctx context.Context, id string) (Agent, error) {
 	row := s.db.QueryRowContext(ctx, `
-		SELECT id, name, description, model, system_prompt, max_tokens, temperature, tools_json, created_at, updated_at
+		SELECT id, name, description, model, system_prompt, max_tokens, temperature, created_at, updated_at
 		FROM agents WHERE id = ?
 	`, id)
 	ag, err := scanAgent(row)
@@ -127,19 +115,11 @@ func (s *Service) UpdateAgent(ctx context.Context, id string, input CreateAgentI
 	if model == "" {
 		model = "gpt-4o"
 	}
-	tools := input.Tools
-	if tools == nil {
-		tools = []any{}
-	}
-	toolsJSON, err := json.Marshal(tools)
-	if err != nil {
-		return Agent{}, fmt.Errorf("encode tools: %w", err)
-	}
 	ts := formatTime(now)
 	res, err := s.db.ExecContext(ctx, `
-		UPDATE agents SET name=?, description=?, model=?, system_prompt=?, max_tokens=?, temperature=?, tools_json=?, updated_at=?
+		UPDATE agents SET name=?, description=?, model=?, system_prompt=?, max_tokens=?, temperature=?, updated_at=?
 		WHERE id=?
-	`, input.Name, input.Description, model, input.SystemPrompt, input.MaxTokens, input.Temperature, string(toolsJSON), ts, id)
+	`, input.Name, input.Description, model, input.SystemPrompt, input.MaxTokens, input.Temperature, ts, id)
 	if err != nil {
 		return Agent{}, fmt.Errorf("update agent: %w", err)
 	}
@@ -178,17 +158,13 @@ type agentScanner interface {
 
 func scanAgent(row agentScanner) (Agent, error) {
 	var ag Agent
-	var toolsJSON string
 	var createdAt, updatedAt string
 	if err := row.Scan(&ag.ID, &ag.Name, &ag.Description, &ag.Model, &ag.SystemPrompt,
-		&ag.MaxTokens, &ag.Temperature, &toolsJSON, &createdAt, &updatedAt); err != nil {
+		&ag.MaxTokens, &ag.Temperature, &createdAt, &updatedAt); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return Agent{}, ErrNotFound
 		}
 		return Agent{}, fmt.Errorf("scan agent: %w", err)
-	}
-	if err := json.Unmarshal([]byte(toolsJSON), &ag.Tools); err != nil {
-		ag.Tools = []any{}
 	}
 	ag.CreatedAt = mustParseTime(createdAt)
 	ag.UpdatedAt = mustParseTime(updatedAt)

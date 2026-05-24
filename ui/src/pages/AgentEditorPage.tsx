@@ -5,27 +5,6 @@ import { Link, useNavigate, useParams } from 'react-router-dom'
 import { agentsApi, mcpServersApi } from '../services/api'
 import type { CreateAgentInput } from '../types'
 
-const TOOLS_PLACEHOLDER = JSON.stringify(
-  [
-    {
-      type: 'function',
-      function: {
-        name: 'get_weather',
-        description: 'Get the current weather in a given location',
-        parameters: {
-          type: 'object',
-          properties: {
-            location: { type: 'string', description: 'City and state, e.g. San Francisco, CA' },
-          },
-          required: ['location'],
-        },
-      },
-    },
-  ],
-  null,
-  2,
-)
-
 export default function AgentEditorPage() {
   const { agentId } = useParams<{ agentId: string }>()
   const isNew = !agentId || agentId === 'new'
@@ -38,8 +17,6 @@ export default function AgentEditorPage() {
   const [systemPrompt, setSystemPrompt] = useState('')
   const [maxTokens, setMaxTokens] = useState('')
   const [temperature, setTemperature] = useState('')
-  const [toolsRaw, setToolsRaw] = useState('')
-  const [toolsError, setToolsError] = useState<string | null>(null)
   const [pageError, setPageError] = useState<string | null>(null)
   const [saved, setSaved] = useState(false)
   const [checkedMCPIds, setCheckedMCPIds] = useState<Set<string>>(new Set())
@@ -70,7 +47,6 @@ export default function AgentEditorPage() {
       setSystemPrompt(a.systemPrompt)
       setMaxTokens(a.maxTokens ? String(a.maxTokens) : '')
       setTemperature(a.temperature ? String(a.temperature) : '')
-      setToolsRaw(a.tools && a.tools.length > 0 ? JSON.stringify(a.tools, null, 2) : '')
     }
   }, [agentQuery.data])
 
@@ -80,34 +56,14 @@ export default function AgentEditorPage() {
     }
   }, [agentMCPQuery.data])
 
-  const parseTools = (): { tools: unknown[]; error: string | null } => {
-    if (!toolsRaw.trim()) return { tools: [], error: null }
-    try {
-      const parsed = JSON.parse(toolsRaw)
-      if (!Array.isArray(parsed)) return { tools: [], error: 'Tools must be a JSON array.' }
-      return { tools: parsed, error: null }
-    } catch {
-      return { tools: [], error: 'Invalid JSON in tools field.' }
-    }
-  }
-
-  const buildInput = (): CreateAgentInput | null => {
-    const { tools, error } = parseTools()
-    if (error) {
-      setToolsError(error)
-      return null
-    }
-    setToolsError(null)
-    return {
-      name: name.trim(),
-      description: description.trim(),
-      model: model.trim() || 'gpt-4o',
-      systemPrompt: systemPrompt.trim(),
-      maxTokens: maxTokens ? parseInt(maxTokens, 10) : 0,
-      temperature: temperature ? parseFloat(temperature) : 0,
-      tools,
-    }
-  }
+  const buildInput = (): CreateAgentInput => ({
+    name: name.trim(),
+    description: description.trim(),
+    model: model.trim() || 'gpt-4o',
+    systemPrompt: systemPrompt.trim(),
+    maxTokens: maxTokens ? parseInt(maxTokens, 10) : 0,
+    temperature: temperature ? parseFloat(temperature) : 0,
+  })
 
   const createMutation = useMutation({
     mutationFn: agentsApi.create,
@@ -117,15 +73,12 @@ export default function AgentEditorPage() {
       void queryClient.invalidateQueries({ queryKey: ['agents'] })
       navigate(`/agents/${agent.id}/editor`, { replace: true })
     },
-    onError: (error: Error) => {
-      setPageError(error.message)
-    },
+    onError: (error: Error) => setPageError(error.message),
   })
 
   const updateMutation = useMutation({
     mutationFn: (input: CreateAgentInput) => agentsApi.update(agentId!, input),
     onSuccess: async (agent) => {
-      // Persist MCP server attachments after the main agent save.
       await agentsApi.setMCPServers(agent.id, [...checkedMCPIds])
       setPageError(null)
       setSaved(true)
@@ -134,9 +87,7 @@ export default function AgentEditorPage() {
       void queryClient.setQueryData(['agent', agentId], agent)
       setTimeout(() => setSaved(false), 2000)
     },
-    onError: (error: Error) => {
-      setPageError(error.message)
-    },
+    onError: (error: Error) => setPageError(error.message),
   })
 
   const deleteMutation = useMutation({
@@ -145,24 +96,15 @@ export default function AgentEditorPage() {
       void queryClient.invalidateQueries({ queryKey: ['agents'] })
       navigate('/agents', { replace: true })
     },
-    onError: (error: Error) => {
-      setPageError(error.message)
-    },
+    onError: (error: Error) => setPageError(error.message),
   })
 
   const handleSave = () => {
     const input = buildInput()
-    if (!input) return
-    if (!input.name) {
-      setPageError('Name is required.')
-      return
-    }
+    if (!input.name) { setPageError('Name is required.'); return }
     setPageError(null)
-    if (isNew) {
-      createMutation.mutate(input)
-    } else {
-      updateMutation.mutate(input)
-    }
+    if (isNew) createMutation.mutate(input)
+    else updateMutation.mutate(input)
   }
 
   const toggleMCPServer = (id: string) => {
@@ -182,7 +124,6 @@ export default function AgentEditorPage() {
   if (!isNew && agentQuery.isLoading) {
     return <div className="p-8 text-sm text-gray-500 dark:text-slate-400">Loading agent…</div>
   }
-
   if (!isNew && agentQuery.error) {
     return <div className="p-8 text-sm text-red-600 dark:text-red-300">Could not load agent.</div>
   }
@@ -261,7 +202,7 @@ export default function AgentEditorPage() {
 
       {/* Canvas */}
       <div className="flex flex-1 overflow-hidden">
-        {/* Left panel — config */}
+        {/* Left panel */}
         <div className="flex w-80 shrink-0 flex-col gap-4 overflow-y-auto border-r border-gray-200 bg-white p-5 dark:border-slate-800 dark:bg-slate-900">
           <div>
             <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wide text-gray-500 dark:text-slate-400">Model</label>
@@ -285,7 +226,7 @@ export default function AgentEditorPage() {
               placeholder="0"
               className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-900 outline-none transition-colors focus:border-primary-500 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
             />
-            <p className="mt-1 text-[11px] text-gray-400 dark:text-slate-500">0 = deterministic, 2 = very creative. Leave blank to use model default.</p>
+            <p className="mt-1 text-[11px] text-gray-400 dark:text-slate-500">0 = deterministic, 2 = very creative. Blank uses model default.</p>
           </div>
           <div>
             <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wide text-gray-500 dark:text-slate-400">Max Tokens</label>
@@ -306,7 +247,7 @@ export default function AgentEditorPage() {
           </div>
         </div>
 
-        {/* Right panel — system prompt + tools */}
+        {/* Right panel */}
         <div className="flex flex-1 flex-col gap-4 overflow-y-auto p-5">
           <div className="flex flex-1 flex-col">
             <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wide text-gray-500 dark:text-slate-400">System Prompt</label>
@@ -317,29 +258,6 @@ export default function AgentEditorPage() {
               spellCheck={false}
               className="min-h-[200px] flex-1 resize-none rounded-lg border border-gray-200 bg-white p-4 text-sm leading-relaxed text-gray-900 outline-none transition-colors focus:border-primary-500 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
             />
-          </div>
-          <div>
-            <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wide text-gray-500 dark:text-slate-400">
-              Tools (OpenAI function-calling schema)
-            </label>
-            <textarea
-              value={toolsRaw}
-              onChange={(e) => {
-                setToolsRaw(e.target.value)
-                setToolsError(null)
-              }}
-              placeholder={TOOLS_PLACEHOLDER}
-              spellCheck={false}
-              rows={14}
-              className={`w-full resize-y rounded-lg border bg-white p-4 font-mono text-sm leading-relaxed text-gray-900 outline-none transition-colors focus:border-primary-500 dark:bg-slate-950 dark:text-slate-100 ${toolsError ? 'border-red-400 dark:border-red-600' : 'border-gray-200 dark:border-slate-700'}`}
-            />
-            {toolsError ? (
-              <p className="mt-1 text-[11px] text-red-600 dark:text-red-400">{toolsError}</p>
-            ) : (
-              <p className="mt-1 text-[11px] text-gray-400 dark:text-slate-500">
-                JSON array of OpenAI tool objects. Leave blank for text-only responses.
-              </p>
-            )}
           </div>
 
           {/* MCP Servers */}
@@ -376,6 +294,11 @@ export default function AgentEditorPage() {
                     {!srv.enabled ? (
                       <span className="shrink-0 rounded-full bg-gray-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-gray-500 dark:bg-slate-800 dark:text-slate-400">
                         disabled
+                      </span>
+                    ) : null}
+                    {srv.tools && srv.tools.length > 0 ? (
+                      <span className="shrink-0 text-[10px] text-gray-400 dark:text-slate-500">
+                        {srv.tools.length} tools
                       </span>
                     ) : null}
                   </label>

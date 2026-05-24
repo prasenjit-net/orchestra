@@ -166,8 +166,7 @@ func (a *agentActivity) Execute(ctx context.Context, req ActivityExecutionReques
 		}
 	}
 
-	// Merge static agent tools with MCP tools.
-	allTools := append(agent.Tools, mcpTools...)
+	allTools := mcpTools
 
 	// Build initial messages.
 	messages := []openAIMsg{}
