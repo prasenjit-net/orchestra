@@ -26,16 +26,34 @@ function flatKeys(obj: Record<string, unknown>, prefix = ''): string[] {
 
 export default function ContextExpressionPicker({ precedingSteps, signalNames = [], onSelect }: Props) {
   const [open, setOpen] = useState(false)
-  const ref = useRef<HTMLDivElement>(null)
+  const [dropdownPos, setDropdownPos] = useState<{ top: number; left: number }>({ top: 0, left: 0 })
+  const buttonRef = useRef<HTMLButtonElement>(null)
+  const dropdownRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     if (!open) return
     const handler = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false)
+      if (
+        buttonRef.current && !buttonRef.current.contains(e.target as Node) &&
+        dropdownRef.current && !dropdownRef.current.contains(e.target as Node)
+      ) {
+        setOpen(false)
+      }
     }
     document.addEventListener('mousedown', handler)
     return () => document.removeEventListener('mousedown', handler)
   }, [open])
+
+  const handleToggle = () => {
+    if (!open && buttonRef.current) {
+      const rect = buttonRef.current.getBoundingClientRect()
+      const dropdownHeight = 320
+      const spaceBelow = window.innerHeight - rect.bottom
+      const top = spaceBelow >= dropdownHeight ? rect.bottom + 4 : rect.top - dropdownHeight - 4
+      setDropdownPos({ top, left: rect.left })
+    }
+    setOpen((v) => !v)
+  }
 
   const pick = (expr: string) => {
     onSelect(expr)
@@ -43,18 +61,22 @@ export default function ContextExpressionPicker({ precedingSteps, signalNames = 
   }
 
   return (
-    <div className="relative shrink-0" ref={ref}>
+    <div className="shrink-0">
       <button
+        ref={buttonRef}
         type="button"
         title="Insert context expression"
-        onClick={() => setOpen((v) => !v)}
+        onClick={handleToggle}
         className="flex h-full items-center rounded-md border border-gray-200 bg-white px-1.5 text-[11px] font-mono font-semibold text-gray-500 transition-colors hover:border-primary-400 hover:text-primary-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-400 dark:hover:border-primary-500 dark:hover:text-primary-400"
       >
         <Braces className="h-3.5 w-3.5" />
       </button>
 
       {open && (
-        <div className="absolute left-0 top-full z-50 mt-1 w-72 overflow-hidden rounded-xl border border-gray-200 bg-white shadow-xl dark:border-slate-700 dark:bg-slate-900">
+        <div
+          ref={dropdownRef}
+          style={{ top: dropdownPos.top, left: dropdownPos.left }}
+          className="fixed z-[9999] w-72 overflow-hidden rounded-xl border border-gray-200 bg-white shadow-xl dark:border-slate-700 dark:bg-slate-900">
           <div className="max-h-80 overflow-y-auto">
             {/* Workflow */}
             <Section label="Workflow">
