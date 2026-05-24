@@ -15,7 +15,7 @@ const navItems = [
   { to: '/workflows', label: 'Workflows', icon: Workflow },
   { to: '/scripts', label: 'Scripts', icon: Code2 },
   { to: '/agents', label: 'Agents', icon: Bot },
-  { to: '/mcp-servers', label: 'Connectors', icon: Server },
+  { to: '/connectors', label: 'Connectors', icon: Server },
   { to: '/runs', label: 'Runs', icon: Play },
   { to: '/signals', label: 'Signals', icon: BellRing },
   { to: '/queues', label: 'Queues', icon: ListChecks },

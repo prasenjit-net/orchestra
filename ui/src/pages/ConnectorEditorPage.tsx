@@ -12,9 +12,10 @@ function makeHeaderRow(key = '', value = ''): HeaderRow {
   return { id: `${Date.now()}-${Math.random()}`, key, value }
 }
 
-export default function McpServerEditorPage() {
-  const { serverId } = useParams<{ serverId: string }>()
-  const isNew = !serverId || serverId === 'new'
+export default function ConnectorEditorPage() {
+  const { connectorId } = useParams<{ connectorId: string }>()
+  const serverId = connectorId  // alias used by API calls
+  const isNew = !connectorId || connectorId === 'new'
   const navigate = useNavigate()
   const queryClient = useQueryClient()
 
@@ -28,7 +29,7 @@ export default function McpServerEditorPage() {
   const [saved, setSaved] = useState(false)
 
   const serverQuery = useQuery({
-    queryKey: ['mcp-server', serverId],
+    queryKey: ['connector', connectorId],
     queryFn: () => mcpServersApi.get(serverId!),
     enabled: !isNew,
   })
@@ -69,8 +70,8 @@ export default function McpServerEditorPage() {
     onSuccess: (srv) => {
       setPageError(null)
       setSaved(true)
-      void queryClient.invalidateQueries({ queryKey: ['mcp-servers'] })
-      navigate(`/mcp-servers/${srv.id}/editor`, { replace: true })
+      void queryClient.invalidateQueries({ queryKey: ['connectors'] })
+      navigate(`/connectors/${srv.id}/editor`, { replace: true })
     },
     onError: (error: Error) => setPageError(error.message),
   })
@@ -80,8 +81,8 @@ export default function McpServerEditorPage() {
     onSuccess: (srv) => {
       setPageError(null)
       setSaved(true)
-      void queryClient.invalidateQueries({ queryKey: ['mcp-servers'] })
-      void queryClient.setQueryData(['mcp-server', serverId], srv)
+      void queryClient.invalidateQueries({ queryKey: ['connectors'] })
+      void queryClient.setQueryData(['connector', connectorId], srv)
       setTimeout(() => setSaved(false), 2000)
     },
     onError: (error: Error) => setPageError(error.message),
@@ -90,8 +91,8 @@ export default function McpServerEditorPage() {
   const deleteMutation = useMutation({
     mutationFn: () => mcpServersApi.delete(serverId!),
     onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ['mcp-servers'] })
-      navigate('/mcp-servers', { replace: true })
+      void queryClient.invalidateQueries({ queryKey: ['connectors'] })
+      navigate('/connectors', { replace: true })
     },
     onError: (error: Error) => setPageError(error.message),
   })
@@ -100,8 +101,8 @@ export default function McpServerEditorPage() {
     mutationFn: () => mcpServersApi.explore(serverId!),
     onSuccess: (srv) => {
       setPageError(null)
-      void queryClient.invalidateQueries({ queryKey: ['mcp-servers'] })
-      void queryClient.setQueryData(['mcp-server', serverId], srv)
+      void queryClient.invalidateQueries({ queryKey: ['connectors'] })
+      void queryClient.setQueryData(['connector', connectorId], srv)
     },
     onError: (error: Error) => setPageError(`Explore failed: ${error.message}`),
   })
@@ -143,7 +144,7 @@ export default function McpServerEditorPage() {
         <div className="flex items-center justify-between gap-4">
           <div className="flex items-center gap-3">
             <Link
-              to="/mcp-servers"
+              to="/connectors"
               className="inline-flex items-center gap-1.5 text-sm font-medium text-gray-500 transition-colors hover:text-gray-900 dark:text-slate-400 dark:hover:text-slate-100"
             >
               <ArrowLeft className="h-4 w-4" />

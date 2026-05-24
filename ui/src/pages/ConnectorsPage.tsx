@@ -4,20 +4,20 @@ import { useNavigate } from 'react-router-dom'
 import { mcpServersApi } from '../services/api'
 import { formatDate } from './workflowUi'
 
-export default function McpServersPage() {
+export default function ConnectorsPage() {
   const navigate = useNavigate()
 
   const serversQuery = useQuery({
-    queryKey: ['mcp-servers'],
+    queryKey: ['connectors'],
     queryFn: mcpServersApi.list,
   })
 
   if (serversQuery.isLoading) {
-    return <div className="p-8 text-sm text-gray-500 dark:text-slate-400">Loading MCP servers…</div>
+    return <div className="p-8 text-sm text-gray-500 dark:text-slate-400">Loading connectors…</div>
   }
 
   if (serversQuery.error) {
-    return <div className="p-8 text-sm text-red-600 dark:text-red-300">Unable to load MCP servers.</div>
+    return <div className="p-8 text-sm text-red-600 dark:text-red-300">Unable to load connectors.</div>
   }
 
   const servers = serversQuery.data?.servers ?? []
@@ -33,7 +33,7 @@ export default function McpServersPage() {
         </div>
         <button
           type="button"
-          onClick={() => navigate('/mcp-servers/new')}
+          onClick={() => navigate('/connectors/new')}
           className="inline-flex items-center gap-2 rounded-lg bg-primary-600 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-primary-700"
         >
           <Plus className="h-4 w-4" />
@@ -44,13 +44,13 @@ export default function McpServersPage() {
       {servers.length === 0 ? (
         <div className="flex flex-col items-center justify-center rounded-2xl border border-dashed border-gray-300 py-20 dark:border-slate-700">
           <Server className="mb-4 h-10 w-10 text-gray-300 dark:text-slate-600" />
-          <p className="text-sm font-medium text-gray-500 dark:text-slate-400">No MCP servers yet</p>
+          <p className="text-sm font-medium text-gray-500 dark:text-slate-400">No connectors yet</p>
           <p className="mt-1 text-xs text-gray-400 dark:text-slate-500">
-            Add an MCP server to give agents access to external tools.
+            Add a connector to give agents access to external tools.
           </p>
           <button
             type="button"
-            onClick={() => navigate('/mcp-servers/new')}
+            onClick={() => navigate('/connectors/new')}
             className="mt-6 inline-flex items-center gap-2 rounded-lg bg-primary-600 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-primary-700"
           >
             <Plus className="h-4 w-4" />
@@ -63,7 +63,7 @@ export default function McpServersPage() {
             <button
               key={srv.id}
               type="button"
-              onClick={() => navigate(`/mcp-servers/${srv.id}/editor`)}
+              onClick={() => navigate(`/connectors/${srv.id}/editor`)}
               className="group flex flex-col rounded-2xl border border-gray-200 bg-white p-5 text-left shadow-sm transition-shadow hover:shadow-md dark:border-slate-800 dark:bg-slate-900"
             >
               <div className="flex items-start justify-between gap-3">

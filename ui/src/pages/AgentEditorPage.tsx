@@ -33,12 +33,12 @@ export default function AgentEditorPage() {
   })
 
   const allMCPServersQuery = useQuery({
-    queryKey: ['mcp-servers'],
+    queryKey: ['connectors'],
     queryFn: mcpServersApi.list,
   })
 
   const agentMCPQuery = useQuery({
-    queryKey: ['agent-mcp-servers', agentId],
+    queryKey: ['agent-connectors', agentId],
     queryFn: () => agentsApi.getMCPServers(agentId!),
     enabled: !isNew,
   })
@@ -88,7 +88,7 @@ export default function AgentEditorPage() {
       setPageError(null)
       setSaved(true)
       void queryClient.invalidateQueries({ queryKey: ['agents'] })
-      void queryClient.invalidateQueries({ queryKey: ['agent-mcp-servers', agentId] })
+      void queryClient.invalidateQueries({ queryKey: ['agent-connectors', agentId] })
       void queryClient.setQueryData(['agent', agentId], agent)
       setTimeout(() => setSaved(false), 2000)
     },
@@ -319,19 +319,19 @@ export default function AgentEditorPage() {
             )}
           </div>
 
-          {/* MCP Servers — below the editor */}
+          {/* Connectors — below the editor */}
           <div className="shrink-0 border-t border-slate-800 bg-slate-900 px-4 py-4">
             <label className="mb-2 block text-[11px] font-semibold uppercase tracking-wide text-slate-400">
-              Attached MCP Servers
+              Attached Connectors
             </label>
             {isNew ? (
-              <p className="text-[11px] text-slate-500">Save the agent first to attach MCP servers.</p>
+              <p className="text-[11px] text-slate-500">Save the agent first to attach connectors.</p>
             ) : allMCPServersQuery.isLoading ? (
               <p className="text-[11px] text-slate-500">Loading…</p>
             ) : (allMCPServersQuery.data?.servers ?? []).length === 0 ? (
               <p className="text-[11px] text-slate-500">
-                No MCP servers defined yet.{' '}
-                <a href="/mcp-servers/new" className="text-primary-400 underline">Add one</a>.
+                No connectors defined yet.{' '}
+                <a href="/connectors/new" className="text-primary-400 underline">Add one</a>.
               </p>
             ) : (
               <div className="flex flex-wrap gap-2">
