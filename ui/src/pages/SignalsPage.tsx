@@ -89,15 +89,16 @@ export default function SignalsPage() {
     onSuccess: (_, variables) => {
       setPageError(null)
       setNotice(`Sent ${variables.signalName} to ${variables.workflowId}.`)
-      // Optimistically remove the signaled workflow so the list updates immediately
-      // without waiting for the backend worker to process the signal.
+      // Cancel any in-flight refetch before applying the optimistic removal so the
+      // result of that fetch cannot overwrite our update.
+      void queryClient.cancelQueries({ queryKey: ['waiting-signal-workflows'] })
       queryClient.setQueryData<WaitingSignalWorkflow[]>(['waiting-signal-workflows'], (old) =>
         (old ?? []).filter((item) => item.workflow.id !== variables.workflowId),
       )
-      void Promise.all([
-        queryClient.invalidateQueries({ queryKey: ['workflows'] }),
-        queryClient.invalidateQueries({ queryKey: ['waiting-signal-workflows'] }),
-      ])
+      void queryClient.invalidateQueries({ queryKey: ['workflows'] })
+      // Re-validate the waiting list after a short delay so the backend worker has
+      // had time to advance the workflow before we query again.
+      setTimeout(() => void queryClient.invalidateQueries({ queryKey: ['waiting-signal-workflows'] }), 2500)
     },
     onError: (error: Error) => {
       setNotice(null)
@@ -113,12 +114,10 @@ export default function SignalsPage() {
     onSuccess: (count) => {
       setPageError(null)
       setNotice(`Sent signals to ${count} waiting workflow${count === 1 ? '' : 's'}.`)
-      // Optimistically clear the list.
+      void queryClient.cancelQueries({ queryKey: ['waiting-signal-workflows'] })
       queryClient.setQueryData<WaitingSignalWorkflow[]>(['waiting-signal-workflows'], [])
-      void Promise.all([
-        queryClient.invalidateQueries({ queryKey: ['workflows'] }),
-        queryClient.invalidateQueries({ queryKey: ['waiting-signal-workflows'] }),
-      ])
+      void queryClient.invalidateQueries({ queryKey: ['workflows'] })
+      setTimeout(() => void queryClient.invalidateQueries({ queryKey: ['waiting-signal-workflows'] }), 2500)
     },
     onError: (error: Error) => {
       setNotice(null)
