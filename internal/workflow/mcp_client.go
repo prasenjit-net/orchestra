@@ -8,9 +8,11 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
 // MCPTool is an MCP tool descriptor, compatible with OpenAI's function schema.
@@ -45,10 +47,12 @@ type jsonRPCError struct {
 }
 
 type mcpSession struct {
+	baseURL string // original SSE URL — used to resolve relative endpoint URLs
 	postURL string
 	headers map[string]string
 	client  *http.Client
 	cancel  context.CancelFunc
+	done    chan struct{} // closed when SSE goroutine terminates
 	mu      sync.Mutex
 	pending map[int64]chan jsonRPCResponse
 	nextID  atomic.Int64
@@ -98,6 +102,8 @@ func connectMCP(ctx context.Context, httpClient *http.Client, serverURL string, 
 		defer resp.Body.Close()
 		defer close(eventCh)
 		scanner := bufio.NewScanner(resp.Body)
+		// MCP servers can send large JSON payloads in a single data: line.
+		scanner.Buffer(make([]byte, 1<<20), 1<<20)
 		var ev, data strings.Builder
 		for scanner.Scan() {
 			line := scanner.Text()
@@ -123,21 +129,25 @@ func connectMCP(ctx context.Context, httpClient *http.Client, serverURL string, 
 	}()
 
 	sess := &mcpSession{
+		baseURL: serverURL,
 		postURL: "",
 		headers: headers,
 		client:  httpClient,
 		cancel:  cancel,
+		done:    make(chan struct{}),
 		pending: make(map[int64]chan jsonRPCResponse),
 	}
 	sess.nextID.Store(1)
 
-	// Start dispatcher goroutine.
+	// Dispatcher routes incoming SSE messages to waiting sendRequest callers.
+	// closing done signals waitForEndpoint that the SSE stream ended.
 	go func() {
+		defer close(sess.done)
 		for ev := range eventCh {
 			if ev.event == "endpoint" {
 				sess.mu.Lock()
 				if sess.postURL == "" {
-					sess.postURL = ev.data
+					sess.postURL = resolveEndpointURL(sess.baseURL, ev.data)
 				}
 				sess.mu.Unlock()
 				continue
@@ -166,7 +176,7 @@ func connectMCP(ctx context.Context, httpClient *http.Client, serverURL string, 
 		}
 	}()
 
-	// Wait for endpoint event.
+	// Wait for endpoint event before proceeding with the handshake.
 	if err := waitForEndpoint(ctx, sess); err != nil {
 		cancel()
 		return nil, nil, err
@@ -185,7 +195,7 @@ func connectMCP(ctx context.Context, httpClient *http.Client, serverURL string, 
 	}
 	_ = initResult
 
-	// Send initialized notification (no response).
+	// Send initialized notification (no response expected).
 	_ = sess.notify(ctx, "notifications/initialized", nil)
 
 	if !discoverTools {
@@ -209,6 +219,24 @@ func connectMCP(ctx context.Context, httpClient *http.Client, serverURL string, 
 	}
 
 	return sess, toolsPayload.Tools, nil
+}
+
+// resolveEndpointURL turns the endpoint data value into an absolute URL.
+// Many MCP servers send a relative path like /messages?sessionId=…
+func resolveEndpointURL(baseURL, endpointData string) string {
+	endpoint := strings.TrimSpace(endpointData)
+	if strings.HasPrefix(endpoint, "http://") || strings.HasPrefix(endpoint, "https://") {
+		return endpoint
+	}
+	base, err := url.Parse(baseURL)
+	if err != nil {
+		return endpoint
+	}
+	ref, err := url.Parse(endpoint)
+	if err != nil {
+		return endpoint
+	}
+	return base.ResolveReference(ref).String()
 }
 
 // CallTool invokes a named tool and returns its text output.
@@ -348,22 +376,18 @@ func (s *mcpSession) notify(ctx context.Context, method string, params any) erro
 
 func waitForEndpoint(ctx context.Context, sess *mcpSession) error {
 	for {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		default:
-		}
 		sess.mu.Lock()
-		url := sess.postURL
+		postURL := sess.postURL
 		sess.mu.Unlock()
-		if url != "" {
+		if postURL != "" {
 			return nil
 		}
-		// Small busy-wait — the endpoint event arrives almost immediately.
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
-		default:
+			return fmt.Errorf("timed out waiting for MCP endpoint event: %w", ctx.Err())
+		case <-sess.done:
+			return fmt.Errorf("MCP SSE connection closed before endpoint event was received")
+		case <-time.After(10 * time.Millisecond):
 		}
 	}
 }
