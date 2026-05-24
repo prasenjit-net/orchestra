@@ -76,13 +76,14 @@ type noopActivity struct{}
 
 func (noopActivity) Descriptor() ActivityDescriptor {
 	return ActivityDescriptor{
-		Name:         "noop",
-		DisplayName:  "No-op",
-		Description:  "Completes immediately without side effects.",
-		Category:     "system",
-		Status:       "stable",
-		Tags:         []string{"utility", "pass-through"},
-		ExampleInput: map[string]any{"note": "optional context"},
+		Name:          "noop",
+		DisplayName:   "No-op",
+		Description:   "Completes immediately without side effects.",
+		Category:      "system",
+		Status:        "stable",
+		Tags:          []string{"utility", "pass-through"},
+		ExampleInput:  map[string]any{"note": "optional context"},
+		ExampleOutput: map[string]any{"ok": true},
 	}
 }
 
@@ -115,6 +116,7 @@ func (delayActivity) Descriptor() ActivityDescriptor {
 		ExampleInput: map[string]any{
 			"durationSeconds": 30,
 		},
+		ExampleOutput: map[string]any{"waitedUntil": "2024-01-01T00:00:00Z"},
 	}
 }
 
@@ -214,6 +216,11 @@ func (httpActivity) Descriptor() ActivityDescriptor {
 			"body":           map[string]any{"status": "started"},
 			"timeoutSeconds": 10,
 			"expectedStatus": 200,
+		},
+		ExampleOutput: map[string]any{
+			"statusCode": 200,
+			"headers":    map[string]any{},
+			"body":       "",
 		},
 	}
 }
@@ -345,6 +352,7 @@ func (a logActivity) Descriptor() ActivityDescriptor {
 			"message": "workflow step executed",
 			"level":   "info",
 		},
+		ExampleOutput: map[string]any{"logged": true, "message": "", "level": "info"},
 	}
 }
 
@@ -397,13 +405,14 @@ type failActivityInput struct {
 
 func (failActivity) Descriptor() ActivityDescriptor {
 	return ActivityDescriptor{
-		Name:         "fail",
-		DisplayName:  "Fail",
-		Description:  "Fails the step intentionally to exercise retries and terminal failures.",
-		Category:     "testing",
-		Status:       "stable",
-		Tags:         []string{"testing", "control"},
-		ExampleInput: map[string]any{"message": "intentional failure"},
+		Name:          "fail",
+		DisplayName:   "Fail",
+		Description:   "Fails the step intentionally to exercise retries and terminal failures.",
+		Category:      "testing",
+		Status:        "stable",
+		Tags:          []string{"testing", "control"},
+		ExampleInput:  map[string]any{"message": "intentional failure"},
+		ExampleOutput: map[string]any{},
 	}
 }
 

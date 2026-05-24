@@ -42,6 +42,10 @@ func (a *agentActivity) Descriptor() ActivityDescriptor {
 			"agentId": "agt_abc123",
 			"prompt":  "Summarize this: {{.input}}",
 		},
+		ExampleOutput: map[string]any{
+			"content": "",
+			"usage":   map[string]any{"promptTokens": 0, "completionTokens": 0},
+		},
 	}
 }
 

@@ -55,6 +55,7 @@ func (a scriptActivity) Descriptor() ActivityDescriptor {
 				"name": "orchestra",
 			},
 		},
+		ExampleOutput: map[string]any{"result": nil},
 	}
 }
 

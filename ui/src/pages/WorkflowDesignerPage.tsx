@@ -3,9 +3,13 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   addEdge,
   Background,
+  BaseEdge,
   type Connection,
   Controls,
   type Edge,
+  type EdgeProps,
+  EdgeLabelRenderer,
+  getSmoothStepPath,
   Handle,
   MarkerType,
   MiniMap,
@@ -19,10 +23,11 @@ import {
   useNodesState,
   useReactFlow,
 } from '@xyflow/react'
-import { AlertCircle, ArrowLeft, CheckCircle2, ChevronDown, ChevronRight, Clock3, FileText, Globe, Grip, Save, Send, SquareTerminal, Trash2, TriangleAlert, X } from 'lucide-react'
+import { AlertCircle, ArrowLeft, CheckCircle2, ChevronDown, ChevronRight, Clock3, FileText, Globe, Grip, Plus, Save, Send, SquareTerminal, Trash2, TriangleAlert, X } from 'lucide-react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { agentsApi, scriptsApi, workflowApi } from '../services/api'
-import type { Agent, Script, WorkflowActivity, WorkflowDefinitionDocument } from '../types'
+import type { Agent, Script, WorkflowActivity, WorkflowDefinitionDocument, WorkflowStepTransition, WorkflowTransitionCondition } from '../types'
+import ContextExpressionPicker, { type PrecedingStep } from '../components/ContextExpressionPicker'
 
 type InputRow = {
   id: string
@@ -54,6 +59,11 @@ type CanvasContextMenuState = {
   y: number
   flowPosition: { x: number; y: number }
   category: string | null
+}
+
+type EdgeConditionData = {
+  label?: string
+  condition?: WorkflowTransitionCondition
 }
 
 type DesignerNodeData = ActivityNodeData | BasicNodeData
@@ -268,6 +278,62 @@ function collectContextReferences(nodes: Node[], edges: Edge[], currentNodeID: s
   return references
 }
 
+function getPrecedingSteps(
+  nodeId: string,
+  nodes: Node[],
+  edges: Edge[],
+  activitiesByName: Map<string, WorkflowActivity>,
+): PrecedingStep[] {
+  const nodeMap = new Map(nodes.map((n) => [n.id, n]))
+
+  // Build ancestor set via reverse BFS from nodeId
+  const incoming = new Map<string, string[]>()
+  for (const edge of edges) {
+    incoming.set(edge.target, [...(incoming.get(edge.target) ?? []), edge.source])
+  }
+  const ancestors = new Set<string>()
+  const queue = [nodeId]
+  while (queue.length > 0) {
+    const current = queue.shift()!
+    for (const src of incoming.get(current) ?? []) {
+      if (!ancestors.has(src)) {
+        ancestors.add(src)
+        queue.push(src)
+      }
+    }
+  }
+
+  // Walk forward from Start, collect activity nodes that are ancestors of nodeId
+  const outgoing = new Map<string, string[]>()
+  for (const edge of edges) {
+    outgoing.set(edge.source, [...(outgoing.get(edge.source) ?? []), edge.target])
+  }
+  const result: PrecedingStep[] = []
+  const visited = new Set<string>()
+  const fwdQueue = [startNodeID]
+  while (fwdQueue.length > 0) {
+    const current = fwdQueue.shift()!
+    if (visited.has(current) || current === nodeId) continue
+    visited.add(current)
+    const node = nodeMap.get(current)
+    if (node?.type === 'activity') {
+      const data = (node as ActivityFlowNode).data
+      const activity = activitiesByName.get(data.activityName)
+      result.push({
+        name: data.label.trim() || data.activityName,
+        activityName: data.activityName,
+        exampleOutput: activity?.exampleOutput,
+      })
+    }
+    for (const target of outgoing.get(current) ?? []) {
+      if (ancestors.has(target) || target === nodeId) {
+        fwdQueue.push(target)
+      }
+    }
+  }
+  return result
+}
+
 function activityVisual(activityName: string) {
   switch (activityName) {
     case 'http-request':
@@ -331,6 +397,47 @@ function activityVisual(activityName: string) {
         shapeStyle: undefined as CSSProperties | undefined,
       }
   }
+}
+
+function ConditionalEdge({
+  id,
+  sourceX,
+  sourceY,
+  targetX,
+  targetY,
+  sourcePosition,
+  targetPosition,
+  data,
+  markerEnd,
+  selected,
+}: EdgeProps<Edge<EdgeConditionData>>) {
+  const [edgePath, labelX, labelY] = getSmoothStepPath({ sourceX, sourceY, sourcePosition, targetX, targetY, targetPosition })
+  const hasCondition = Boolean((data as EdgeConditionData | undefined)?.condition)
+  const label = (data as EdgeConditionData | undefined)?.label
+
+  return (
+    <>
+      <BaseEdge
+        id={id}
+        path={edgePath}
+        markerEnd={markerEnd}
+        style={{
+          strokeDasharray: hasCondition ? '6 3' : undefined,
+          stroke: selected ? '#8b5cf6' : undefined,
+        }}
+      />
+      {label && (
+        <EdgeLabelRenderer>
+          <div
+            style={{ transform: `translate(-50%, -50%) translate(${labelX}px,${labelY}px)` }}
+            className="pointer-events-none absolute rounded bg-white px-1.5 py-0.5 text-[10px] font-semibold text-primary-700 shadow-sm dark:bg-slate-900 dark:text-primary-300"
+          >
+            {label}
+          </div>
+        </EdgeLabelRenderer>
+      )}
+    </>
+  )
 }
 
 function ActivityNode({ data, selected }: NodeProps<ActivityFlowNode>) {
@@ -663,15 +770,147 @@ function AgentActivityFields({
   )
 }
 
+type BranchCase = { id: string; label: string; path: string; operator: string; value: string; target: string }
+
+function BranchActivityFields({
+  node,
+  stepNames,
+  precedingSteps,
+  onUpdate,
+}: {
+  node: ActivityFlowNode
+  stepNames: string[]
+  precedingSteps: PrecedingStep[]
+  onUpdate: (updater: (data: ActivityNodeData) => ActivityNodeData) => void
+}) {
+  const raw = buildInputPayload(node.data.inputRows)
+  const rawCases = Array.isArray((raw as Record<string, unknown>).cases) ? ((raw as Record<string, unknown>).cases as Record<string, unknown>[]) : []
+  const [cases, setCases] = useState<BranchCase[]>(() =>
+    rawCases.map((c) => ({
+      id: makeID('case'),
+      label: String(c.label ?? ''),
+      path: String(c.path ?? ''),
+      operator: String(c.operator ?? 'eq'),
+      value: String(c.value ?? ''),
+      target: String(c.target ?? ''),
+    })),
+  )
+
+  const syncToNode = (next: BranchCase[]) => {
+    setCases(next)
+    const serialised = next.map((c) => ({
+      label: c.label,
+      path: c.path,
+      operator: c.operator,
+      value: parseValue(c.value),
+      target: c.target,
+    }))
+    onUpdate((data) => ({ ...data, inputRows: [makeInputRow('cases', JSON.stringify(serialised))] }))
+  }
+
+  const addCase = () => syncToNode([...cases, { id: makeID('case'), label: '', path: '', operator: 'eq', value: '', target: '' }])
+  const removeCase = (id: string) => syncToNode(cases.filter((c) => c.id !== id))
+  const updateCase = (id: string, patch: Partial<BranchCase>) => syncToNode(cases.map((c) => (c.id === id ? { ...c, ...patch } : c)))
+
+  return (
+    <div className="space-y-3">
+      {cases.length === 0 && (
+        <p className="text-xs text-gray-500 dark:text-slate-400">No cases yet. Add one to define branching conditions.</p>
+      )}
+      {cases.map((c) => (
+        <div key={c.id} className="rounded-lg border border-gray-200 p-3 dark:border-slate-700 space-y-2">
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-gray-400 dark:text-slate-500">Label</label>
+              <input
+                value={c.label}
+                onChange={(e) => updateCase(c.id, { label: e.target.value })}
+                placeholder="approved"
+                className="w-full rounded border border-gray-200 bg-white px-2 py-1.5 text-sm text-gray-900 outline-none focus:border-primary-500 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
+              />
+            </div>
+            <div>
+              <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-gray-400 dark:text-slate-500">Target step</label>
+              <select
+                value={c.target}
+                onChange={(e) => updateCase(c.id, { target: e.target.value })}
+                className="w-full rounded border border-gray-200 bg-white px-2 py-1.5 text-sm text-gray-900 outline-none focus:border-primary-500 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
+              >
+                <option value="">— pick step —</option>
+                {stepNames.map((s) => <option key={s} value={s}>{s}</option>)}
+              </select>
+            </div>
+          </div>
+          <div className="grid grid-cols-[minmax(0,1fr)_120px_minmax(0,0.8fr)_auto] gap-2 items-end">
+            <div>
+              <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-gray-400 dark:text-slate-500">Path</label>
+              <div className="flex gap-1">
+                <input
+                  value={c.path}
+                  onChange={(e) => updateCase(c.id, { path: e.target.value })}
+                  placeholder="steps.prev.status"
+                  className="min-w-0 flex-1 rounded border border-gray-200 bg-white px-2 py-1.5 text-sm text-gray-900 outline-none focus:border-primary-500 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
+                />
+                <ContextExpressionPicker
+                  precedingSteps={precedingSteps}
+                  onSelect={(expr) => updateCase(c.id, { path: expr.replace(/^\{\{|\}\}$/g, '') })}
+                />
+              </div>
+            </div>
+            <div>
+              <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-gray-400 dark:text-slate-500">Operator</label>
+              <select
+                value={c.operator}
+                onChange={(e) => updateCase(c.id, { operator: e.target.value })}
+                className="w-full rounded border border-gray-200 bg-white px-2 py-1.5 text-sm text-gray-900 outline-none focus:border-primary-500 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
+              >
+                {['eq', 'neq', 'exists', 'not_exists', 'truthy', 'falsy'].map((op) => <option key={op} value={op}>{op}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-gray-400 dark:text-slate-500">Value</label>
+              <input
+                value={c.value}
+                onChange={(e) => updateCase(c.id, { value: e.target.value })}
+                placeholder="200"
+                className="w-full rounded border border-gray-200 bg-white px-2 py-1.5 text-sm text-gray-900 outline-none focus:border-primary-500 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
+              />
+            </div>
+            <button
+              type="button"
+              onClick={() => removeCase(c.id)}
+              className="rounded border border-gray-200 px-2 py-1.5 text-[11px] text-gray-500 transition-colors hover:bg-red-50 hover:text-red-600 dark:border-slate-700 dark:text-slate-400 dark:hover:bg-red-950/20 dark:hover:text-red-400"
+            >
+              Remove
+            </button>
+          </div>
+        </div>
+      ))}
+      <button
+        type="button"
+        onClick={addCase}
+        className="flex items-center gap-1.5 rounded-lg border border-dashed border-gray-300 px-3 py-2 text-xs font-semibold text-gray-600 transition-colors hover:border-primary-400 hover:text-primary-700 dark:border-slate-700 dark:text-slate-300 dark:hover:border-primary-600 dark:hover:text-primary-300"
+      >
+        <Plus className="h-3.5 w-3.5" />
+        Add case
+      </button>
+    </div>
+  )
+}
+
 function ActivityPropertiesModal({
   node,
   contextReferences,
+  precedingSteps,
+  stepNames,
   onClose,
   onDelete,
   onUpdate,
 }: {
   node: ActivityFlowNode
   contextReferences: ContextReference[]
+  precedingSteps: PrecedingStep[]
+  stepNames: string[]
   onClose: () => void
   onDelete: () => void
   onUpdate: (updater: (data: ActivityNodeData) => ActivityNodeData) => void
@@ -715,7 +954,7 @@ function ActivityPropertiesModal({
       </div>
       <div className="space-y-2">
         {node.data.inputRows.map((row) => (
-          <div key={row.id} className="grid grid-cols-[0.9fr_1.1fr_auto] gap-2">
+          <div key={row.id} className="grid grid-cols-[0.9fr_1fr_auto_auto] gap-2">
             <input
               value={row.key}
               onChange={(event) =>
@@ -741,6 +980,17 @@ function ActivityPropertiesModal({
               }
               placeholder="value"
               className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-900 outline-none transition-colors focus:border-primary-500 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
+            />
+            <ContextExpressionPicker
+              precedingSteps={precedingSteps}
+              onSelect={(expr) =>
+                onUpdate((data) => ({
+                  ...data,
+                  inputRows: data.inputRows.map((inputRow) =>
+                    inputRow.id === row.id ? { ...inputRow, value: expr } : inputRow,
+                  ),
+                }))
+              }
             />
             <button
               type="button"
@@ -923,6 +1173,8 @@ function ActivityPropertiesModal({
         return <ScriptActivityFields node={node} payload={payload} setField={setField} onUpdate={onUpdate} />
       case 'agent':
         return <AgentActivityFields node={node} payload={payload} setField={setField} onUpdate={onUpdate} />
+      case 'branch':
+        return <BranchActivityFields node={node} stepNames={stepNames} precedingSteps={precedingSteps} onUpdate={onUpdate} />
       default:
         return renderGenericRows()
     }
@@ -1077,6 +1329,118 @@ function ActivityPropertiesModal({
   )
 }
 
+const CONDITION_OPERATORS = ['eq', 'neq', 'exists', 'not_exists', 'truthy', 'falsy'] as const
+
+function EdgeConditionModal({
+  edgeId,
+  initialData,
+  precedingSteps,
+  onSave,
+  onClose,
+}: {
+  edgeId: string
+  initialData: EdgeConditionData
+  precedingSteps: PrecedingStep[]
+  onSave: (edgeId: string, data: EdgeConditionData) => void
+  onClose: () => void
+}) {
+  const [label, setLabel] = useState(initialData.label ?? '')
+  const [hasCondition, setHasCondition] = useState(Boolean(initialData.condition))
+  const [path, setPath] = useState(initialData.condition?.path ?? '')
+  const [operator, setOperator] = useState(initialData.condition?.operator ?? 'eq')
+  const [value, setValue] = useState(String(initialData.condition?.value ?? ''))
+
+  const save = () => {
+    const data: EdgeConditionData = {
+      label: label.trim() || undefined,
+      condition: hasCondition && path.trim() ? { path: path.trim(), operator, value: parseValue(value) as WorkflowTransitionCondition['value'] } : undefined,
+    }
+    onSave(edgeId, data)
+    onClose()
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-4 backdrop-blur-sm">
+      <div className="w-full max-w-md overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-2xl dark:border-slate-800 dark:bg-slate-900">
+        <div className="flex items-center justify-between border-b border-gray-200 px-5 py-4 dark:border-slate-800">
+          <h2 className="text-base font-semibold text-gray-900 dark:text-slate-100">Transition settings</h2>
+          <button type="button" onClick={onClose} className="rounded-lg border border-gray-200 p-2 text-gray-500 transition-colors hover:bg-gray-50 dark:border-slate-700 dark:text-slate-400 dark:hover:bg-slate-800">
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+        <div className="space-y-4 px-5 py-4">
+          <div>
+            <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wide text-gray-500 dark:text-slate-400">Label (optional)</label>
+            <input
+              value={label}
+              onChange={(e) => setLabel(e.target.value)}
+              placeholder="e.g. approved, status 200"
+              className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2.5 text-sm text-gray-900 outline-none transition-colors focus:border-primary-500 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
+            />
+          </div>
+          <div className="flex items-center gap-3">
+            <label className="text-[11px] font-semibold uppercase tracking-wide text-gray-500 dark:text-slate-400">Condition</label>
+            <div className="flex items-center gap-1 rounded-lg border border-gray-200 p-0.5 dark:border-slate-700">
+              <button type="button" onClick={() => setHasCondition(false)}
+                className={`rounded-md px-3 py-1 text-xs font-semibold transition-colors ${!hasCondition ? 'bg-primary-600 text-white' : 'text-gray-600 hover:bg-gray-100 dark:text-slate-300 dark:hover:bg-slate-800'}`}>
+                Always
+              </button>
+              <button type="button" onClick={() => setHasCondition(true)}
+                className={`rounded-md px-3 py-1 text-xs font-semibold transition-colors ${hasCondition ? 'bg-primary-600 text-white' : 'text-gray-600 hover:bg-gray-100 dark:text-slate-300 dark:hover:bg-slate-800'}`}>
+                When
+              </button>
+            </div>
+          </div>
+          {hasCondition && (
+            <div className="space-y-3 rounded-lg border border-gray-200 p-3 dark:border-slate-700">
+              <div>
+                <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wide text-gray-500 dark:text-slate-400">Path</label>
+                <div className="flex gap-1">
+                  <input
+                    value={path}
+                    onChange={(e) => setPath(e.target.value)}
+                    placeholder="steps.fetch.statusCode"
+                    className="min-w-0 flex-1 rounded-lg border border-gray-200 bg-white px-3 py-2.5 text-sm text-gray-900 outline-none transition-colors focus:border-primary-500 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
+                  />
+                  <ContextExpressionPicker
+                    precedingSteps={precedingSteps}
+                    onSelect={(expr) => setPath(expr.replace(/^\{\{|\}\}$/g, ''))}
+                  />
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wide text-gray-500 dark:text-slate-400">Operator</label>
+                  <select
+                    value={operator}
+                    onChange={(e) => setOperator(e.target.value)}
+                    className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2.5 text-sm text-gray-900 outline-none transition-colors focus:border-primary-500 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
+                  >
+                    {CONDITION_OPERATORS.map((op) => <option key={op} value={op}>{op}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wide text-gray-500 dark:text-slate-400">Value</label>
+                  <input
+                    value={value}
+                    onChange={(e) => setValue(e.target.value)}
+                    placeholder="200"
+                    className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2.5 text-sm text-gray-900 outline-none transition-colors focus:border-primary-500 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
+                  />
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+        <div className="flex justify-end gap-3 border-t border-gray-200 px-5 py-4 dark:border-slate-800">
+          <button type="button" onClick={onClose} className="rounded-lg border border-gray-200 px-4 py-2 text-sm font-semibold text-gray-700 transition-colors hover:bg-gray-50 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800">Cancel</button>
+          <button type="button" onClick={save} className="rounded-lg bg-primary-600 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-primary-700">Save</button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function makeStartNode(): FlowNode {
   return {
     id: startNodeID,
@@ -1117,13 +1481,14 @@ function makeEndNode(): FlowNode {
   }
 }
 
-function makeBaseEdge(source: string, target: string): Edge {
+function makeBaseEdge(source: string, target: string, data?: EdgeConditionData): Edge {
   return {
     id: `${source}-${target}-${makeID('edge')}`,
     source,
     target,
-    type: 'smoothstep',
+    type: 'conditional',
     markerEnd: { type: MarkerType.ArrowClosed },
+    data: data ?? {},
   }
 }
 
@@ -1156,7 +1521,10 @@ function buildGraphFromDefinition(definition: WorkflowDefinitionDocument, activi
   const nodes: FlowNode[] = [makeStartNode(), makeEndNode()]
   const edges: Edge[] = []
 
-  let previousID = startNodeID
+  // Build nodeId lookup by step name
+  const nodeIdByName = new Map<string, string>()
+  const stepNodes: { node: ActivityFlowNode; step: WorkflowDefinitionDocument['steps'][number]; index: number }[] = []
+
   definition.steps.forEach((step, index) => {
     const activity = activitiesByName.get(step.activity) ?? {
       name: step.activity,
@@ -1168,11 +1536,38 @@ function buildGraphFromDefinition(definition: WorkflowDefinitionDocument, activi
     node.data.maxAttempts = step.retry?.maxAttempts ?? 1
     node.data.backoffSeconds = step.retry?.backoffSeconds ?? 0
     nodes.push(node)
-    edges.push(makeBaseEdge(previousID, node.id))
-    previousID = node.id
+    nodeIdByName.set(step.name, node.id)
+    stepNodes.push({ node, step, index })
   })
 
-  edges.push(makeBaseEdge(previousID, endNodeID))
+  // Connect Start → first step
+  if (stepNodes.length > 0) {
+    edges.push(makeBaseEdge(startNodeID, stepNodes[0].node.id))
+  } else {
+    edges.push(makeBaseEdge(startNodeID, endNodeID))
+  }
+
+  // For each step, wire edges based on transitions
+  stepNodes.forEach(({ node, step, index }) => {
+    const transitions: WorkflowStepTransition[] | null | undefined = step.transitions
+    if (transitions == null) {
+      // Linear: go to next step or End
+      const nextId = index + 1 < stepNodes.length ? stepNodes[index + 1].node.id : endNodeID
+      edges.push(makeBaseEdge(node.id, nextId))
+    } else if (transitions.length === 0) {
+      // Explicit terminal
+      edges.push(makeBaseEdge(node.id, endNodeID))
+    } else {
+      // Branching: one edge per transition
+      for (const t of transitions) {
+        const targetId = nodeIdByName.get(t.to) ?? endNodeID
+        edges.push(makeBaseEdge(node.id, targetId, {
+          label: t.label,
+          condition: t.condition as EdgeConditionData['condition'],
+        }))
+      }
+    }
+  })
 
   return { nodes, edges }
 }
@@ -1188,47 +1583,96 @@ function compileDocument(name: string, description: string, nodes: Node[], edges
   }
 
   const nodeMap = new Map(nodes.map((node) => [node.id, node]))
-  const outgoing = new Map<string, string[]>()
-  const incoming = new Map<string, string[]>()
-
+  const outgoingEdges = new Map<string, Edge[]>()
   for (const edge of edges) {
-    outgoing.set(edge.source, [...(outgoing.get(edge.source) ?? []), edge.target])
-    incoming.set(edge.target, [...(incoming.get(edge.target) ?? []), edge.source])
+    outgoingEdges.set(edge.source, [...(outgoingEdges.get(edge.source) ?? []), edge])
   }
 
-  const startTargets = outgoing.get(startNodeID) ?? []
+  const startTargets = outgoingEdges.get(startNodeID) ?? []
   if (startTargets.length !== 1) {
-    throw new Error('The start node must connect to exactly one next step.')
+    throw new Error('The start node must connect to exactly one step.')
   }
 
-  const steps = []
+  // BFS from start to discover step order
+  const orderedStepIds: string[] = []
   const visited = new Set<string>()
-  let currentID = startTargets[0]
+  const bfsQueue: string[] = [startTargets[0].target]
 
-  while (currentID !== endNodeID) {
-    if (visited.has(currentID)) {
-      throw new Error('Workflow graph contains a cycle or duplicate path.')
-    }
+  while (bfsQueue.length > 0) {
+    const currentID = bfsQueue.shift()!
+    if (visited.has(currentID) || currentID === endNodeID) continue
     visited.add(currentID)
 
     const node = nodeMap.get(currentID)
-    if (!node || node.type !== 'activity') {
-      throw new Error('Only a single linear activity path is supported in this designer right now.')
+    if (!node || node.type !== 'activity') continue
+
+    orderedStepIds.push(currentID)
+    for (const edge of outgoingEdges.get(currentID) ?? []) {
+      if (!visited.has(edge.target)) {
+        bfsQueue.push(edge.target)
+      }
+    }
+  }
+
+  if (orderedStepIds.length !== activityNodes.length) {
+    throw new Error('All activity nodes must be reachable from Start.')
+  }
+
+  // Build name→index map for transition validation
+  const stepNameByNodeId = new Map<string, string>()
+  for (const nodeId of orderedStepIds) {
+    const node = nodeMap.get(nodeId) as ActivityFlowNode
+    stepNameByNodeId.set(nodeId, node.data.label.trim() || node.data.activityName)
+  }
+
+  const steps = orderedStepIds.map((nodeId, index) => {
+    const node = nodeMap.get(nodeId) as ActivityFlowNode
+    const nodeData = node.data
+    const stepName = nodeData.label.trim() || nodeData.activityName
+
+    const outs = outgoingEdges.get(nodeId) ?? []
+    const toActivity = outs.filter((e) => e.target !== endNodeID)
+    const toEnd = outs.filter((e) => e.target === endNodeID)
+
+    let transitions: WorkflowStepTransition[] | undefined
+    const isLastStep = index === orderedStepIds.length - 1
+
+    if (toActivity.length === 0 && toEnd.length > 0 && !isLastStep) {
+      // Explicit terminal (non-last step that only connects to End)
+      transitions = []
+    } else if (toActivity.length === 1 && toEnd.length === 0) {
+      const edgeData = toActivity[0].data as EdgeConditionData | undefined
+      const nextName = stepNameByNodeId.get(toActivity[0].target)
+      const nextIndex = orderedStepIds.indexOf(toActivity[0].target)
+      // Simple linear to immediate next step with no condition/label → omit transitions (linear fallback)
+      if (!edgeData?.condition && !edgeData?.label && nextIndex === index + 1 && nextName) {
+        transitions = undefined
+      } else {
+        transitions = [{
+          to: nextName ?? toActivity[0].target,
+          label: edgeData?.label,
+          condition: edgeData?.condition,
+        }]
+      }
+    } else if (toActivity.length > 1 || (toActivity.length >= 1 && toEnd.length >= 1)) {
+      // Branching: build explicit transitions for each outgoing edge
+      transitions = outs.map((e) => {
+        const edgeData = e.data as EdgeConditionData | undefined
+        const targetName = e.target === endNodeID ? '__end__' : (stepNameByNodeId.get(e.target) ?? e.target)
+        return {
+          to: targetName,
+          label: edgeData?.label,
+          condition: edgeData?.condition,
+        }
+      }).filter((t) => t.to !== '__end__') // transitions to End are handled by empty array or nil
+      if (transitions.length === 0) transitions = []
+    } else {
+      // Last step or only connects to End naturally — nil transitions (linear fallback)
+      transitions = undefined
     }
 
-    const nodeData = (node as ActivityFlowNode).data
-    const nextTargets = outgoing.get(currentID) ?? []
-    const previousSources = incoming.get(currentID) ?? []
-
-    if (previousSources.length !== 1) {
-      throw new Error(`Step "${nodeData.label || nodeData.activityName}" must have exactly one incoming arrow.`)
-    }
-    if (nextTargets.length !== 1) {
-      throw new Error(`Step "${nodeData.label || nodeData.activityName}" must have exactly one outgoing arrow.`)
-    }
-
-    steps.push({
-      name: nodeData.label.trim() || nodeData.activityName,
+    return {
+      name: stepName,
       activity: nodeData.activityName,
       input: buildInputPayload(nodeData.inputRows),
       retry: {
@@ -1239,14 +1683,9 @@ function compileDocument(name: string, description: string, nodes: Node[], edges
         x: Math.round(node.position.x),
         y: Math.round(node.position.y),
       },
-    })
-
-    currentID = nextTargets[0]
-  }
-
-  if (visited.size !== activityNodes.length) {
-    throw new Error('All activity nodes must be connected in a single path from Start to End.')
-  }
+      transitions,
+    }
+  })
 
   return {
     name: name.trim(),
@@ -1270,6 +1709,7 @@ function WorkflowDesignerCanvas() {
   const [editingNodeID, setEditingNodeID] = useState<string | null>(null)
   const [isDesktop, setIsDesktop] = useState(() => (typeof window === 'undefined' ? true : window.innerWidth >= 1024))
   const [contextMenu, setContextMenu] = useState<CanvasContextMenuState | null>(null)
+  const [editingEdgeID, setEditingEdgeID] = useState<string | null>(null)
 
   const activitiesQuery = useQuery({
     queryKey: ['workflow-activities'],
@@ -1286,6 +1726,7 @@ function WorkflowDesignerCanvas() {
   const activitiesByName = useMemo(() => new Map(activities.map((activity) => [activity.name, activity])), [activities])
   const activityCategories = useMemo(() => [...new Set(activities.map((activity) => activity.category))], [activities])
   const nodeTypes = useMemo(() => ({ activity: ActivityNode }), [])
+  const edgeTypes = useMemo(() => ({ conditional: ConditionalEdge }), [])
 
   const initialState = useMemo(() => initialGraph(), [])
   const [nodes, setNodes, onNodesChange] = useNodesState(initialState.nodes)
@@ -1338,6 +1779,22 @@ function WorkflowDesignerCanvas() {
     () => (editingNode ? collectContextReferences(nodes, edges, editingNode.id) : []),
     [editingNode, nodes, edges],
   )
+  const precedingSteps = useMemo(
+    () => (editingNode ? getPrecedingSteps(editingNode.id, nodes, edges, activitiesByName) : []),
+    [editingNode, nodes, edges, activitiesByName],
+  )
+  const allStepNames = useMemo(
+    () => (nodes.filter((n) => n.type === 'activity') as ActivityFlowNode[]).map((n) => n.data.label.trim() || n.data.activityName),
+    [nodes],
+  )
+  const editingEdge = useMemo(
+    () => (editingEdgeID ? (edges.find((e) => e.id === editingEdgeID) ?? null) : null),
+    [editingEdgeID, edges],
+  )
+  const editingEdgePrecedingSteps = useMemo(() => {
+    if (!editingEdge) return []
+    return getPrecedingSteps(editingEdge.source, nodes, edges, activitiesByName)
+  }, [editingEdge, nodes, edges, activitiesByName])
 
   useEffect(() => {
     if (editingNodeID && !editingNode) {
@@ -1429,21 +1886,37 @@ function WorkflowDesignerCanvas() {
         return
       }
       if (connection.source === endNodeID || connection.target === startNodeID || connection.source === connection.target) {
-        setPageError('The designer currently supports a single forward path from Start to End.')
+        setPageError('Cannot draw edges from End, to Start, or to the same node.')
         return
       }
       setEdges((currentEdges) =>
         addEdge({
           ...connection,
-          type: 'smoothstep',
+          type: 'conditional',
           markerEnd: { type: MarkerType.ArrowClosed },
-        }, currentEdges.filter((edge) => (
-          edge.source !== connection.source &&
-          edge.target !== connection.target &&
-          !(edge.source === connection.source && edge.target === connection.target)
-        ))),
+          data: {},
+        },
+        // Only prevent exact duplicate edges (same source AND target)
+        currentEdges.filter((edge) => !(edge.source === connection.source && edge.target === connection.target)),
+        ),
       )
       setPageError(null)
+    },
+    [setEdges],
+  )
+
+  const onEdgeClick = useCallback(
+    (_: ReactMouseEvent, edge: Edge) => {
+      setEditingEdgeID(edge.id)
+    },
+    [],
+  )
+
+  const saveEdgeCondition = useCallback(
+    (edgeId: string, data: EdgeConditionData) => {
+      setEdges((currentEdges) =>
+        currentEdges.map((e) => (e.id === edgeId ? { ...e, data } : e)),
+      )
     },
     [setEdges],
   )
@@ -1728,9 +2201,11 @@ function WorkflowDesignerCanvas() {
             onPaneClick={() => setContextMenu(null)}
             onPaneContextMenu={onPaneContextMenu}
             onConnect={onConnect}
+            onEdgeClick={onEdgeClick}
             fitView
             nodeTypes={nodeTypes}
-            defaultEdgeOptions={{ type: 'smoothstep', markerEnd: { type: MarkerType.ArrowClosed } }}
+            edgeTypes={edgeTypes}
+            defaultEdgeOptions={{ type: 'conditional', markerEnd: { type: MarkerType.ArrowClosed }, data: {} }}
             className="bg-gray-100 dark:bg-slate-950"
           >
             <Background gap={18} size={1} color="#cbd5e1" />
@@ -1799,9 +2274,20 @@ function WorkflowDesignerCanvas() {
         <ActivityPropertiesModal
           node={editingNode}
           contextReferences={contextReferences}
+          precedingSteps={precedingSteps}
+          stepNames={allStepNames}
           onClose={() => setEditingNodeID(null)}
           onDelete={() => removeNodeByID(editingNode.id)}
           onUpdate={(updater) => updateNodeData(editingNode.id, updater)}
+        />
+      ) : null}
+      {editingEdge ? (
+        <EdgeConditionModal
+          edgeId={editingEdge.id}
+          initialData={(editingEdge.data as EdgeConditionData | undefined) ?? {}}
+          precedingSteps={editingEdgePrecedingSteps}
+          onSave={saveEdgeCondition}
+          onClose={() => setEditingEdgeID(null)}
         />
       ) : null}
     </div>

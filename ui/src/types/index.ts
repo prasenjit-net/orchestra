@@ -41,6 +41,7 @@ export interface WorkflowActivity {
   status?: string
   tags?: string[]
   exampleInput?: unknown
+  exampleOutput?: Record<string, unknown>
 }
 
 export interface WorkflowActivitiesResponse {

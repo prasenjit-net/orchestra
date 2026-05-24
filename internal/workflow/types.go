@@ -43,7 +43,7 @@ type StepDefinition struct {
 	Input       json.RawMessage  `json:"input,omitempty"`
 	Retry       RetryPolicy      `json:"retry"`
 	Layout      StepLayout       `json:"layout"`
-	Transitions []StepTransition `json:"transitions,omitempty"`
+	Transitions []StepTransition `json:"transitions"`
 }
 
 type DefinitionDocument struct {
@@ -157,11 +157,12 @@ type WorkflowReplay struct {
 }
 
 type ActivityDescriptor struct {
-	Name         string         `json:"name"`
-	DisplayName  string         `json:"displayName,omitempty"`
-	Description  string         `json:"description"`
-	Category     string         `json:"category"`
-	Status       string         `json:"status,omitempty"`
-	Tags         []string       `json:"tags,omitempty"`
-	ExampleInput map[string]any `json:"exampleInput,omitempty"`
+	Name          string         `json:"name"`
+	DisplayName   string         `json:"displayName,omitempty"`
+	Description   string         `json:"description"`
+	Category      string         `json:"category"`
+	Status        string         `json:"status,omitempty"`
+	Tags          []string       `json:"tags,omitempty"`
+	ExampleInput  map[string]any `json:"exampleInput,omitempty"`
+	ExampleOutput map[string]any `json:"exampleOutput,omitempty"`
 }

@@ -31,6 +31,7 @@ func (transformActivity) Descriptor() ActivityDescriptor {
 				"status":     "ready",
 			},
 		},
+		ExampleOutput: map[string]any{"customerId": "", "status": ""},
 	}
 }
 
@@ -78,6 +79,7 @@ func (waitSignalActivity) Descriptor() ActivityDescriptor {
 			"pollIntervalSeconds": 1,
 			"timeoutSeconds":      3600,
 		},
+		ExampleOutput: map[string]any{"type": "signal", "signal": "", "count": 1, "lastPayload": map[string]any{}, "receivedAt": ""},
 	}
 }
 
@@ -120,6 +122,7 @@ func (branchActivity) Descriptor() ActivityDescriptor {
 			},
 			"defaultLabel": "unknown",
 		},
+		ExampleOutput: map[string]any{"selected": "", "target": "", "matched": false},
 	}
 }
 
@@ -178,6 +181,7 @@ func (webhookActivity) Descriptor() ActivityDescriptor {
 			"body":           map[string]any{"status": "completed"},
 			"timeoutSeconds": 10,
 		},
+		ExampleOutput: map[string]any{"statusCode": 200, "headers": map[string]any{}, "body": ""},
 	}
 }
 
@@ -522,6 +526,7 @@ func (approvalActivity) Descriptor() ActivityDescriptor {
 			"timeoutSeconds":      86400,
 			"pollIntervalSeconds": 1,
 		},
+		ExampleOutput: map[string]any{"type": "approval", "signal": "approval", "count": 1, "lastPayload": map[string]any{"approved": true}, "receivedAt": ""},
 	}
 }
 
@@ -546,6 +551,7 @@ func (manualTaskActivity) Descriptor() ActivityDescriptor {
 			"timeoutSeconds":      86400,
 			"pollIntervalSeconds": 1,
 		},
+		ExampleOutput: map[string]any{"type": "manual-task", "signal": "manual-complete", "count": 1, "lastPayload": map[string]any{}, "receivedAt": ""},
 	}
 }
 
@@ -570,6 +576,7 @@ func (humanWaitActivity) Descriptor() ActivityDescriptor {
 			"timeoutSeconds":      86400,
 			"pollIntervalSeconds": 1,
 		},
+		ExampleOutput: map[string]any{"type": "human-wait", "signal": "resume", "count": 1, "lastPayload": map[string]any{}, "receivedAt": ""},
 	}
 }
 

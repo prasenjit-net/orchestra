@@ -1898,12 +1898,14 @@ func (s *Service) normalizeDefinition(input CreateDefinitionInput) (DefinitionDo
 	seenNames := make(map[string]struct{}, len(input.Steps))
 	for i, step := range input.Steps {
 		normalized := StepDefinition{
-			Name:        strings.TrimSpace(step.Name),
-			Activity:    strings.TrimSpace(step.Activity),
-			Input:       step.Input,
-			Retry:       step.Retry,
-			Layout:      step.Layout,
-			Transitions: make([]StepTransition, 0, len(step.Transitions)),
+			Name:     strings.TrimSpace(step.Name),
+			Activity: strings.TrimSpace(step.Activity),
+			Input:    step.Input,
+			Retry:    step.Retry,
+			Layout:   step.Layout,
+		}
+		if step.Transitions != nil {
+			normalized.Transitions = make([]StepTransition, 0, len(step.Transitions))
 		}
 		if normalized.Name == "" {
 			return DefinitionDocument{}, fmt.Errorf("step %d requires a name", i)
@@ -2414,12 +2416,17 @@ func resolveNextStep(steps []StepDefinition, currentIndex int, contextRaw json.R
 	}
 
 	step := steps[currentIndex]
-	if len(step.Transitions) == 0 {
+	if step.Transitions == nil {
+		// No transitions defined: use linear index-based fallback (backward compat).
 		nextIndex := currentIndex + 1
 		if nextIndex >= len(steps) {
 			return -1, nil, nil
 		}
 		return nextIndex, nil, nil
+	}
+	if len(step.Transitions) == 0 {
+		// Explicit empty transitions: step is a terminal node.
+		return -1, nil, nil
 	}
 
 	indexByName := make(map[string]int, len(steps))
