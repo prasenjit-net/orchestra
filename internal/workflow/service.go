@@ -19,6 +19,7 @@ import (
 	"strings"
 	"time"
 
+	_ "github.com/jackc/pgx/v5/stdlib"
 	_ "modernc.org/sqlite"
 
 	"github.com/prasenjit-net/orchestra/internal/config"
@@ -29,6 +30,7 @@ var ErrNotFound = errors.New("workflow resource not found")
 
 type Service struct {
 	db         *sql.DB
+	dialect    Dialect
 	logger     *slog.Logger
 	cfg        config.WorkflowConfig
 	activities map[string]Activity
@@ -36,14 +38,17 @@ type Service struct {
 	live       *livebus.Bus
 }
 
+// rebind rewrites ? placeholders to $N for PostgreSQL; identity for SQLite.
+func (s *Service) rebind(query string) string { return s.dialect.Rebind(query) }
+
 func (s *Service) wakeTasksWaitingForSignalTx(ctx context.Context, tx *sql.Tx, workflowID string, signalName string, now time.Time) ([]int64, error) {
-	rows, err := tx.QueryContext(ctx, `
+	rows, err := tx.QueryContext(ctx, s.rebind(`
 		SELECT id, workflow_id, step_index, step_name, activity_name, status, attempts, max_attempts,
 		       run_at, last_error, lease_owner, lease_expires_at, state_json, created_at, updated_at
 		FROM workflow_tasks
 		WHERE workflow_id = ? AND status = ?
 		ORDER BY id ASC
-	`, workflowID, StatusWaiting)
+	`), workflowID, StatusWaiting)
 	if err != nil {
 		return nil, fmt.Errorf("query signal-waiting tasks: %w", err)
 	}
@@ -62,11 +67,11 @@ func (s *Service) wakeTasksWaitingForSignalTx(ctx context.Context, tx *sql.Tx, w
 		if !initialized || strings.TrimSpace(state.SignalName) != signalName {
 			continue
 		}
-		if _, err := tx.ExecContext(ctx, `
+		if _, err := tx.ExecContext(ctx, s.rebind(`
 			UPDATE workflow_tasks
 			SET status = ?, run_at = ?, lease_owner = '', lease_expires_at = NULL, updated_at = ?
 			WHERE id = ?
-		`, StatusPending, formatTime(now), formatTime(now), task.ID); err != nil {
+		`), StatusPending, formatTime(now), formatTime(now), task.ID); err != nil {
 			return nil, fmt.Errorf("wake signal-waiting task %d: %w", task.ID, err)
 		}
 		wokenIDs = append(wokenIDs, task.ID)
@@ -100,24 +105,46 @@ func NewService(cfg config.WorkflowConfig, logger *slog.Logger, buses ...*livebu
 		return nil, nil
 	}
 
-	if err := ensureDatabasePath(cfg.DatabasePath); err != nil {
-		return nil, err
+	dialect := Dialect(cfg.DatabaseDriver)
+	if dialect == "" {
+		dialect = DialectSQLite
 	}
 
-	db, err := sql.Open("sqlite", cfg.DatabasePath)
-	if err != nil {
-		return nil, fmt.Errorf("open workflow database: %w", err)
-	}
+	var (
+		db  *sql.DB
+		err error
+	)
 
-	db.SetMaxOpenConns(1)
-	for _, pragma := range []string{
-		`PRAGMA journal_mode = WAL`,
-		`PRAGMA busy_timeout = 5000`,
-		`PRAGMA foreign_keys = ON`,
-	} {
-		if _, err := db.Exec(pragma); err != nil {
-			_ = db.Close()
-			return nil, fmt.Errorf("configure workflow database: %w", err)
+	switch dialect {
+	case DialectPostgres:
+		if cfg.DatabaseURL == "" {
+			return nil, fmt.Errorf("workflow.databaseURL is required when databaseDriver is postgres")
+		}
+		db, err = sql.Open("pgx", cfg.DatabaseURL)
+		if err != nil {
+			return nil, fmt.Errorf("open postgres workflow database: %w", err)
+		}
+		db.SetMaxOpenConns(25)
+		db.SetMaxIdleConns(5)
+	default:
+		dialect = DialectSQLite
+		if err = ensureDatabasePath(cfg.DatabasePath); err != nil {
+			return nil, err
+		}
+		db, err = sql.Open("sqlite", cfg.DatabasePath)
+		if err != nil {
+			return nil, fmt.Errorf("open workflow database: %w", err)
+		}
+		db.SetMaxOpenConns(1)
+		for _, pragma := range []string{
+			`PRAGMA journal_mode = WAL`,
+			`PRAGMA busy_timeout = 5000`,
+			`PRAGMA foreign_keys = ON`,
+		} {
+			if _, err := db.Exec(pragma); err != nil {
+				_ = db.Close()
+				return nil, fmt.Errorf("configure workflow database: %w", err)
+			}
 		}
 	}
 
@@ -128,6 +155,7 @@ func NewService(cfg config.WorkflowConfig, logger *slog.Logger, buses ...*livebu
 
 	svc := &Service{
 		db:         db,
+		dialect:    dialect,
 		logger:     logger.With("component", "workflow"),
 		cfg:        cfg,
 		activities: make(map[string]Activity),
@@ -143,9 +171,12 @@ func NewService(cfg config.WorkflowConfig, logger *slog.Logger, buses ...*livebu
 	svc.activities["script"] = newScriptActivity(cfg, svc.lookupScriptSource)
 	svc.activities["agent"] = newAgentActivity(cfg, svc.lookupAgent, svc.GetAgentMCPServers)
 
-	if err := svc.initSchema(context.Background()); err != nil {
-		_ = db.Close()
-		return nil, err
+	// For PostgreSQL the schema must be created manually via `orchestra schema --create`.
+	if !dialect.IsPostgres() {
+		if err := svc.initSchema(context.Background()); err != nil {
+			_ = db.Close()
+			return nil, err
+		}
 	}
 
 	return svc, nil
@@ -255,17 +286,17 @@ func (s *Service) CreateDefinition(ctx context.Context, input CreateDefinitionIn
 	defer tx.Rollback()
 
 	timestamp := formatTime(now)
-	if _, err := tx.ExecContext(ctx, `
+	if _, err := tx.ExecContext(ctx, s.rebind(`
 		INSERT INTO workflow_definitions (id, name, description, status, active_version, created_at, updated_at)
 		VALUES (?, ?, ?, 'published', 1, ?, ?)
-	`, definitionID, document.Name, document.Description, timestamp, timestamp); err != nil {
+	`), definitionID, document.Name, document.Description, timestamp, timestamp); err != nil {
 		return DefinitionDetails{}, fmt.Errorf("insert workflow definition: %w", err)
 	}
 
-	if _, err := tx.ExecContext(ctx, `
+	if _, err := tx.ExecContext(ctx, s.rebind(`
 		INSERT INTO workflow_definition_versions (definition_id, version, status, document_json, created_at, updated_at, published_at)
 		VALUES (?, 1, 'published', ?, ?, ?, ?)
-	`, definitionID, string(documentJSON), timestamp, timestamp, timestamp); err != nil {
+	`), definitionID, string(documentJSON), timestamp, timestamp, timestamp); err != nil {
 		return DefinitionDetails{}, fmt.Errorf("insert workflow definition version: %w", err)
 	}
 
@@ -325,18 +356,18 @@ func (s *Service) CreateDefinitionVersion(ctx context.Context, definitionID stri
 		return DefinitionDetails{}, fmt.Errorf("encode definition version document: %w", err)
 	}
 
-	if _, err := tx.ExecContext(ctx, `
+	if _, err := tx.ExecContext(ctx, s.rebind(`
 		INSERT INTO workflow_definition_versions (definition_id, version, status, document_json, created_at, updated_at, published_at)
 		VALUES (?, ?, 'draft', ?, ?, ?, NULL)
-	`, definitionID, nextVersion, string(documentJSON), timestamp, timestamp); err != nil {
+	`), definitionID, nextVersion, string(documentJSON), timestamp, timestamp); err != nil {
 		return DefinitionDetails{}, fmt.Errorf("insert draft definition version: %w", err)
 	}
 
-	if _, err := tx.ExecContext(ctx, `
+	if _, err := tx.ExecContext(ctx, s.rebind(`
 		UPDATE workflow_definitions
 		SET status = 'draft', updated_at = ?
 		WHERE id = ?
-	`, timestamp, definitionID); err != nil {
+	`), timestamp, definitionID); err != nil {
 		return DefinitionDetails{}, fmt.Errorf("update definition draft status: %w", err)
 	}
 
@@ -385,27 +416,27 @@ func (s *Service) PublishDefinitionVersion(ctx context.Context, definitionID str
 	now := time.Now().UTC()
 	timestamp := formatTime(now)
 
-	if _, err := tx.ExecContext(ctx, `
+	if _, err := tx.ExecContext(ctx, s.rebind(`
 		UPDATE workflow_definition_versions
 		SET status = 'archived', updated_at = ?
 		WHERE definition_id = ? AND status = 'published'
-	`, timestamp, definitionID); err != nil {
+	`), timestamp, definitionID); err != nil {
 		return DefinitionDetails{}, fmt.Errorf("archive current published definition version: %w", err)
 	}
 
-	if _, err := tx.ExecContext(ctx, `
+	if _, err := tx.ExecContext(ctx, s.rebind(`
 		UPDATE workflow_definition_versions
 		SET status = 'published', updated_at = ?, published_at = ?
 		WHERE definition_id = ? AND version = ?
-	`, timestamp, timestamp, definitionID, version); err != nil {
+	`), timestamp, timestamp, definitionID, version); err != nil {
 		return DefinitionDetails{}, fmt.Errorf("publish definition version: %w", err)
 	}
 
-	if _, err := tx.ExecContext(ctx, `
+	if _, err := tx.ExecContext(ctx, s.rebind(`
 		UPDATE workflow_definitions
 		SET name = ?, description = ?, active_version = ?, status = 'published', updated_at = ?
 		WHERE id = ?
-	`, document.Name, document.Description, version, timestamp, definitionID); err != nil {
+	`), document.Name, document.Description, version, timestamp, definitionID); err != nil {
 		return DefinitionDetails{}, fmt.Errorf("update active definition version: %w", err)
 	}
 
@@ -422,7 +453,7 @@ func (s *Service) PublishDefinitionVersion(ctx context.Context, definitionID str
 }
 
 func (s *Service) ListDefinitions(ctx context.Context) ([]DefinitionSummary, error) {
-	rows, err := s.db.QueryContext(ctx, `
+	rows, err := s.db.QueryContext(ctx, s.rebind(`
 		SELECT d.id, d.name, d.description, d.status, d.active_version,
 		       COALESCE(MAX(v.version), d.active_version) AS latest_version,
 		       COALESCE(MAX(CASE WHEN v.status = 'draft' THEN v.version END), 0) AS draft_version,
@@ -431,7 +462,7 @@ func (s *Service) ListDefinitions(ctx context.Context) ([]DefinitionSummary, err
 		LEFT JOIN workflow_definition_versions v ON v.definition_id = d.id
 		GROUP BY d.id, d.name, d.description, d.status, d.active_version, d.created_at, d.updated_at
 		ORDER BY d.updated_at DESC, d.created_at DESC
-	`)
+	`))
 	if err != nil {
 		return nil, fmt.Errorf("query workflow definitions: %w", err)
 	}
@@ -454,7 +485,7 @@ func (s *Service) ListDefinitions(ctx context.Context) ([]DefinitionSummary, err
 }
 
 func (s *Service) GetDefinition(ctx context.Context, definitionID string) (DefinitionDetails, error) {
-	row := s.db.QueryRowContext(ctx, `
+	row := s.db.QueryRowContext(ctx, s.rebind(`
 		SELECT d.id, d.name, d.description, d.status, d.active_version,
 		       COALESCE(MAX(v_all.version), d.active_version) AS latest_version,
 		       COALESCE(MAX(CASE WHEN v_all.status = 'draft' THEN v_all.version END), 0) AS draft_version,
@@ -465,7 +496,7 @@ func (s *Service) GetDefinition(ctx context.Context, definitionID string) (Defin
 		LEFT JOIN workflow_definition_versions v_all ON v_all.definition_id = d.id
 		WHERE d.id = ?
 		GROUP BY d.id, d.name, d.description, d.status, d.active_version, d.created_at, d.updated_at, v.document_json
-	`, definitionID)
+	`), definitionID)
 
 	var (
 		documentJSON string
@@ -509,7 +540,7 @@ func (s *Service) GetDefinition(ctx context.Context, definitionID string) (Defin
 }
 
 func (s *Service) GetDefinitionVersion(ctx context.Context, definitionID string, version int) (DefinitionDetails, error) {
-	row := s.db.QueryRowContext(ctx, `
+	row := s.db.QueryRowContext(ctx, s.rebind(`
 		SELECT d.id, d.name, d.description, d.status, d.active_version,
 		       COALESCE(MAX(v_all.version), d.active_version) AS latest_version,
 		       COALESCE(MAX(CASE WHEN v_all.status = 'draft' THEN v_all.version END), 0) AS draft_version,
@@ -520,7 +551,7 @@ func (s *Service) GetDefinitionVersion(ctx context.Context, definitionID string,
 		LEFT JOIN workflow_definition_versions v_all ON v_all.definition_id = d.id
 		WHERE d.id = ?
 		GROUP BY d.id, d.name, d.description, d.status, d.active_version, d.created_at, d.updated_at, v.document_json
-	`, version, definitionID)
+	`), version, definitionID)
 
 	var (
 		documentJSON string
@@ -621,14 +652,14 @@ func (s *Service) StartWorkflowWithInput(ctx context.Context, in StartWorkflowIn
 		return WorkflowInstance{}, err
 	}
 
-	if _, err := tx.ExecContext(ctx, `
+	if _, err := tx.ExecContext(ctx, s.rebind(`
 		INSERT INTO workflow_instances (
 			id, definition_id, definition_version, status, current_step_index, current_step_name,
 			current_activity, snapshot_json, last_event_sequence, last_error,
 			callback_url, trigger_source, callback_status,
 			created_at, updated_at
 		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, '', ?, ?, '', ?, ?)
-	`, instance.ID, instance.DefinitionID, instance.DefinitionVersion, instance.Status,
+	`), instance.ID, instance.DefinitionID, instance.DefinitionVersion, instance.Status,
 		instance.CurrentStepIndex, instance.CurrentStepName, instance.CurrentActivity,
 		snapshotJSON, instance.CallbackURL, instance.TriggerSource,
 		formatTime(now), formatTime(now)); err != nil {
@@ -636,7 +667,7 @@ func (s *Service) StartWorkflowWithInput(ctx context.Context, in StartWorkflowIn
 	}
 
 	sequence := 0
-	sequence, err = appendEventTx(ctx, tx, instance.ID, sequence, "WorkflowStarted", map[string]any{
+	sequence, err = appendEventTx(ctx, tx, s.rebind, instance.ID, sequence, "WorkflowStarted", map[string]any{
 		"definitionId":      instance.DefinitionID,
 		"definitionVersion": instance.DefinitionVersion,
 	})
@@ -645,7 +676,7 @@ func (s *Service) StartWorkflowWithInput(ctx context.Context, in StartWorkflowIn
 	}
 
 	if len(details.Document.Steps) == 0 {
-		sequence, err = appendEventTx(ctx, tx, instance.ID, sequence, "WorkflowCompleted", map[string]any{
+		sequence, err = appendEventTx(ctx, tx, s.rebind, instance.ID, sequence, "WorkflowCompleted", map[string]any{
 			"reason": "workflow has no steps",
 		})
 		if err != nil {
@@ -661,7 +692,7 @@ func (s *Service) StartWorkflowWithInput(ctx context.Context, in StartWorkflowIn
 		}
 	} else {
 		firstStep := details.Document.Steps[0]
-		sequence, err = appendEventTx(ctx, tx, instance.ID, sequence, "ActivityScheduled", map[string]any{
+		sequence, err = appendEventTx(ctx, tx, s.rebind, instance.ID, sequence, "ActivityScheduled", map[string]any{
 			"stepIndex":   0,
 			"stepName":    firstStep.Name,
 			"activity":    firstStep.Activity,
@@ -672,7 +703,7 @@ func (s *Service) StartWorkflowWithInput(ctx context.Context, in StartWorkflowIn
 		}
 		instance.LastEventSequence = sequence
 		instance.NextRunAt = &now
-		if err := insertTaskTx(ctx, tx, instance.ID, 0, firstStep, now); err != nil {
+		if err := insertTaskTx(ctx, tx, s.rebind, instance.ID, 0, firstStep, now); err != nil {
 			return WorkflowInstance{}, err
 		}
 		if err := s.updateInstanceTx(ctx, tx, instance, snapshotFromInstance(instance), nil); err != nil {
@@ -734,7 +765,7 @@ func (s *Service) ListWorkflows(ctx context.Context, input ListWorkflowsInput) (
 
 	// Total count.
 	var total int
-	if err := s.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM workflow_instances "+where, args...).Scan(&total); err != nil {
+	if err := s.db.QueryRowContext(ctx, s.rebind("SELECT COUNT(*) FROM workflow_instances "+where), args...).Scan(&total); err != nil {
 		return ListWorkflowsResult{}, fmt.Errorf("count workflow instances: %w", err)
 	}
 
@@ -745,7 +776,7 @@ func (s *Service) ListWorkflows(ctx context.Context, input ListWorkflowsInput) (
 		countArgs := make([]any, 0, len(args))
 		countArgs = append(countArgs, args...)
 		countRows, err := s.db.QueryContext(ctx,
-			"SELECT current_activity, COUNT(*) FROM workflow_instances "+where+" GROUP BY current_activity",
+			s.rebind("SELECT current_activity, COUNT(*) FROM workflow_instances "+where+" GROUP BY current_activity"),
 			countArgs...)
 		if err != nil {
 			return ListWorkflowsResult{}, fmt.Errorf("count workflow activities: %w", err)
@@ -776,7 +807,7 @@ func (s *Service) ListWorkflows(ctx context.Context, input ListWorkflowsInput) (
 		pageArgs = append(pageArgs, input.Limit, input.Offset)
 	}
 
-	rows, err := s.db.QueryContext(ctx, query, pageArgs...)
+	rows, err := s.db.QueryContext(ctx, s.rebind(query), pageArgs...)
 	if err != nil {
 		return ListWorkflowsResult{}, fmt.Errorf("query workflow instances: %w", err)
 	}
@@ -799,13 +830,13 @@ func (s *Service) ListWorkflows(ctx context.Context, input ListWorkflowsInput) (
 }
 
 func (s *Service) GetWorkflow(ctx context.Context, workflowID string) (WorkflowInstance, error) {
-	row := s.db.QueryRowContext(ctx, `
+	row := s.db.QueryRowContext(ctx, s.rebind(`
 		SELECT id, definition_id, definition_version, status, current_step_index, current_step_name,
 		       current_activity, snapshot_json, last_event_sequence, last_error, created_at, updated_at,
 		       callback_url, trigger_source, callback_status
 		FROM workflow_instances
 		WHERE id = ?
-	`, workflowID)
+	`), workflowID)
 
 	instance, err := scanWorkflowInstance(row)
 	if err != nil {
@@ -818,12 +849,12 @@ func (s *Service) GetWorkflow(ctx context.Context, workflowID string) (WorkflowI
 }
 
 func (s *Service) GetWorkflowHistory(ctx context.Context, workflowID string) ([]WorkflowEvent, error) {
-	rows, err := s.db.QueryContext(ctx, `
+	rows, err := s.db.QueryContext(ctx, s.rebind(`
 		SELECT sequence, event_type, payload, created_at
 		FROM workflow_events
 		WHERE workflow_id = ?
 		ORDER BY sequence ASC
-	`, workflowID)
+	`), workflowID)
 	if err != nil {
 		return nil, fmt.Errorf("query workflow events: %w", err)
 	}
@@ -882,14 +913,14 @@ func (s *Service) SignalWorkflow(ctx context.Context, workflowID string, input S
 		return WorkflowInstance{}, err
 	}
 
-	if _, err := tx.ExecContext(ctx, `
+	if _, err := tx.ExecContext(ctx, s.rebind(`
 		INSERT INTO workflow_signals (workflow_id, signal_name, payload, status, created_at, processed_at)
 		VALUES (?, ?, ?, 'processed', ?, ?)
-	`, workflowID, name, string(payload), formatTime(now), formatTime(now)); err != nil {
+	`), workflowID, name, string(payload), formatTime(now), formatTime(now)); err != nil {
 		return WorkflowInstance{}, fmt.Errorf("insert workflow signal: %w", err)
 	}
 
-	sequence, err := appendEventTx(ctx, tx, workflowID, instance.LastEventSequence, "WorkflowSignaled", map[string]any{
+	sequence, err := appendEventTx(ctx, tx, s.rebind, workflowID, instance.LastEventSequence, "WorkflowSignaled", map[string]any{
 		"name":    name,
 		"payload": decodePayloadForEvent(payload),
 	})
@@ -958,17 +989,17 @@ func (s *Service) CancelWorkflow(ctx context.Context, workflowID string) (Workfl
 	}
 
 	now := time.Now().UTC()
-	sequence, err := appendEventTx(ctx, tx, workflowID, instance.LastEventSequence, "WorkflowCanceled", map[string]any{
+	sequence, err := appendEventTx(ctx, tx, s.rebind, workflowID, instance.LastEventSequence, "WorkflowCanceled", map[string]any{
 		"canceledAt": formatTime(now),
 	})
 	if err != nil {
 		return WorkflowInstance{}, err
 	}
-	if _, err := tx.ExecContext(ctx, `
+	if _, err := tx.ExecContext(ctx, s.rebind(`
 		UPDATE workflow_tasks
 		SET status = ?, lease_owner = '', lease_expires_at = NULL, updated_at = ?
 		WHERE workflow_id = ? AND status NOT IN (?, ?)
-	`, StatusCanceled, formatTime(now), workflowID, StatusCompleted, StatusCanceled); err != nil {
+	`), StatusCanceled, formatTime(now), workflowID, StatusCompleted, StatusCanceled); err != nil {
 		return WorkflowInstance{}, fmt.Errorf("cancel workflow tasks: %w", err)
 	}
 
@@ -1022,12 +1053,12 @@ func (s *Service) ListRecentEvents(ctx context.Context, input ListRecentEventsIn
 		return ListRecentEventsResult{}, fmt.Errorf("count workflow events: %w", err)
 	}
 
-	rows, err := s.db.QueryContext(ctx, `
+	rows, err := s.db.QueryContext(ctx, s.rebind(`
 		SELECT workflow_id, sequence, event_type, payload, created_at
 		FROM workflow_events
 		ORDER BY id DESC
 		LIMIT ? OFFSET ?
-	`, input.Limit, input.Offset)
+	`), input.Limit, input.Offset)
 	if err != nil {
 		return ListRecentEventsResult{}, fmt.Errorf("query recent workflow events: %w", err)
 	}
@@ -1320,7 +1351,7 @@ func (s *Service) applyTaskAction(ctx context.Context, taskID int64, action stri
 	instance.CurrentStepName = task.StepName
 	instance.CurrentActivity = task.ActivityName
 
-	sequence, err = appendEventTx(ctx, tx, instance.ID, sequence, eventType, map[string]any{
+	sequence, err = appendEventTx(ctx, tx, s.rebind, instance.ID, sequence, eventType, map[string]any{
 		"taskId":       task.ID,
 		"stepIndex":    task.StepIndex,
 		"stepName":     task.StepName,
@@ -1332,7 +1363,7 @@ func (s *Service) applyTaskAction(ctx context.Context, taskID int64, action stri
 	}
 
 	if action == "cancel" {
-		sequence, err = appendEventTx(ctx, tx, instance.ID, sequence, "WorkflowCanceled", map[string]any{
+		sequence, err = appendEventTx(ctx, tx, s.rebind, instance.ID, sequence, "WorkflowCanceled", map[string]any{
 			"taskId":    task.ID,
 			"stepIndex": task.StepIndex,
 			"stepName":  task.StepName,
@@ -1342,11 +1373,11 @@ func (s *Service) applyTaskAction(ctx context.Context, taskID int64, action stri
 		}
 	}
 
-	if _, err := tx.ExecContext(ctx, `
+	if _, err := tx.ExecContext(ctx, s.rebind(`
 		UPDATE workflow_tasks
 		SET status = ?, attempts = ?, run_at = ?, last_error = ?, lease_owner = ?, lease_expires_at = ?, state_json = ?, updated_at = ?
 		WHERE id = ?
-	`, task.Status, task.Attempts, formatTime(task.RunAt), task.LastError, task.LeaseOwner, nullableTime(task.LeaseExpiresAt), rawJSONString(task.State), formatTime(task.UpdatedAt), task.ID); err != nil {
+	`), task.Status, task.Attempts, formatTime(task.RunAt), task.LastError, task.LeaseOwner, nullableTime(task.LeaseExpiresAt), rawJSONString(task.State), formatTime(task.UpdatedAt), task.ID); err != nil {
 		return WorkflowTask{}, fmt.Errorf("update workflow task action: %w", err)
 	}
 
@@ -1400,7 +1431,7 @@ func (s *Service) completeTask(ctx context.Context, task WorkflowTask, definitio
 	instance.LastOutput = output
 	instance.NextRunAt = nil
 
-	sequence, err = appendEventTx(ctx, tx, instance.ID, sequence, "ActivityCompleted", map[string]any{
+	sequence, err = appendEventTx(ctx, tx, s.rebind, instance.ID, sequence, "ActivityCompleted", map[string]any{
 		"taskId":    task.ID,
 		"stepIndex": task.StepIndex,
 		"stepName":  step.Name,
@@ -1413,11 +1444,11 @@ func (s *Service) completeTask(ctx context.Context, task WorkflowTask, definitio
 		return err
 	}
 
-	if _, err := tx.ExecContext(ctx, `
+	if _, err := tx.ExecContext(ctx, s.rebind(`
 		UPDATE workflow_tasks
 		SET status = ?, lease_owner = '', lease_expires_at = NULL, state_json = '', updated_at = ?
 		WHERE id = ?
-	`, StatusCompleted, formatTime(now), task.ID); err != nil {
+	`), StatusCompleted, formatTime(now), task.ID); err != nil {
 		return fmt.Errorf("mark workflow task complete: %w", err)
 	}
 
@@ -1430,7 +1461,7 @@ func (s *Service) completeTask(ctx context.Context, task WorkflowTask, definitio
 	instance.LastError = ""
 
 	if nextStepIndex < 0 {
-		sequence, err = appendEventTx(ctx, tx, instance.ID, sequence, "WorkflowCompleted", map[string]any{
+		sequence, err = appendEventTx(ctx, tx, s.rebind, instance.ID, sequence, "WorkflowCompleted", map[string]any{
 			"completedAt": formatTime(now),
 		})
 		if err != nil {
@@ -1447,7 +1478,7 @@ func (s *Service) completeTask(ctx context.Context, task WorkflowTask, definitio
 	} else {
 		nextStep := definition.Document.Steps[nextStepIndex]
 		if selectedTransition != nil {
-			sequence, err = appendEventTx(ctx, tx, instance.ID, sequence, "TransitionSelected", map[string]any{
+			sequence, err = appendEventTx(ctx, tx, s.rebind, instance.ID, sequence, "TransitionSelected", map[string]any{
 				"fromStep": task.StepName,
 				"toStep":   nextStep.Name,
 				"label":    selectedTransition.Label,
@@ -1456,7 +1487,7 @@ func (s *Service) completeTask(ctx context.Context, task WorkflowTask, definitio
 				return err
 			}
 		}
-		sequence, err = appendEventTx(ctx, tx, instance.ID, sequence, "ActivityScheduled", map[string]any{
+		sequence, err = appendEventTx(ctx, tx, s.rebind, instance.ID, sequence, "ActivityScheduled", map[string]any{
 			"stepIndex":   nextStepIndex,
 			"stepName":    nextStep.Name,
 			"activity":    nextStep.Activity,
@@ -1465,7 +1496,7 @@ func (s *Service) completeTask(ctx context.Context, task WorkflowTask, definitio
 		if err != nil {
 			return err
 		}
-		if err := insertTaskTx(ctx, tx, instance.ID, nextStepIndex, nextStep, now); err != nil {
+		if err := insertTaskTx(ctx, tx, s.rebind, instance.ID, nextStepIndex, nextStep, now); err != nil {
 			return err
 		}
 		instance.Status = StatusRunning
@@ -1544,7 +1575,7 @@ func (s *Service) delayTask(ctx context.Context, task WorkflowTask, step StepDef
 
 	now := time.Now().UTC()
 	sequence := instance.LastEventSequence
-	sequence, err = appendEventTx(ctx, tx, instance.ID, sequence, "ActivityWaiting", map[string]any{
+	sequence, err = appendEventTx(ctx, tx, s.rebind, instance.ID, sequence, "ActivityWaiting", map[string]any{
 		"taskId":    task.ID,
 		"stepIndex": task.StepIndex,
 		"stepName":  step.Name,
@@ -1560,11 +1591,11 @@ func (s *Service) delayTask(ctx context.Context, task WorkflowTask, step StepDef
 		attempts--
 	}
 
-	if _, err := tx.ExecContext(ctx, `
+	if _, err := tx.ExecContext(ctx, s.rebind(`
 		UPDATE workflow_tasks
 		SET status = ?, attempts = ?, run_at = ?, last_error = '', lease_owner = '', lease_expires_at = NULL, state_json = ?, updated_at = ?
 		WHERE id = ?
-	`, StatusPending, attempts, formatTime(runAt), rawJSONString(state), formatTime(now), task.ID); err != nil {
+	`), StatusPending, attempts, formatTime(runAt), rawJSONString(state), formatTime(now), task.ID); err != nil {
 		return fmt.Errorf("delay workflow task: %w", err)
 	}
 
@@ -1626,7 +1657,7 @@ func (s *Service) waitTaskForSignal(ctx context.Context, task WorkflowTask, step
 	if wait.TimeoutAt != nil {
 		payload["timeoutAt"] = formatTime(*wait.TimeoutAt)
 	}
-	sequence, err = appendEventTx(ctx, tx, instance.ID, sequence, "ActivityWaitingForSignal", payload)
+	sequence, err = appendEventTx(ctx, tx, s.rebind, instance.ID, sequence, "ActivityWaitingForSignal", payload)
 	if err != nil {
 		return err
 	}
@@ -1636,11 +1667,11 @@ func (s *Service) waitTaskForSignal(ctx context.Context, task WorkflowTask, step
 		attempts--
 	}
 	waitRunAt := parkedSignalRunAt(wait.TimeoutAt)
-	if _, err := tx.ExecContext(ctx, `
+	if _, err := tx.ExecContext(ctx, s.rebind(`
 		UPDATE workflow_tasks
 		SET status = ?, attempts = ?, run_at = ?, last_error = '', lease_owner = '', lease_expires_at = NULL, state_json = ?, updated_at = ?
 		WHERE id = ?
-	`, StatusWaiting, attempts, formatTime(waitRunAt), rawJSONString(wait.State), formatTime(now), task.ID); err != nil {
+	`), StatusWaiting, attempts, formatTime(waitRunAt), rawJSONString(wait.State), formatTime(now), task.ID); err != nil {
 		return fmt.Errorf("park workflow task for signal: %w", err)
 	}
 
@@ -1692,7 +1723,7 @@ func (s *Service) handleTaskFailure(ctx context.Context, task WorkflowTask, step
 
 	if task.Attempts < task.MaxAttempts {
 		nextRunAt := now.Add(time.Duration(step.Retry.BackoffSeconds) * time.Second)
-		sequence, err = appendEventTx(ctx, tx, instance.ID, sequence, "ActivityRetryScheduled", map[string]any{
+		sequence, err = appendEventTx(ctx, tx, s.rebind, instance.ID, sequence, "ActivityRetryScheduled", map[string]any{
 			"taskId":      task.ID,
 			"stepIndex":   task.StepIndex,
 			"stepName":    step.Name,
@@ -1706,11 +1737,11 @@ func (s *Service) handleTaskFailure(ctx context.Context, task WorkflowTask, step
 			return err
 		}
 
-		if _, err := tx.ExecContext(ctx, `
+		if _, err := tx.ExecContext(ctx, s.rebind(`
 			UPDATE workflow_tasks
 			SET status = ?, run_at = ?, last_error = ?, lease_owner = '', lease_expires_at = NULL, state_json = '', updated_at = ?
 			WHERE id = ?
-		`, StatusPending, formatTime(nextRunAt), execErr.Error(), formatTime(now), task.ID); err != nil {
+		`), StatusPending, formatTime(nextRunAt), execErr.Error(), formatTime(now), task.ID); err != nil {
 			return fmt.Errorf("requeue workflow task: %w", err)
 		}
 
@@ -1723,7 +1754,7 @@ func (s *Service) handleTaskFailure(ctx context.Context, task WorkflowTask, step
 			return err
 		}
 	} else {
-		sequence, err = appendEventTx(ctx, tx, instance.ID, sequence, "ActivityFailed", map[string]any{
+		sequence, err = appendEventTx(ctx, tx, s.rebind, instance.ID, sequence, "ActivityFailed", map[string]any{
 			"taskId":      task.ID,
 			"stepIndex":   task.StepIndex,
 			"stepName":    step.Name,
@@ -1735,7 +1766,7 @@ func (s *Service) handleTaskFailure(ctx context.Context, task WorkflowTask, step
 		if err != nil {
 			return err
 		}
-		sequence, err = appendEventTx(ctx, tx, instance.ID, sequence, "WorkflowFailed", map[string]any{
+		sequence, err = appendEventTx(ctx, tx, s.rebind, instance.ID, sequence, "WorkflowFailed", map[string]any{
 			"stepIndex": task.StepIndex,
 			"stepName":  step.Name,
 			"error":     execErr.Error(),
@@ -1744,11 +1775,11 @@ func (s *Service) handleTaskFailure(ctx context.Context, task WorkflowTask, step
 			return err
 		}
 
-		if _, err := tx.ExecContext(ctx, `
+		if _, err := tx.ExecContext(ctx, s.rebind(`
 			UPDATE workflow_tasks
 			SET status = ?, last_error = ?, lease_owner = '', lease_expires_at = NULL, state_json = '', updated_at = ?
 			WHERE id = ?
-		`, StatusFailed, execErr.Error(), formatTime(now), task.ID); err != nil {
+		`), StatusFailed, execErr.Error(), formatTime(now), task.ID); err != nil {
 			return fmt.Errorf("mark workflow task failed: %w", err)
 		}
 
@@ -1823,7 +1854,7 @@ func (s *Service) failTaskNow(ctx context.Context, task WorkflowTask, cause erro
 
 	now := time.Now().UTC()
 	sequence := instance.LastEventSequence
-	sequence, err = appendEventTx(ctx, tx, instance.ID, sequence, "WorkflowFailed", map[string]any{
+	sequence, err = appendEventTx(ctx, tx, s.rebind, instance.ID, sequence, "WorkflowFailed", map[string]any{
 		"stepIndex": task.StepIndex,
 		"stepName":  task.StepName,
 		"error":     cause.Error(),
@@ -1832,11 +1863,11 @@ func (s *Service) failTaskNow(ctx context.Context, task WorkflowTask, cause erro
 		return err
 	}
 
-	if _, err := tx.ExecContext(ctx, `
+	if _, err := tx.ExecContext(ctx, s.rebind(`
 		UPDATE workflow_tasks
 		SET status = ?, last_error = ?, lease_owner = '', lease_expires_at = NULL, state_json = '', updated_at = ?
 		WHERE id = ?
-	`, StatusFailed, cause.Error(), formatTime(now), task.ID); err != nil {
+	`), StatusFailed, cause.Error(), formatTime(now), task.ID); err != nil {
 		return fmt.Errorf("mark task failed immediately: %w", err)
 	}
 
@@ -1880,14 +1911,14 @@ func (s *Service) claimNextTask(ctx context.Context) (WorkflowTask, bool, error)
 	defer tx.Rollback()
 
 	now := time.Now().UTC()
-	rows, err := tx.QueryContext(ctx, `
+	rows, err := tx.QueryContext(ctx, s.rebind(`
 		SELECT id, workflow_id, step_index, step_name, activity_name, status, attempts, max_attempts,
 		       run_at, last_error, lease_owner, lease_expires_at, state_json, created_at, updated_at
 		FROM workflow_tasks
 		WHERE (status = ? AND run_at <= ?) OR (status = ? AND run_at <= ?)
 		ORDER BY run_at ASC, id ASC
 		LIMIT 1
-	`, StatusPending, formatTime(now), StatusWaiting, formatTime(now))
+	`), StatusPending, formatTime(now), StatusWaiting, formatTime(now))
 	if err != nil {
 		return WorkflowTask{}, false, fmt.Errorf("select runnable workflow task: %w", err)
 	}
@@ -1903,11 +1934,11 @@ func (s *Service) claimNextTask(ctx context.Context) (WorkflowTask, bool, error)
 	}
 
 	leaseExpiresAt := now.Add(s.cfg.LeaseDuration)
-	result, err := tx.ExecContext(ctx, `
+	result, err := tx.ExecContext(ctx, s.rebind(`
 		UPDATE workflow_tasks
 		SET status = ?, attempts = attempts + 1, lease_owner = ?, lease_expires_at = ?, updated_at = ?
 		WHERE id = ? AND status = ?
-	`, StatusRunning, s.workerID, formatTime(leaseExpiresAt), formatTime(now), task.ID, StatusPending)
+	`), StatusRunning, s.workerID, formatTime(leaseExpiresAt), formatTime(now), task.ID, StatusPending)
 	if err != nil {
 		return WorkflowTask{}, false, fmt.Errorf("claim workflow task: %w", err)
 	}
@@ -1933,12 +1964,12 @@ func (s *Service) claimNextTask(ctx context.Context) (WorkflowTask, bool, error)
 }
 
 func (s *Service) GetTask(ctx context.Context, taskID int64) (WorkflowTask, error) {
-	row := s.db.QueryRowContext(ctx, `
+	row := s.db.QueryRowContext(ctx, s.rebind(`
 		SELECT id, workflow_id, step_index, step_name, activity_name, status, attempts, max_attempts,
 		       run_at, last_error, lease_owner, lease_expires_at, state_json, created_at, updated_at
 		FROM workflow_tasks
 		WHERE id = ?
-	`, taskID)
+	`), taskID)
 	task, err := scanWorkflowTask(row)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -1951,11 +1982,11 @@ func (s *Service) GetTask(ctx context.Context, taskID int64) (WorkflowTask, erro
 
 func (s *Service) requeueExpiredTasks(ctx context.Context) error {
 	now := time.Now().UTC()
-	result, err := s.db.ExecContext(ctx, `
+	result, err := s.db.ExecContext(ctx, s.rebind(`
 		UPDATE workflow_tasks
 		SET status = ?, lease_owner = '', lease_expires_at = NULL, updated_at = ?
 		WHERE status = ? AND lease_expires_at IS NOT NULL AND lease_expires_at <= ?
-	`, StatusPending, formatTime(now), StatusRunning, formatTime(now))
+	`), StatusPending, formatTime(now), StatusRunning, formatTime(now))
 	if err != nil {
 		return fmt.Errorf("requeue expired workflow tasks: %w", err)
 	}
@@ -1985,12 +2016,12 @@ func (s *Service) updateInstanceTx(ctx context.Context, tx *sql.Tx, instance Wor
 		return err
 	}
 
-	if _, err := tx.ExecContext(ctx, `
+	if _, err := tx.ExecContext(ctx, s.rebind(`
 		UPDATE workflow_instances
 		SET status = ?, current_step_index = ?, current_step_name = ?, current_activity = ?,
 		    snapshot_json = ?, last_event_sequence = ?, last_error = ?, updated_at = ?
 		WHERE id = ?
-	`, instance.Status, instance.CurrentStepIndex, instance.CurrentStepName, instance.CurrentActivity, snapshotJSON, instance.LastEventSequence, instance.LastError, formatTime(instance.UpdatedAt), instance.ID); err != nil {
+	`), instance.Status, instance.CurrentStepIndex, instance.CurrentStepName, instance.CurrentActivity, snapshotJSON, instance.LastEventSequence, instance.LastError, formatTime(instance.UpdatedAt), instance.ID); err != nil {
 		return fmt.Errorf("update workflow instance: %w", err)
 	}
 
@@ -2165,12 +2196,12 @@ func (s *Service) normalizeDefinition(input CreateDefinitionInput) (DefinitionDo
 }
 
 func (s *Service) listDefinitionVersions(ctx context.Context, definitionID string) ([]DefinitionVersionSummary, error) {
-	rows, err := s.db.QueryContext(ctx, `
+	rows, err := s.db.QueryContext(ctx, s.rebind(`
 		SELECT version, status, created_at, updated_at, published_at
 		FROM workflow_definition_versions
 		WHERE definition_id = ?
 		ORDER BY version DESC
-	`, definitionID)
+	`), definitionID)
 	if err != nil {
 		return nil, fmt.Errorf("query workflow definition versions: %w", err)
 	}
@@ -2191,7 +2222,7 @@ func (s *Service) listDefinitionVersions(ctx context.Context, definitionID strin
 }
 
 func (s *Service) getDefinitionSummaryTx(ctx context.Context, tx *sql.Tx, definitionID string) (DefinitionSummary, error) {
-	row := tx.QueryRowContext(ctx, `
+	row := tx.QueryRowContext(ctx, s.rebind(`
 		SELECT d.id, d.name, d.description, d.status, d.active_version,
 		       COALESCE(MAX(v.version), d.active_version) AS latest_version,
 		       COALESCE(MAX(CASE WHEN v.status = 'draft' THEN v.version END), 0) AS draft_version,
@@ -2200,7 +2231,7 @@ func (s *Service) getDefinitionSummaryTx(ctx context.Context, tx *sql.Tx, defini
 		LEFT JOIN workflow_definition_versions v ON v.definition_id = d.id
 		WHERE d.id = ?
 		GROUP BY d.id, d.name, d.description, d.status, d.active_version, d.created_at, d.updated_at
-	`, definitionID)
+	`), definitionID)
 
 	definition, err := scanDefinitionSummary(row)
 	if err != nil {
@@ -2213,11 +2244,11 @@ func (s *Service) getDefinitionSummaryTx(ctx context.Context, tx *sql.Tx, defini
 }
 
 func (s *Service) getDefinitionVersionMetaTx(ctx context.Context, tx *sql.Tx, definitionID string, version int) (DefinitionVersionSummary, error) {
-	row := tx.QueryRowContext(ctx, `
+	row := tx.QueryRowContext(ctx, s.rebind(`
 		SELECT version, status, created_at, updated_at, published_at
 		FROM workflow_definition_versions
 		WHERE definition_id = ? AND version = ?
-	`, definitionID, version)
+	`), definitionID, version)
 
 	meta, err := scanDefinitionVersionSummary(row)
 	if err != nil {
@@ -2230,7 +2261,7 @@ func (s *Service) getDefinitionVersionMetaTx(ctx context.Context, tx *sql.Tx, de
 }
 
 func (s *Service) getDefinitionTx(ctx context.Context, tx *sql.Tx, definitionID string) (DefinitionDetails, error) {
-	row := tx.QueryRowContext(ctx, `
+	row := tx.QueryRowContext(ctx, s.rebind(`
 		SELECT d.id, d.name, d.description, d.status, d.active_version,
 		       COALESCE(MAX(v_all.version), d.active_version) AS latest_version,
 		       COALESCE(MAX(CASE WHEN v_all.status = 'draft' THEN v_all.version END), 0) AS draft_version,
@@ -2241,7 +2272,7 @@ func (s *Service) getDefinitionTx(ctx context.Context, tx *sql.Tx, definitionID 
 		LEFT JOIN workflow_definition_versions v_all ON v_all.definition_id = d.id
 		WHERE d.id = ?
 		GROUP BY d.id, d.name, d.description, d.status, d.active_version, d.created_at, d.updated_at, v.document_json
-	`, definitionID)
+	`), definitionID)
 
 	var (
 		documentJSON string
@@ -2281,11 +2312,11 @@ func (s *Service) getDefinitionTx(ctx context.Context, tx *sql.Tx, definitionID 
 }
 
 func (s *Service) getDefinitionVersionDocumentTx(ctx context.Context, tx *sql.Tx, definitionID string, version int) (DefinitionDocument, error) {
-	row := tx.QueryRowContext(ctx, `
+	row := tx.QueryRowContext(ctx, s.rebind(`
 		SELECT document_json
 		FROM workflow_definition_versions
 		WHERE definition_id = ? AND version = ?
-	`, definitionID, version)
+	`), definitionID, version)
 	var documentJSON string
 	if err := row.Scan(&documentJSON); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -2301,13 +2332,13 @@ func (s *Service) getDefinitionVersionDocumentTx(ctx context.Context, tx *sql.Tx
 }
 
 func (s *Service) getWorkflowTx(ctx context.Context, tx *sql.Tx, workflowID string) (WorkflowInstance, error) {
-	row := tx.QueryRowContext(ctx, `
+	row := tx.QueryRowContext(ctx, s.rebind(`
 		SELECT id, definition_id, definition_version, status, current_step_index, current_step_name,
 		       current_activity, snapshot_json, last_event_sequence, last_error, created_at, updated_at,
 		       callback_url, trigger_source, callback_status
 		FROM workflow_instances
 		WHERE id = ?
-	`, workflowID)
+	`), workflowID)
 
 	instance, err := scanWorkflowInstance(row)
 	if err != nil {
@@ -2320,30 +2351,30 @@ func (s *Service) getWorkflowTx(ctx context.Context, tx *sql.Tx, workflowID stri
 	return instance, nil
 }
 
-func insertTaskTx(ctx context.Context, tx *sql.Tx, workflowID string, stepIndex int, step StepDefinition, now time.Time) error {
-	_, err := tx.ExecContext(ctx, `
+func insertTaskTx(ctx context.Context, tx *sql.Tx, rebind func(string) string, workflowID string, stepIndex int, step StepDefinition, now time.Time) error {
+	_, err := tx.ExecContext(ctx, rebind(`
 		INSERT INTO workflow_tasks (
 			workflow_id, step_index, step_name, activity_name, status, attempts, max_attempts,
 			run_at, lease_owner, lease_expires_at, last_error, state_json, created_at, updated_at
 		) VALUES (?, ?, ?, ?, ?, 0, ?, ?, '', NULL, '', '', ?, ?)
-	`, workflowID, stepIndex, step.Name, step.Activity, StatusPending, step.Retry.MaxAttempts, formatTime(now), formatTime(now), formatTime(now))
+	`), workflowID, stepIndex, step.Name, step.Activity, StatusPending, step.Retry.MaxAttempts, formatTime(now), formatTime(now), formatTime(now))
 	if err != nil {
 		return fmt.Errorf("insert workflow task: %w", err)
 	}
 	return nil
 }
 
-func appendEventTx(ctx context.Context, tx *sql.Tx, workflowID string, sequence int, eventType string, payload any) (int, error) {
+func appendEventTx(ctx context.Context, tx *sql.Tx, rebind func(string) string, workflowID string, sequence int, eventType string, payload any) (int, error) {
 	nextSequence := sequence + 1
 	payloadJSON, err := json.Marshal(payload)
 	if err != nil {
 		return sequence, fmt.Errorf("encode workflow event %s: %w", eventType, err)
 	}
 
-	if _, err := tx.ExecContext(ctx, `
+	if _, err := tx.ExecContext(ctx, rebind(`
 		INSERT INTO workflow_events (workflow_id, sequence, event_type, payload, created_at)
 		VALUES (?, ?, ?, ?, ?)
-	`, workflowID, nextSequence, eventType, string(payloadJSON), formatTime(time.Now().UTC())); err != nil {
+	`), workflowID, nextSequence, eventType, string(payloadJSON), formatTime(time.Now().UTC())); err != nil {
 		return sequence, fmt.Errorf("insert workflow event %s: %w", eventType, err)
 	}
 
@@ -2898,12 +2929,12 @@ func scanWorkflowTask(scanner interface{ Scan(...any) error }) (WorkflowTask, er
 }
 
 func (s *Service) getTaskTx(ctx context.Context, tx *sql.Tx, taskID int64) (WorkflowTask, error) {
-	row := tx.QueryRowContext(ctx, `
+	row := tx.QueryRowContext(ctx, s.rebind(`
 		SELECT id, workflow_id, step_index, step_name, activity_name, status, attempts, max_attempts,
 		       run_at, last_error, lease_owner, lease_expires_at, state_json, created_at, updated_at
 		FROM workflow_tasks
 		WHERE id = ?
-	`, taskID)
+	`), taskID)
 	task, err := scanWorkflowTask(row)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {

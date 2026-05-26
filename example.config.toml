@@ -21,7 +21,16 @@ devProxyURL = "http://localhost:5173"
 
 [workflow]
 enabled                 = true
-databasePath            = "data/workflows.db"
+# databaseDriver = "sqlite"      # "sqlite" (default) | "postgres"
+databasePath            = "data/workflows.db"    # used when databaseDriver = "sqlite"
+# databaseURL = "postgres://user:pass@localhost:5432/orchestra?sslmode=disable"
+#                                # used when databaseDriver = "postgres"
+#                                # also settable via APP_WORKFLOW_DATABASEURL env var
+#
+# For PostgreSQL, tables are NOT created automatically.
+# Run `orchestra schema --driver postgres --create` once after provisioning the database,
+# or pipe the DDL to psql:
+#   orchestra schema --driver postgres | psql "$DATABASE_URL"
 pollInterval            = "1s"
 leaseDuration           = "30s"
 scriptEnabled           = false

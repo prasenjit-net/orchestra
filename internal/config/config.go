@@ -55,7 +55,9 @@ type UIConfig struct {
 
 type WorkflowConfig struct {
 	Enabled                 bool          `mapstructure:"enabled" yaml:"enabled"`
+	DatabaseDriver          string        `mapstructure:"databaseDriver" yaml:"databaseDriver"`
 	DatabasePath            string        `mapstructure:"databasePath" yaml:"databasePath"`
+	DatabaseURL             string        `mapstructure:"databaseURL" yaml:"databaseURL"`
 	PollInterval            time.Duration `mapstructure:"pollInterval" yaml:"pollInterval"`
 	LeaseDuration           time.Duration `mapstructure:"leaseDuration" yaml:"leaseDuration"`
 	ScriptEnabled           bool          `mapstructure:"scriptEnabled" yaml:"scriptEnabled"`
@@ -91,7 +93,9 @@ func Default() Config {
 		},
 		Workflow: WorkflowConfig{
 			Enabled:                 true,
+			DatabaseDriver:          "sqlite",
 			DatabasePath:            "data/workflows.db",
+			DatabaseURL:             "",
 			PollInterval:            1 * time.Second,
 			LeaseDuration:           30 * time.Second,
 			ScriptEnabled:           false,
@@ -132,7 +136,9 @@ func SetDefaults(v *viper.Viper) {
 	v.SetDefault("logging.format", defaults.Logging.Format)
 	v.SetDefault("ui.devProxyURL", defaults.UI.DevProxyURL)
 	v.SetDefault("workflow.enabled", defaults.Workflow.Enabled)
+	v.SetDefault("workflow.databaseDriver", defaults.Workflow.DatabaseDriver)
 	v.SetDefault("workflow.databasePath", defaults.Workflow.DatabasePath)
+	v.SetDefault("workflow.databaseURL", defaults.Workflow.DatabaseURL)
 	v.SetDefault("workflow.pollInterval", defaults.Workflow.PollInterval)
 	v.SetDefault("workflow.leaseDuration", defaults.Workflow.LeaseDuration)
 	v.SetDefault("workflow.scriptEnabled", defaults.Workflow.ScriptEnabled)
