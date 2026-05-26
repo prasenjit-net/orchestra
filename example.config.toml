@@ -20,13 +20,30 @@ format = "text"
 devProxyURL = "http://localhost:5173"
 
 [workflow]
-enabled                = true
-databasePath           = "data/workflows.db"
-pollInterval           = "1s"
-leaseDuration          = "30s"
-scriptEnabled          = false
-scriptTimeout          = "250ms"
-scriptMaxSourceBytes   = 16384
-scriptMaxOutputBytes   = 262144
+enabled                 = true
+databasePath            = "data/workflows.db"
+pollInterval            = "1s"
+leaseDuration           = "30s"
+scriptEnabled           = false
+scriptTimeout           = "250ms"
+scriptMaxSourceBytes    = 16384
+scriptMaxOutputBytes    = 262144
 scriptMaxExecutionSteps = 25000
 # openaiAPIKey = ""   # set via APP_WORKFLOW_OPENAI_API_KEY env var or here
+                      # required for the "Enhance with AI" feature in the agent editor
+
+[webhook]
+enabled = true
+# callbackAllowlist = [
+#   "https://your-domain\\.example\\.com/.*",
+#   "http://localhost:.*",
+# ]
+# Regex list of URLs allowed as X-Callback-URL on POST /ext/webhook/{id}/start
+# An empty list (default) means no callback URLs are accepted.
+# Set a single ".*" entry to allow any URL (dev/test only).
+
+# External API endpoints (no authentication — plan auth separately):
+#   POST /ext/webhook/{definitionId}/start   — trigger a workflow (body = JSON input)
+#   POST /ext/webhook/{workflowId}/signal    — deliver a named signal
+#   GET  /ext/signal/{workflowId}            — poll workflow state / pending signals
+#   GET  /ext/result/{workflowId}            — poll final result (202 while running)

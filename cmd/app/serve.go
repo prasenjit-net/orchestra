@@ -5,7 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -43,6 +45,7 @@ func runServe(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}
+	cfg.ConfigFilePath = viper.GetViper().ConfigFileUsed()
 	if portFlag > 0 {
 		cfg.Server.Port = portFlag
 	}
@@ -60,11 +63,14 @@ func runServe(cmd *cobra.Command, args []string) error {
 		defer workflowService.Close()
 	}
 
+	restartCh := make(chan struct{}, 1)
+
 	appServer, err := server.New(cfg, logger, buildInfo, server.Options{
-		DevMode:  devMode,
-		UIFS:     uiFS,
-		Live:     live,
-		Workflow: workflowService,
+		DevMode:   devMode,
+		UIFS:      uiFS,
+		Live:      live,
+		Workflow:  workflowService,
+		RestartCh: restartCh,
 	})
 	if err != nil {
 		return err
@@ -116,10 +122,14 @@ func runServe(cmd *cobra.Command, args []string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
+	restart := false
 	select {
 	case err := <-errCh:
 		stopWorker()
 		return err
+	case <-restartCh:
+		logger.Info("restart requested")
+		restart = true
 	case <-ctx.Done():
 		logger.Info("shutdown signal received")
 	}
@@ -128,5 +138,29 @@ func runServe(cmd *cobra.Command, args []string) error {
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), cfg.Server.ShutdownTimeout)
 	defer cancel()
 
-	return httpServer.Shutdown(shutdownCtx)
+	if err := httpServer.Shutdown(shutdownCtx); err != nil {
+		return err
+	}
+
+	if restart {
+		execSelf(logger)
+	}
+	return nil
+}
+
+func execSelf(logger interface{ Info(string, ...any); Error(string, ...any) }) {
+	exe, err := os.Executable()
+	if err != nil {
+		logger.Error("restart: get executable", "error", err)
+		return
+	}
+	exe, err = filepath.EvalSymlinks(exe)
+	if err != nil {
+		logger.Error("restart: eval symlinks", "error", err)
+		return
+	}
+	logger.Info("restarting process", "exe", exe)
+	if err := syscall.Exec(exe, os.Args, os.Environ()); err != nil {
+		logger.Error("restart: exec failed", "error", err)
+	}
 }

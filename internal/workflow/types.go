@@ -98,6 +98,9 @@ type WorkflowInstance struct {
 	Context           json.RawMessage `json:"context,omitempty"`
 	PendingSignals    int             `json:"pendingSignals"`
 	NextRunAt         *time.Time      `json:"nextRunAt,omitempty"`
+	CallbackURL       string          `json:"callbackUrl,omitempty"`
+	CallbackStatus    string          `json:"callbackStatus,omitempty"`
+	TriggerSource     string          `json:"triggerSource,omitempty"`
 	CreatedAt         time.Time       `json:"createdAt"`
 	UpdatedAt         time.Time       `json:"updatedAt"`
 }
@@ -141,6 +144,13 @@ type WorkflowSignal struct {
 type SignalWorkflowInput struct {
 	Name    string          `json:"name"`
 	Payload json.RawMessage `json:"payload,omitempty"`
+}
+
+type StartWorkflowInput struct {
+	DefinitionID  string
+	Input         map[string]any
+	CallbackURL   string
+	TriggerSource string
 }
 
 type ActivityDescriptor struct {

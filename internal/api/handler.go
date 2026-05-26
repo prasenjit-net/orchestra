@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -14,14 +16,16 @@ import (
 	"github.com/prasenjit-net/orchestra/internal/config"
 	"github.com/prasenjit-net/orchestra/internal/livebus"
 	"github.com/prasenjit-net/orchestra/internal/version"
+	"github.com/prasenjit-net/orchestra/internal/webhooks"
 	"github.com/prasenjit-net/orchestra/internal/workflow"
 )
 
 type Handler struct {
-	config   config.Config
-	version  version.Info
-	live     *livebus.Bus
-	workflow *workflow.Service
+	config    config.Config
+	version   version.Info
+	live      *livebus.Bus
+	workflow  *workflow.Service
+	restartCh chan struct{}
 }
 
 type HealthResponse struct {
@@ -51,8 +55,8 @@ type metaResponse struct {
 	Version     version.Info `json:"version"`
 }
 
-func NewHandler(cfg config.Config, build version.Info, live *livebus.Bus, workflowService *workflow.Service) *Handler {
-	return &Handler{config: cfg, version: build, live: live, workflow: workflowService}
+func NewHandler(cfg config.Config, build version.Info, live *livebus.Bus, workflowService *workflow.Service, restartCh chan struct{}) *Handler {
+	return &Handler{config: cfg, version: build, live: live, workflow: workflowService, restartCh: restartCh}
 }
 
 func BuildHealthResponse(cfg config.Config, build version.Info) HealthResponse {
@@ -260,7 +264,35 @@ func (h *Handler) StartWorkflow(w http.ResponseWriter, r *http.Request, definiti
 		return
 	}
 
-	instance, err := h.workflow.StartWorkflow(r.Context(), definitionID)
+	var body struct {
+		Input       map[string]any `json:"input"`
+		CallbackURL string         `json:"callbackUrl"`
+	}
+	if r.ContentLength > 0 {
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid JSON body")
+			return
+		}
+	}
+
+	if body.CallbackURL != "" {
+		al, err := webhooks.NewCallbackAllowlist(h.config.Webhook.CallbackAllowlist)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "invalid callback allowlist configuration")
+			return
+		}
+		if !al.Allows(body.CallbackURL) {
+			writeError(w, http.StatusUnprocessableEntity, "callback URL is not in the allowed list")
+			return
+		}
+	}
+
+	instance, err := h.workflow.StartWorkflowWithInput(r.Context(), workflow.StartWorkflowInput{
+		DefinitionID:  definitionID,
+		Input:         body.Input,
+		CallbackURL:   body.CallbackURL,
+		TriggerSource: "ui",
+	})
 	if err != nil {
 		writeWorkflowError(w, err)
 		return
@@ -798,6 +830,84 @@ func (h *Handler) ExploreMCPServer(w http.ResponseWriter, r *http.Request, serve
 		return
 	}
 	respondJSON(w, http.StatusOK, srv)
+}
+
+func (h *Handler) Restart(w http.ResponseWriter, r *http.Request) {
+	if h.restartCh == nil {
+		writeError(w, http.StatusServiceUnavailable, "restart not supported in this mode")
+		return
+	}
+	select {
+	case h.restartCh <- struct{}{}:
+		respondJSON(w, http.StatusAccepted, map[string]string{"status": "restarting"})
+	default:
+		respondJSON(w, http.StatusAccepted, map[string]string{"status": "restarting"})
+	}
+}
+
+func (h *Handler) GetConfigRaw(w http.ResponseWriter, r *http.Request) {
+	path := h.config.ConfigFilePath
+	if path == "" {
+		writeError(w, http.StatusNotFound, "no config file in use (server started without a config file)")
+		return
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("read config file: %s", err))
+		return
+	}
+	respondJSON(w, http.StatusOK, map[string]string{
+		"path":    path,
+		"content": string(data),
+	})
+}
+
+func (h *Handler) PutConfigRaw(w http.ResponseWriter, r *http.Request) {
+	path := h.config.ConfigFilePath
+	if path == "" {
+		writeError(w, http.StatusNotFound, "no config file in use")
+		return
+	}
+	var body struct {
+		Content string `json:"content"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	if body.Content == "" {
+		writeError(w, http.StatusBadRequest, "content must not be empty")
+		return
+	}
+	if err := os.WriteFile(path, []byte(body.Content), 0o600); err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("write config file: %s", err))
+		return
+	}
+	respondJSON(w, http.StatusOK, map[string]string{"path": path, "status": "saved"})
+}
+
+func (h *Handler) EnhancePrompt(w http.ResponseWriter, r *http.Request) {
+	if h.workflow == nil {
+		writeError(w, http.StatusServiceUnavailable, "workflow service unavailable")
+		return
+	}
+	var body struct {
+		Prompt string `json:"prompt"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	if body.Prompt == "" {
+		writeError(w, http.StatusBadRequest, "prompt is required")
+		return
+	}
+	enhanced, err := h.workflow.EnhancePrompt(r.Context(), body.Prompt)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	respondJSON(w, http.StatusOK, map[string]string{"prompt": enhanced})
 }
 
 func (h *Handler) applyTaskAction(w http.ResponseWriter, r *http.Request, taskID int64, action func(context.Context, int64) (workflow.WorkflowTask, error)) {

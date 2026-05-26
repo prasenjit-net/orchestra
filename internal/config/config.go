@@ -16,6 +16,16 @@ type Config struct {
 	Logging  LoggingConfig  `mapstructure:"logging" yaml:"logging"`
 	UI       UIConfig       `mapstructure:"ui" yaml:"ui"`
 	Workflow WorkflowConfig `mapstructure:"workflow" yaml:"workflow"`
+	Webhook  WebhookConfig  `mapstructure:"webhook" yaml:"webhook"`
+
+	// ConfigFilePath is the resolved path to the active config file.
+	// Set by the caller after loading — not read from TOML.
+	ConfigFilePath string `mapstructure:"-" yaml:"-"`
+}
+
+type WebhookConfig struct {
+	Enabled           bool     `mapstructure:"enabled" yaml:"enabled"`
+	CallbackAllowlist []string `mapstructure:"callbackAllowlist" yaml:"callbackAllowlist"`
 }
 
 type AppConfig struct {
@@ -90,6 +100,10 @@ func Default() Config {
 			ScriptMaxOutputBytes:    256 * 1024,
 			ScriptMaxExecutionSteps: 25_000,
 		},
+		Webhook: WebhookConfig{
+			Enabled:           true,
+			CallbackAllowlist: []string{},
+		},
 	}
 }
 
@@ -126,6 +140,8 @@ func SetDefaults(v *viper.Viper) {
 	v.SetDefault("workflow.scriptMaxSourceBytes", defaults.Workflow.ScriptMaxSourceBytes)
 	v.SetDefault("workflow.scriptMaxOutputBytes", defaults.Workflow.ScriptMaxOutputBytes)
 	v.SetDefault("workflow.scriptMaxExecutionSteps", defaults.Workflow.ScriptMaxExecutionSteps)
+	v.SetDefault("webhook.enabled", defaults.Webhook.Enabled)
+	v.SetDefault("webhook.callbackAllowlist", defaults.Webhook.CallbackAllowlist)
 }
 
 func Load(v *viper.Viper) (Config, error) {
@@ -206,6 +222,16 @@ scriptMaxSourceBytes    = 16384
 scriptMaxOutputBytes    = 262144
 scriptMaxExecutionSteps = 25000
 # openaiAPIKey = ""   # set via APP_WORKFLOW_OPENAI_API_KEY env var or here
+                   # required for the "Enhance with AI" feature in the agent editor
+
+[webhook]
+enabled = true
+# callbackAllowlist = [
+#   "https://your-domain\\.example\\.com/.*",
+#   "http://localhost:.*",
+# ]
+# Regex list of URLs allowed as X-Callback-URL on POST /ext/webhook/{id}/start.
+# An empty list (default) means no callback URLs are accepted.
 `
 
 const DefaultEnvExample = `APP_ENV=development

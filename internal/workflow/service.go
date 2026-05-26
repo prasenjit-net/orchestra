@@ -8,7 +8,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
+	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -562,13 +564,24 @@ func (s *Service) GetDefinitionVersion(ctx context.Context, definitionID string,
 }
 
 func (s *Service) StartWorkflow(ctx context.Context, definitionID string) (WorkflowInstance, error) {
+	return s.StartWorkflowWithInput(ctx, StartWorkflowInput{
+		DefinitionID:  definitionID,
+		TriggerSource: "ui",
+	})
+}
+
+func (s *Service) StartWorkflowWithInput(ctx context.Context, in StartWorkflowInput) (WorkflowInstance, error) {
+	if in.TriggerSource == "" {
+		in.TriggerSource = "ui"
+	}
+
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return WorkflowInstance{}, fmt.Errorf("begin workflow transaction: %w", err)
 	}
 	defer tx.Rollback()
 
-	details, err := s.getDefinitionTx(ctx, tx, definitionID)
+	details, err := s.getDefinitionTx(ctx, tx, in.DefinitionID)
 	if err != nil {
 		return WorkflowInstance{}, err
 	}
@@ -581,7 +594,9 @@ func (s *Service) StartWorkflow(ctx context.Context, definitionID string) (Workf
 		Status:            StatusRunning,
 		CurrentStepIndex:  -1,
 		LastEventSequence: 0,
-		Context:           buildInitialContext(details.ID, details.ActiveVersion),
+		Context:           buildInitialContext(details.ID, details.ActiveVersion, in.Input),
+		CallbackURL:       in.CallbackURL,
+		TriggerSource:     in.TriggerSource,
 		CreatedAt:         now,
 		UpdatedAt:         now,
 	}
@@ -609,9 +624,14 @@ func (s *Service) StartWorkflow(ctx context.Context, definitionID string) (Workf
 	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO workflow_instances (
 			id, definition_id, definition_version, status, current_step_index, current_step_name,
-			current_activity, snapshot_json, last_event_sequence, last_error, created_at, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, '', ?, ?)
-	`, instance.ID, instance.DefinitionID, instance.DefinitionVersion, instance.Status, instance.CurrentStepIndex, instance.CurrentStepName, instance.CurrentActivity, snapshotJSON, formatTime(now), formatTime(now)); err != nil {
+			current_activity, snapshot_json, last_event_sequence, last_error,
+			callback_url, trigger_source, callback_status,
+			created_at, updated_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, '', ?, ?, '', ?, ?)
+	`, instance.ID, instance.DefinitionID, instance.DefinitionVersion, instance.Status,
+		instance.CurrentStepIndex, instance.CurrentStepName, instance.CurrentActivity,
+		snapshotJSON, instance.CallbackURL, instance.TriggerSource,
+		formatTime(now), formatTime(now)); err != nil {
 		return WorkflowInstance{}, fmt.Errorf("insert workflow instance: %w", err)
 	}
 
@@ -745,7 +765,8 @@ func (s *Service) ListWorkflows(ctx context.Context, input ListWorkflowsInput) (
 	}
 
 	query := `SELECT id, definition_id, definition_version, status, current_step_index, current_step_name,
-		       current_activity, snapshot_json, last_event_sequence, last_error, created_at, updated_at
+		       current_activity, snapshot_json, last_event_sequence, last_error, created_at, updated_at,
+		       callback_url, trigger_source, callback_status
 		FROM workflow_instances ` + where + ` ORDER BY updated_at DESC, created_at DESC`
 
 	pageArgs := make([]any, len(args))
@@ -780,7 +801,8 @@ func (s *Service) ListWorkflows(ctx context.Context, input ListWorkflowsInput) (
 func (s *Service) GetWorkflow(ctx context.Context, workflowID string) (WorkflowInstance, error) {
 	row := s.db.QueryRowContext(ctx, `
 		SELECT id, definition_id, definition_version, status, current_step_index, current_step_name,
-		       current_activity, snapshot_json, last_event_sequence, last_error, created_at, updated_at
+		       current_activity, snapshot_json, last_event_sequence, last_error, created_at, updated_at,
+		       callback_url, trigger_source, callback_status
 		FROM workflow_instances
 		WHERE id = ?
 	`, workflowID)
@@ -1469,7 +1491,7 @@ func (s *Service) completeTask(ctx context.Context, task WorkflowTask, definitio
 		"activity":   step.Activity,
 		"status":     StatusCompleted,
 	})
-	if nextStepIndex >= len(definition.Document.Steps) {
+	if nextStepIndex < 0 {
 		s.emitLiveEvent("workflow.completed", "workflow", task.WorkflowID, map[string]any{
 			"workflowId": task.WorkflowID,
 			"status":     StatusCompleted,
@@ -1478,6 +1500,19 @@ func (s *Service) completeTask(ctx context.Context, task WorkflowTask, definitio
 			"stepIndex": task.StepIndex,
 			"stepName":  step.Name,
 		})
+		if instance.CallbackURL != "" {
+			callbackURL := instance.CallbackURL
+			workflowID := task.WorkflowID
+			go func() {
+				completed, err := s.GetWorkflow(context.Background(), workflowID)
+				if err != nil {
+					s.logger.Error("callback: fetch completed instance", "workflowId", workflowID, "error", err)
+					return
+				}
+				completed.CallbackURL = callbackURL
+				s.deliverCallback(completed)
+			}()
+		}
 	} else {
 		s.emitLiveEvent("workflow.updated", "workflow", task.WorkflowID, map[string]any{
 			"workflowId": task.WorkflowID,
@@ -1962,6 +1997,75 @@ func (s *Service) updateInstanceTx(ctx context.Context, tx *sql.Tx, instance Wor
 	return nil
 }
 
+func (s *Service) deliverCallback(instance WorkflowInstance) {
+	if instance.CallbackURL == "" {
+		return
+	}
+	payload, err := json.Marshal(map[string]any{
+		"workflowId":   instance.ID,
+		"definitionId": instance.DefinitionID,
+		"status":       instance.Status,
+		"output":       decodeJSONObject(instance.LastOutput),
+		"context":      decodeJSONObject(instance.Context),
+		"completedAt":  formatTime(instance.UpdatedAt),
+	})
+	if err != nil {
+		s.logger.Error("callback: marshal payload", "workflowId", instance.ID, "error", err)
+		return
+	}
+
+	delays := []time.Duration{0, 5 * time.Second, 15 * time.Second, 45 * time.Second}
+	var lastErr error
+	for attempt, delay := range delays {
+		if delay > 0 {
+			time.Sleep(delay)
+		}
+		lastErr = s.doCallbackAttempt(instance.CallbackURL, instance.ID, payload)
+		if lastErr == nil {
+			s.setCallbackStatus(instance.ID, "delivered")
+			return
+		}
+		s.logger.Warn("callback attempt failed", "workflowId", instance.ID, "attempt", attempt+1, "error", lastErr)
+	}
+	s.logger.Error("callback delivery failed after all attempts", "workflowId", instance.ID, "error", lastErr)
+	s.setCallbackStatus(instance.ID, "failed")
+}
+
+func (s *Service) doCallbackAttempt(callbackURL, workflowID string, payload []byte) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, callbackURL, strings.NewReader(string(payload)))
+	if err != nil {
+		return fmt.Errorf("build callback request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Orchestra-Workflow-ID", workflowID)
+	req.Header.Set("X-Orchestra-Event", "workflow.completed")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("callback request: %w", err)
+	}
+	_, _ = io.Copy(io.Discard, resp.Body)
+	_ = resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("callback returned HTTP %d", resp.StatusCode)
+	}
+	return nil
+}
+
+func (s *Service) setCallbackStatus(workflowID, status string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if _, err := s.db.ExecContext(ctx,
+		`UPDATE workflow_instances SET callback_status = ? WHERE id = ?`,
+		status, workflowID,
+	); err != nil {
+		s.logger.Error("update callback_status", "workflowId", workflowID, "error", err)
+	}
+}
+
 func (s *Service) normalizeDefinition(input CreateDefinitionInput) (DefinitionDocument, error) {
 	document := DefinitionDocument{
 		Name:        strings.TrimSpace(input.Name),
@@ -2199,7 +2303,8 @@ func (s *Service) getDefinitionVersionDocumentTx(ctx context.Context, tx *sql.Tx
 func (s *Service) getWorkflowTx(ctx context.Context, tx *sql.Tx, workflowID string) (WorkflowInstance, error) {
 	row := tx.QueryRowContext(ctx, `
 		SELECT id, definition_id, definition_version, status, current_step_index, current_step_name,
-		       current_activity, snapshot_json, last_event_sequence, last_error, created_at, updated_at
+		       current_activity, snapshot_json, last_event_sequence, last_error, created_at, updated_at,
+		       callback_url, trigger_source, callback_status
 		FROM workflow_instances
 		WHERE id = ?
 	`, workflowID)
@@ -2259,15 +2364,19 @@ func decodePayloadForEvent(raw json.RawMessage) any {
 
 var templateTokenPattern = regexp.MustCompile(`\{\{\s*([^{}]+?)\s*\}\}`)
 
-func buildInitialContext(definitionID string, version int) json.RawMessage {
-	payload, _ := json.Marshal(map[string]any{
+func buildInitialContext(definitionID string, version int, input map[string]any) json.RawMessage {
+	ctx := map[string]any{
 		"workflow": map[string]any{
 			"definitionId":      definitionID,
 			"definitionVersion": version,
 		},
 		"steps":   map[string]any{},
 		"signals": map[string]any{},
-	})
+	}
+	if len(input) > 0 {
+		ctx["input"] = input
+	}
+	payload, _ := json.Marshal(ctx)
 	return json.RawMessage(payload)
 }
 
@@ -2701,6 +2810,9 @@ func scanWorkflowInstance(scanner interface{ Scan(...any) error }) (WorkflowInst
 		lastError    sql.NullString
 		createdAt    string
 		updatedAt    string
+		callbackURL  sql.NullString
+		triggerSrc   sql.NullString
+		callbackSt   sql.NullString
 	)
 	if err := scanner.Scan(
 		&instance.ID,
@@ -2715,12 +2827,18 @@ func scanWorkflowInstance(scanner interface{ Scan(...any) error }) (WorkflowInst
 		&lastError,
 		&createdAt,
 		&updatedAt,
+		&callbackURL,
+		&triggerSrc,
+		&callbackSt,
 	); err != nil {
 		return WorkflowInstance{}, fmt.Errorf("scan workflow instance: %w", err)
 	}
 	instance.LastError = lastError.String
 	instance.CreatedAt = mustParseTime(createdAt)
 	instance.UpdatedAt = mustParseTime(updatedAt)
+	instance.CallbackURL = callbackURL.String
+	instance.TriggerSource = triggerSrc.String
+	instance.CallbackStatus = callbackSt.String
 	if snapshotJSON != "" {
 		var snapshot workflowSnapshot
 		if err := json.Unmarshal([]byte(snapshotJSON), &snapshot); err == nil {
@@ -2929,6 +3047,9 @@ func (s *Service) initSchema(ctx context.Context) error {
 	if err := ensureMCPServerColumns(ctx, s.db); err != nil {
 		return err
 	}
+	if err := ensureWorkflowInstanceColumns(ctx, s.db); err != nil {
+		return err
+	}
 
 	return nil
 }
@@ -3024,6 +3145,51 @@ func ensureWorkflowDefinitionVersionColumns(ctx context.Context, db *sql.DB) err
 	}
 	if _, err := db.ExecContext(ctx, `UPDATE workflow_definition_versions SET published_at = created_at WHERE status = 'published' AND (published_at IS NULL OR published_at = '')`); err != nil {
 		return fmt.Errorf("backfill workflow_definition_versions.published_at: %w", err)
+	}
+	return nil
+}
+
+func ensureWorkflowInstanceColumns(ctx context.Context, db *sql.DB) error {
+	rows, err := db.QueryContext(ctx, `PRAGMA table_info(workflow_instances)`)
+	if err != nil {
+		return fmt.Errorf("inspect workflow_instances schema: %w", err)
+	}
+	defer rows.Close()
+
+	existing := make(map[string]bool)
+	for rows.Next() {
+		var (
+			cid        int
+			name       string
+			dataType   string
+			notNull    int
+			defaultVal sql.NullString
+			primaryKey int
+		)
+		if err := rows.Scan(&cid, &name, &dataType, &notNull, &defaultVal, &primaryKey); err != nil {
+			return fmt.Errorf("scan workflow_instances schema: %w", err)
+		}
+		existing[name] = true
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterate workflow_instances schema: %w", err)
+	}
+
+	migrations := []struct {
+		column string
+		ddl    string
+	}{
+		{"callback_url", `ALTER TABLE workflow_instances ADD COLUMN callback_url TEXT NOT NULL DEFAULT ''`},
+		{"trigger_source", `ALTER TABLE workflow_instances ADD COLUMN trigger_source TEXT NOT NULL DEFAULT 'ui'`},
+		{"callback_status", `ALTER TABLE workflow_instances ADD COLUMN callback_status TEXT NOT NULL DEFAULT ''`},
+	}
+	for _, m := range migrations {
+		if existing[m.column] {
+			continue
+		}
+		if _, err := db.ExecContext(ctx, m.ddl); err != nil {
+			return fmt.Errorf("add workflow_instances.%s column: %w", m.column, err)
+		}
 	}
 	return nil
 }

@@ -128,6 +128,9 @@ export interface WorkflowInstance {
   context?: Record<string, unknown>
   pendingSignals: number
   nextRunAt?: string
+  callbackUrl?: string
+  callbackStatus?: string
+  triggerSource?: string
   createdAt: string
   updatedAt: string
 }

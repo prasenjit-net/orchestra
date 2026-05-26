@@ -1,11 +1,11 @@
 import { useState, useEffect } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ArrowLeft, Eye, Pencil, Save, Trash2 } from 'lucide-react'
+import { ArrowLeft, Eye, Pencil, Save, Sparkles, Trash2 } from 'lucide-react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import Editor from '@monaco-editor/react'
 import ReactMarkdown from 'react-markdown'
 import { useMonacoTheme } from '../hooks/useMonacoTheme'
-import { agentsApi, mcpServersApi } from '../services/api'
+import { agentsApi, aiApi, mcpServersApi } from '../services/api'
 import type { CreateAgentInput } from '../types'
 
 type PromptMode = 'edit' | 'preview'
@@ -123,6 +123,16 @@ export default function AgentEditorPage() {
   }
 
   const monacoTheme = useMonacoTheme()
+
+  const [enhanceError, setEnhanceError] = useState<string | null>(null)
+  const enhanceMutation = useMutation({
+    mutationFn: () => aiApi.enhancePrompt(systemPrompt),
+    onSuccess: (result) => {
+      setSystemPrompt(result.prompt)
+      setEnhanceError(null)
+    },
+    onError: (error: Error) => setEnhanceError(error.message),
+  })
 
   const handleDelete = () => {
     if (!window.confirm('Delete this agent? Workflow steps that reference it will fail at runtime.')) return
@@ -258,35 +268,52 @@ export default function AgentEditorPage() {
         {/* Right panel */}
         <div className="flex flex-1 flex-col overflow-hidden bg-white dark:bg-slate-950">
           {/* System prompt header with edit/preview toggle */}
-          <div className="shrink-0 flex items-center justify-between px-4 pt-4 pb-2">
+          <div className="shrink-0 flex items-center justify-between gap-3 px-4 pt-4 pb-2">
             <label className="text-[11px] font-semibold uppercase tracking-wide text-gray-400 dark:text-slate-400">System Prompt</label>
-            <div className="flex items-center rounded-lg bg-gray-100 p-0.5 dark:bg-slate-800">
+            <div className="flex items-center gap-2">
               <button
                 type="button"
-                onClick={() => setPromptMode('edit')}
-                className={`inline-flex items-center gap-1.5 rounded-md px-3 py-1 text-xs font-medium transition-colors ${
-                  promptMode === 'edit'
-                    ? 'bg-white text-gray-900 shadow-sm dark:bg-slate-600 dark:text-slate-100'
-                    : 'text-gray-500 hover:text-gray-900 dark:text-slate-400 dark:hover:text-slate-200'
-                }`}
+                onClick={() => enhanceMutation.mutate()}
+                disabled={enhanceMutation.isPending || !systemPrompt.trim()}
+                title="Rewrite this system prompt using AI"
+                className="inline-flex items-center gap-1.5 rounded-lg border border-violet-200 bg-violet-50 px-3 py-1 text-xs font-semibold text-violet-700 transition-colors hover:bg-violet-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-violet-800/50 dark:bg-violet-950/30 dark:text-violet-300 dark:hover:bg-violet-950/50"
               >
-                <Pencil className="h-3 w-3" />
-                Edit
+                <Sparkles className="h-3 w-3" />
+                {enhanceMutation.isPending ? 'Enhancing…' : 'Enhance with AI'}
               </button>
-              <button
-                type="button"
-                onClick={() => setPromptMode('preview')}
-                className={`inline-flex items-center gap-1.5 rounded-md px-3 py-1 text-xs font-medium transition-colors ${
-                  promptMode === 'preview'
-                    ? 'bg-white text-gray-900 shadow-sm dark:bg-slate-600 dark:text-slate-100'
-                    : 'text-gray-500 hover:text-gray-900 dark:text-slate-400 dark:hover:text-slate-200'
-                }`}
-              >
-                <Eye className="h-3 w-3" />
-                Preview
-              </button>
+              <div className="flex items-center rounded-lg bg-gray-100 p-0.5 dark:bg-slate-800">
+                <button
+                  type="button"
+                  onClick={() => setPromptMode('edit')}
+                  className={`inline-flex items-center gap-1.5 rounded-md px-3 py-1 text-xs font-medium transition-colors ${
+                    promptMode === 'edit'
+                      ? 'bg-white text-gray-900 shadow-sm dark:bg-slate-600 dark:text-slate-100'
+                      : 'text-gray-500 hover:text-gray-900 dark:text-slate-400 dark:hover:text-slate-200'
+                  }`}
+                >
+                  <Pencil className="h-3 w-3" />
+                  Edit
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setPromptMode('preview')}
+                  className={`inline-flex items-center gap-1.5 rounded-md px-3 py-1 text-xs font-medium transition-colors ${
+                    promptMode === 'preview'
+                      ? 'bg-white text-gray-900 shadow-sm dark:bg-slate-600 dark:text-slate-100'
+                      : 'text-gray-500 hover:text-gray-900 dark:text-slate-400 dark:hover:text-slate-200'
+                  }`}
+                >
+                  <Eye className="h-3 w-3" />
+                  Preview
+                </button>
+              </div>
             </div>
           </div>
+          {enhanceError && (
+            <div className="mx-4 mb-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700 dark:border-red-900/40 dark:bg-red-950/30 dark:text-red-300">
+              {enhanceError}
+            </div>
+          )}
 
           {/* Editor / Preview area */}
           <div className="flex-1 overflow-hidden">

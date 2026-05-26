@@ -60,6 +60,37 @@ export const healthApi = {
   get: async () => handleResponse<HealthResponse>(await fetch(buildApiUrl('/health'))),
 }
 
+export const aiApi = {
+  enhancePrompt: async (prompt: string) =>
+    handleResponse<{ prompt: string }>(
+      await fetch(buildApiUrl('/ai/enhance-prompt'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prompt }),
+      }),
+    ),
+}
+
+export const adminApi = {
+  restart: async () =>
+    handleResponse<{ status: string }>(
+      await fetch(buildApiUrl('/admin/restart'), { method: 'POST' }),
+    ),
+}
+
+export const configApi = {
+  getRaw: async () =>
+    handleResponse<{ path: string; content: string }>(await fetch(buildApiUrl('/config/raw'))),
+  putRaw: async (content: string) =>
+    handleResponse<{ path: string; status: string }>(
+      await fetch(buildApiUrl('/config/raw'), {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content }),
+      }),
+    ),
+}
+
 export const exampleApi = {
   get: async () => handleResponse<ExampleResponse>(await fetch(buildApiUrl('/example'))),
 }
@@ -212,10 +243,12 @@ export const workflowApi = {
         method: 'POST',
       }),
     ),
-  startWorkflow: async (definitionId: string) =>
+  startWorkflow: async (definitionId: string, body?: { input?: Record<string, unknown>; callbackUrl?: string }) =>
     handleResponse<WorkflowInstance>(
       await fetch(buildApiUrl(`/workflow-definitions/${definitionId}/start`), {
         method: 'POST',
+        headers: body ? { 'Content-Type': 'application/json' } : undefined,
+        body: body ? JSON.stringify(body) : undefined,
       }),
     ),
   listWorkflows: async (params?: { limit?: number; offset?: number; status?: string; currentActivities?: string[] }) => {

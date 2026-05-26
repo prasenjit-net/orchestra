@@ -1,17 +1,46 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { GitBranch, PencilRuler, Play, Plus, Wand2 } from 'lucide-react'
+import { Check, Copy, GitBranch, PencilRuler, Play, Plus, Wand2 } from 'lucide-react'
 import { Link, useNavigate } from 'react-router-dom'
 import SectionHeader from '../components/SectionHeader'
 import StatCard from '../components/StatCard'
+import StartWorkflowModal from '../components/StartWorkflowModal'
 import { workflowApi } from '../services/api'
 import { formatDate, statusClasses } from './workflowUi'
+import type { WorkflowDefinitionSummary } from '../types'
+
+function WebhookUrl({ definitionId }: { definitionId: string }) {
+  const [copied, setCopied] = useState(false)
+  const url = `POST /ext/webhook/${definitionId}/start`
+
+  function copy() {
+    void navigator.clipboard.writeText(url)
+    setCopied(true)
+    setTimeout(() => setCopied(false), 2000)
+  }
+
+  return (
+    <div className="flex items-center gap-2 rounded-lg bg-gray-50 px-3 py-2 dark:bg-slate-800">
+      <span className="min-w-0 flex-1 truncate font-mono text-xs text-gray-600 dark:text-slate-300">{url}</span>
+      <button
+        type="button"
+        onClick={copy}
+        className="shrink-0 text-gray-400 transition-colors hover:text-gray-600 dark:text-slate-500 dark:hover:text-slate-300"
+        title="Copy webhook URL"
+      >
+        {copied ? <Check className="h-3.5 w-3.5 text-emerald-500" /> : <Copy className="h-3.5 w-3.5" />}
+      </button>
+    </div>
+  )
+}
 
 export default function WorkflowListPage() {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   const [notice, setNotice] = useState<string | null>(null)
   const [pageError, setPageError] = useState<string | null>(null)
+  const [startTarget, setStartTarget] = useState<WorkflowDefinitionSummary | null>(null)
+  const [startError, setStartError] = useState<string | null>(null)
 
   const definitionsQuery = useQuery({
     queryKey: ['workflow-definitions'],
@@ -19,8 +48,14 @@ export default function WorkflowListPage() {
   })
 
   const startWorkflowMutation = useMutation({
-    mutationFn: workflowApi.startWorkflow,
+    mutationFn: ({ definitionId, input, callbackUrl }: { definitionId: string; input: Record<string, unknown>; callbackUrl: string }) =>
+      workflowApi.startWorkflow(definitionId, {
+        input: Object.keys(input).length > 0 ? input : undefined,
+        callbackUrl: callbackUrl || undefined,
+      }),
     onSuccess: (instance) => {
+      setStartTarget(null)
+      setStartError(null)
       setPageError(null)
       setNotice('Workflow instance started.')
       void queryClient.invalidateQueries({ queryKey: ['workflows'] })
@@ -28,8 +63,7 @@ export default function WorkflowListPage() {
       setTimeout(() => navigate(`/runs/${instance.id}`), 800)
     },
     onError: (error: Error) => {
-      setNotice(null)
-      setPageError(error.message)
+      setStartError(error.message)
     },
   })
 
@@ -169,6 +203,12 @@ export default function WorkflowListPage() {
                   </div>
                 </div>
 
+                {/* Webhook URL */}
+                <div className="border-t border-gray-100 px-5 py-3 dark:border-slate-800">
+                  <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-wide text-gray-400 dark:text-slate-500">Webhook</p>
+                  <WebhookUrl definitionId={definition.id} />
+                </div>
+
                 {/* Metadata strip */}
                 <div className="grid grid-cols-2 gap-x-4 gap-y-1 border-t border-gray-100 px-5 py-3 text-xs text-gray-500 dark:border-slate-800 dark:text-slate-400">
                   <div><span className="font-medium text-gray-700 dark:text-slate-300">Active</span> v{definition.activeVersion}</div>
@@ -189,8 +229,11 @@ export default function WorkflowListPage() {
                   </button>
                   <button
                     type="button"
-                    onClick={() => startWorkflowMutation.mutate(definition.id)}
-                    disabled={startWorkflowMutation.isPending || definition.status !== 'published'}
+                    onClick={() => {
+                      setStartError(null)
+                      setStartTarget(definition)
+                    }}
+                    disabled={definition.status !== 'published'}
                     title={definition.status !== 'published' ? 'Publish a version first' : undefined}
                     className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 px-3 py-1.5 text-sm font-semibold text-gray-700 transition-colors hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800"
                   >
@@ -220,6 +263,21 @@ export default function WorkflowListPage() {
           </div>
         )}
       </section>
+
+      {startTarget && (
+        <StartWorkflowModal
+          definitionName={startTarget.name}
+          isPending={startWorkflowMutation.isPending}
+          error={startError}
+          onClose={() => {
+            setStartTarget(null)
+            setStartError(null)
+          }}
+          onStart={(input, callbackUrl) => {
+            startWorkflowMutation.mutate({ definitionId: startTarget.id, input, callbackUrl })
+          }}
+        />
+      )}
     </div>
   )
 }

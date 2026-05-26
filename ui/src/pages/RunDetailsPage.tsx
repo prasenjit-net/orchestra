@@ -286,6 +286,30 @@ export default function RunDetailsPage() {
             : <span className="text-gray-400 dark:text-slate-500">—</span>}
         </Fact>
         <Fact label="Events">{workflow.lastEventSequence}</Fact>
+        {workflow.triggerSource && (
+          <Fact label="Triggered via">
+            <span className={`inline-flex rounded-full px-2 py-0.5 text-[11px] font-semibold ${
+              workflow.triggerSource === 'webhook'
+                ? 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300'
+                : 'bg-gray-100 text-gray-600 dark:bg-slate-800 dark:text-slate-300'
+            }`}>
+              {workflow.triggerSource}
+            </span>
+          </Fact>
+        )}
+        {workflow.callbackUrl && (
+          <Fact label="Callback">
+            <span className={`inline-flex rounded-full px-2 py-0.5 text-[11px] font-semibold ${
+              workflow.callbackStatus === 'delivered'
+                ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300'
+                : workflow.callbackStatus === 'failed'
+                  ? 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300'
+                  : 'bg-gray-100 text-gray-600 dark:bg-slate-800 dark:text-slate-300'
+            }`}>
+              {workflow.callbackStatus || 'pending'}
+            </span>
+          </Fact>
+        )}
         {workflow.pendingSignals > 0 && (
           <Fact label="Pending signals">
             <span className="flex items-center gap-1 text-amber-600 dark:text-amber-400">
