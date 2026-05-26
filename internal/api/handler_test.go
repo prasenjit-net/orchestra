@@ -20,7 +20,7 @@ import (
 )
 
 func TestHealthEndpoint(t *testing.T) {
-	router := NewRouter(config.Default(), slog.New(slog.NewTextHandler(io.Discard, nil)), version.Current(), nil, nil)
+	router := NewRouter(config.Default(), slog.New(slog.NewTextHandler(io.Discard, nil)), version.Current(), nil, nil, nil)
 	req := httptest.NewRequest(http.MethodGet, "/health", nil)
 	res := httptest.NewRecorder()
 
@@ -43,7 +43,7 @@ func TestWorkflowActivitiesEndpoint(t *testing.T) {
 	}
 	defer service.Close()
 
-	router := NewRouter(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), version.Current(), livebus.New(), service)
+	router := NewRouter(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), version.Current(), livebus.New(), service, nil)
 	req := httptest.NewRequest(http.MethodGet, "/workflows/activities", nil)
 	res := httptest.NewRecorder()
 
@@ -67,7 +67,7 @@ func TestWorkflowActivitiesEndpointIncludesScriptWhenEnabled(t *testing.T) {
 	}
 	defer service.Close()
 
-	router := NewRouter(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), version.Current(), livebus.New(), service)
+	router := NewRouter(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), version.Current(), livebus.New(), service, nil)
 	req := httptest.NewRequest(http.MethodGet, "/workflows/activities", nil)
 	res := httptest.NewRecorder()
 
@@ -90,7 +90,7 @@ func TestCreateWorkflowDefinitionEndpoint(t *testing.T) {
 	}
 	defer service.Close()
 
-	router := NewRouter(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), version.Current(), livebus.New(), service)
+	router := NewRouter(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), version.Current(), livebus.New(), service, nil)
 	payload, err := json.Marshal(map[string]any{
 		"name":        "Hello workflow",
 		"description": "Logs once",
@@ -142,7 +142,7 @@ func TestListWorkflowDefinitionsEndpoint(t *testing.T) {
 		t.Fatalf("CreateDefinition returned error: %v", err)
 	}
 
-	router := NewRouter(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), version.Current(), livebus.New(), service)
+	router := NewRouter(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), version.Current(), livebus.New(), service, nil)
 	req := httptest.NewRequest(http.MethodGet, "/workflow-definitions", nil)
 	res := httptest.NewRecorder()
 
@@ -200,7 +200,7 @@ func TestRetryWorkflowTaskEndpoint(t *testing.T) {
 		t.Fatal("expected failed task to exist")
 	}
 
-	router := NewRouter(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), version.Current(), livebus.New(), service)
+	router := NewRouter(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), version.Current(), livebus.New(), service, nil)
 	req := httptest.NewRequest(http.MethodPost, "/workflows/tasks/"+strconv.FormatInt(tasksResult.Tasks[0].ID, 10)+"/retry", nil)
 	res := httptest.NewRecorder()
 
@@ -251,7 +251,7 @@ func TestWorkflowOperationsEndpoint(t *testing.T) {
 		t.Fatalf("PauseTask returned error: %v", err)
 	}
 
-	router := NewRouter(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), version.Current(), livebus.New(), service)
+	router := NewRouter(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), version.Current(), livebus.New(), service, nil)
 	req := httptest.NewRequest(http.MethodGet, "/workflows/events?limit=2", nil)
 	res := httptest.NewRecorder()
 
