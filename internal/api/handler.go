@@ -302,6 +302,19 @@ func (h *Handler) StartWorkflow(w http.ResponseWriter, r *http.Request, definiti
 	respondJSON(w, http.StatusCreated, instance)
 }
 
+func (h *Handler) ListNodes(w http.ResponseWriter, r *http.Request) {
+	if h.workflow == nil {
+		writeError(w, http.StatusServiceUnavailable, "workflow service unavailable")
+		return
+	}
+	nodes, err := h.workflow.ListNodes(r.Context(), h.config.Node.Health.OfflineThreshold)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	respondJSON(w, http.StatusOK, nodes)
+}
+
 func (h *Handler) ListWorkflows(w http.ResponseWriter, r *http.Request) {
 	if h.workflow == nil {
 		writeError(w, http.StatusServiceUnavailable, "workflow service unavailable")

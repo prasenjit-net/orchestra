@@ -1,3 +1,16 @@
+export interface ClusterNode {
+  id: string
+  role: 'controller' | 'worker' | 'all'
+  address: string
+  capabilities: string[]
+  maxConcurrent: number
+  version: string
+  hostname: string
+  lastSeenAt: string
+  registeredAt: string
+  status: 'online' | 'offline'
+}
+
 export interface HealthResponse {
   status: string
   service: string

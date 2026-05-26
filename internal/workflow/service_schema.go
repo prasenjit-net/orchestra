@@ -122,6 +122,17 @@ func (s *Service) initSchema(ctx context.Context) error {
 			server_id TEXT NOT NULL,
 			PRIMARY KEY (agent_id, server_id)
 		)`,
+		`CREATE TABLE IF NOT EXISTS nodes (
+			id             TEXT     PRIMARY KEY,
+			role           TEXT     NOT NULL DEFAULT 'all',
+			address        TEXT     NOT NULL DEFAULT '',
+			capabilities   TEXT     NOT NULL DEFAULT '[]',
+			max_concurrent INTEGER  NOT NULL DEFAULT 0,
+			version        TEXT     NOT NULL DEFAULT '',
+			hostname       TEXT     NOT NULL DEFAULT '',
+			last_seen_at   TEXT     NOT NULL,
+			registered_at  TEXT     NOT NULL
+		)`,
 	}
 
 	for _, statement := range statements {

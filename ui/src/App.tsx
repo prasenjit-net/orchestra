@@ -10,6 +10,7 @@ import AgentsPage from './pages/AgentsPage'
 import ConnectorsPage from './pages/ConnectorsPage'
 import ScriptsPage from './pages/ScriptsPage'
 import SignalsPage from './pages/SignalsPage'
+import ClusterPage from './pages/ClusterPage'
 import SettingsPage from './pages/SettingsPage'
 import WorkflowListPage from './pages/WorkflowListPage'
 
@@ -48,6 +49,7 @@ function App() {
         <Route path="signals" element={<SignalsPage />} />
         <Route path="queues" element={<QueuesPage />} />
         <Route path="operations" element={<OperationsPage />} />
+        <Route path="cluster" element={<ClusterPage />} />
         <Route path="settings" element={<SettingsPage />} />
       </Route>
     </Routes>

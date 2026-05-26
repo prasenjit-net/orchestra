@@ -17,10 +17,25 @@ type Config struct {
 	UI       UIConfig       `mapstructure:"ui" yaml:"ui"`
 	Workflow WorkflowConfig `mapstructure:"workflow" yaml:"workflow"`
 	Webhook  WebhookConfig  `mapstructure:"webhook" yaml:"webhook"`
+	Node     NodeConfig     `mapstructure:"node" yaml:"node"`
 
 	// ConfigFilePath is the resolved path to the active config file.
 	// Set by the caller after loading — not read from TOML.
 	ConfigFilePath string `mapstructure:"-" yaml:"-"`
+}
+
+type NodeConfig struct {
+	ID                 string          `mapstructure:"id" yaml:"id"`
+	Controller         bool            `mapstructure:"controller" yaml:"controller"`
+	Worker             bool            `mapstructure:"worker" yaml:"worker"`
+	MaxConcurrentTasks int             `mapstructure:"maxConcurrentTasks" yaml:"maxConcurrentTasks"`
+	HealthAddr         string          `mapstructure:"healthAddr" yaml:"healthAddr"`
+	Health             NodeHealthConfig `mapstructure:"health" yaml:"health"`
+}
+
+type NodeHealthConfig struct {
+	HeartbeatInterval time.Duration `mapstructure:"heartbeatInterval" yaml:"heartbeatInterval"`
+	OfflineThreshold  time.Duration `mapstructure:"offlineThreshold" yaml:"offlineThreshold"`
 }
 
 type WebhookConfig struct {
@@ -108,6 +123,17 @@ func Default() Config {
 			Enabled:           true,
 			CallbackAllowlist: []string{},
 		},
+		Node: NodeConfig{
+			ID:                 "",
+			Controller:         true,
+			Worker:             true,
+			MaxConcurrentTasks: 4,
+			HealthAddr:         "0.0.0.0:8081",
+			Health: NodeHealthConfig{
+				HeartbeatInterval: 10 * time.Second,
+				OfflineThreshold:  30 * time.Second,
+			},
+		},
 	}
 }
 
@@ -148,6 +174,13 @@ func SetDefaults(v *viper.Viper) {
 	v.SetDefault("workflow.scriptMaxExecutionSteps", defaults.Workflow.ScriptMaxExecutionSteps)
 	v.SetDefault("webhook.enabled", defaults.Webhook.Enabled)
 	v.SetDefault("webhook.callbackAllowlist", defaults.Webhook.CallbackAllowlist)
+	v.SetDefault("node.id", defaults.Node.ID)
+	v.SetDefault("node.controller", defaults.Node.Controller)
+	v.SetDefault("node.worker", defaults.Node.Worker)
+	v.SetDefault("node.maxConcurrentTasks", defaults.Node.MaxConcurrentTasks)
+	v.SetDefault("node.healthAddr", defaults.Node.HealthAddr)
+	v.SetDefault("node.health.heartbeatInterval", defaults.Node.Health.HeartbeatInterval)
+	v.SetDefault("node.health.offlineThreshold", defaults.Node.Health.OfflineThreshold)
 }
 
 func Load(v *viper.Viper) (Config, error) {

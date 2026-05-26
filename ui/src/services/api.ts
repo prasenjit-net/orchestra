@@ -1,6 +1,7 @@
 import type {
   Agent,
   AgentsResponse,
+  ClusterNode,
   CreateAgentInput,
   CreateMCPServerInput,
   CreateScriptInput,
@@ -58,6 +59,10 @@ async function handleResponse<T>(response: Response): Promise<T> {
 
 export const healthApi = {
   get: async () => handleResponse<HealthResponse>(await fetch(buildApiUrl('/health'))),
+}
+
+export const clusterApi = {
+  listNodes: async () => handleResponse<ClusterNode[]>(await fetch(buildApiUrl('/nodes'))),
 }
 
 export const aiApi = {

@@ -29,6 +29,7 @@ func NewRouter(cfg config.Config, logger *slog.Logger, build version.Info, live 
 		r.Get("/ws", h.WorkflowStream)
 	}
 	if workflowService != nil {
+		r.Get("/nodes", h.ListNodes)
 		r.Get("/scripts", h.ListScripts)
 		r.Post("/scripts", h.CreateScript)
 		r.Route("/scripts/{scriptID}", func(r chi.Router) {
