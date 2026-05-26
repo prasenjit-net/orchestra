@@ -138,7 +138,7 @@ func Load(v *viper.Viper) (Config, error) {
 }
 
 func InitProject(dir string, force bool) error {
-	if err := os.MkdirAll(filepath.Join(dir, "data"), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(dir, "data"), 0o750); err != nil {
 		return fmt.Errorf("create data directory: %w", err)
 	}
 
@@ -154,14 +154,14 @@ func InitProject(dir string, force bool) error {
 				continue
 			}
 		}
-		if err := os.WriteFile(path, []byte(contents), 0o644); err != nil {
+		if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
 			return fmt.Errorf("write %s: %w", path, err)
 		}
 	}
 
 	keepFile := filepath.Join(dir, "data", ".gitkeep")
 	if force || !fileExists(keepFile) {
-		if err := os.WriteFile(keepFile, []byte{}, 0o644); err != nil {
+		if err := os.WriteFile(keepFile, []byte{}, 0o600); err != nil {
 			return fmt.Errorf("write %s: %w", keepFile, err)
 		}
 	}

@@ -2680,7 +2680,7 @@ func ensureDatabasePath(path string) error {
 	if path == "" || path == ":memory:" {
 		return nil
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
 		return fmt.Errorf("create workflow database directory: %w", err)
 	}
 	return nil

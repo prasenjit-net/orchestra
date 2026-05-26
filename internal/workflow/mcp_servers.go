@@ -77,7 +77,7 @@ func (s *Service) CreateMCPServer(ctx context.Context, input CreateMCPServerInpu
 	}
 	s.emitLiveEvent("mcp_server.updated", "mcp_server", id, srv)
 	// Trigger background exploration so tools are discovered immediately.
-	go s.exploreInBackground(id, input.URL, headers)
+	go s.exploreInBackground(id, input.URL, headers) // #nosec G118 -- intentional: exploration must outlive the request
 	return srv, nil
 }
 
@@ -153,7 +153,7 @@ func (s *Service) UpdateMCPServer(ctx context.Context, id string, input CreateMC
 	s.emitLiveEvent("mcp_server.updated", "mcp_server", id, srv)
 	// Re-explore if the URL or headers changed.
 	if oldErr != nil || old.URL != input.URL || headersChanged(old.Headers, headers) {
-		go s.exploreInBackground(id, input.URL, headers)
+		go s.exploreInBackground(id, input.URL, headers) // #nosec G118 -- intentional: exploration must outlive the request
 	}
 	return srv, nil
 }

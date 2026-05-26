@@ -92,7 +92,7 @@ func connectMCP(ctx context.Context, httpClient *http.Client, serverURL string, 
 		return nil, nil, fmt.Errorf("connect sse: %w", err)
 	}
 	if resp.StatusCode != http.StatusOK {
-		resp.Body.Close()
+		_ = resp.Body.Close() // #nosec G104 -- error-path cleanup
 		cancel()
 		return nil, nil, fmt.Errorf("sse connect returned %d", resp.StatusCode)
 	}
@@ -334,8 +334,8 @@ func (s *mcpSession) sendRequest(ctx context.Context, id int64, method string, p
 		s.mu.Unlock()
 		return nil, fmt.Errorf("post rpc: %w", err)
 	}
-	io.Copy(io.Discard, postResp.Body) //nolint:errcheck
-	postResp.Body.Close()
+	_, _ = io.Copy(io.Discard, postResp.Body) // #nosec G104 -- drain body before close
+	_ = postResp.Body.Close()                  // #nosec G104
 
 	select {
 	case rpc := <-ch:
@@ -369,8 +369,8 @@ func (s *mcpSession) notify(ctx context.Context, method string, params any) erro
 	if err != nil {
 		return err
 	}
-	io.Copy(io.Discard, resp.Body) //nolint:errcheck
-	resp.Body.Close()
+	_, _ = io.Copy(io.Discard, resp.Body) // #nosec G104 -- drain body before close
+	_ = resp.Body.Close()                  // #nosec G104
 	return nil
 }
 

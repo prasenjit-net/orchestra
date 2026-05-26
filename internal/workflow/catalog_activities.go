@@ -2,8 +2,8 @@ package workflow
 
 import (
 	"context"
-	"crypto/md5"
-	"crypto/sha1"
+	"crypto/md5"  // #nosec G501 -- data checksum, not a security primitive
+	"crypto/sha1" // #nosec G505 -- data checksum, not a security primitive
 	"crypto/sha256"
 	"crypto/sha512"
 	"encoding/base64"
@@ -774,10 +774,10 @@ func normalizeHashInput(value any) ([]byte, error) {
 func digestBytes(algorithm string, payload []byte) ([]byte, error) {
 	switch algorithm {
 	case "md5":
-		sum := md5.Sum(payload)
+		sum := md5.Sum(payload) // #nosec G401 -- data checksum, not a security primitive
 		return sum[:], nil
 	case "sha1":
-		sum := sha1.Sum(payload)
+		sum := sha1.Sum(payload) // #nosec G401 -- data checksum, not a security primitive
 		return sum[:], nil
 	case "sha256":
 		sum := sha256.Sum256(payload)
