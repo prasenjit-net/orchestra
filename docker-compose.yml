@@ -1,0 +1,209 @@
+name: orchestra
+
+# ─── Common environment shared by every orchestra service ─────────────────────
+x-db-env: &db-env
+  APP_WORKFLOW_DATABASEDRIVER: postgres
+  APP_WORKFLOW_DATABASEURL: postgres://orchestra:${POSTGRES_PASSWORD:-orchestra_secret}@postgres:5432/orchestra?sslmode=disable
+
+x-orchestra-build: &orchestra-build
+  build:
+    context: .
+    dockerfile: Dockerfile
+  image: orchestra:latest
+
+x-orchestra-common: &orchestra-common
+  <<: *orchestra-build
+  restart: unless-stopped
+  networks:
+    - internal
+
+# ─── Services ─────────────────────────────────────────────────────────────────
+services:
+
+  # ── PostgreSQL ───────────────────────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: orchestra
+      POSTGRES_USER: orchestra
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-orchestra_secret}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U orchestra -d orchestra"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    networks:
+      - internal
+
+  # ── Schema init (runs once, creates all tables, then exits) ──────────────────
+  schema-init:
+    <<: *orchestra-build
+    command: ["schema", "--create"]
+    environment:
+      <<: *db-env
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+    networks:
+      - internal
+
+  # ── Traefik load balancer (HTTP → controller-1 / controller-2) ───────────────
+  traefik:
+    image: traefik:v3.1
+    restart: unless-stopped
+    command:
+      - --providers.docker=true
+      - --providers.docker.exposedbydefault=false
+      - --providers.docker.network=orchestra_internal
+      - --entrypoints.web.address=:80
+      # Uncomment to enable the Traefik dashboard on http://localhost:8081
+      # - --api.dashboard=true
+      # - --api.insecure=true
+      - --accesslog=true
+      - --log.level=INFO
+    ports:
+      - "80:80"
+      # - "8081:8080"   # Traefik dashboard (uncomment together with api lines above)
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - internal
+      - external
+    depends_on:
+      controller-1:
+        condition: service_healthy
+      controller-2:
+        condition: service_healthy
+
+  # ── Controller 1 (API + UI, no task execution) ───────────────────────────────
+  controller-1:
+    <<: *orchestra-common
+    command: ["serve", "--controller"]
+    environment:
+      <<: *db-env
+      APP_NODE_ID: controller-1
+      APP_NODE_CONTROLLER: "true"
+      APP_NODE_WORKER: "false"
+      APP_APP_ENV: production
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/livez || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 15s
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.orchestra.rule=PathPrefix(`/`)
+      - traefik.http.routers.orchestra.entrypoints=web
+      - traefik.http.services.orchestra.loadbalancer.server.port=8080
+      - traefik.http.services.orchestra.loadbalancer.healthcheck.path=/livez
+      - traefik.http.services.orchestra.loadbalancer.healthcheck.interval=10s
+    depends_on:
+      schema-init:
+        condition: service_completed_successfully
+
+  # ── Controller 2 (API + UI, no task execution) ───────────────────────────────
+  controller-2:
+    <<: *orchestra-common
+    command: ["serve", "--controller"]
+    environment:
+      <<: *db-env
+      APP_NODE_ID: controller-2
+      APP_NODE_CONTROLLER: "true"
+      APP_NODE_WORKER: "false"
+      APP_APP_ENV: production
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/livez || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 15s
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.orchestra.rule=PathPrefix(`/`)
+      - traefik.http.routers.orchestra.entrypoints=web
+      - traefik.http.services.orchestra.loadbalancer.server.port=8080
+      - traefik.http.services.orchestra.loadbalancer.healthcheck.path=/livez
+      - traefik.http.services.orchestra.loadbalancer.healthcheck.interval=10s
+    depends_on:
+      schema-init:
+        condition: service_completed_successfully
+
+  # ── Worker 1 (headless task executor) ────────────────────────────────────────
+  worker-1:
+    <<: *orchestra-common
+    command: ["serve", "--worker"]
+    environment:
+      <<: *db-env
+      APP_NODE_ID: worker-1
+      APP_NODE_CONTROLLER: "false"
+      APP_NODE_WORKER: "true"
+      APP_NODE_HEALTHADDR: "0.0.0.0:8081"
+      APP_NODE_MAXCONCURRENTTASKS: "4"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8081/livez || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 15s
+    depends_on:
+      schema-init:
+        condition: service_completed_successfully
+
+  # ── Worker 2 ─────────────────────────────────────────────────────────────────
+  worker-2:
+    <<: *orchestra-common
+    command: ["serve", "--worker"]
+    environment:
+      <<: *db-env
+      APP_NODE_ID: worker-2
+      APP_NODE_CONTROLLER: "false"
+      APP_NODE_WORKER: "true"
+      APP_NODE_HEALTHADDR: "0.0.0.0:8081"
+      APP_NODE_MAXCONCURRENTTASKS: "4"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8081/livez || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 15s
+    depends_on:
+      schema-init:
+        condition: service_completed_successfully
+
+  # ── Worker 3 ─────────────────────────────────────────────────────────────────
+  worker-3:
+    <<: *orchestra-common
+    command: ["serve", "--worker"]
+    environment:
+      <<: *db-env
+      APP_NODE_ID: worker-3
+      APP_NODE_CONTROLLER: "false"
+      APP_NODE_WORKER: "true"
+      APP_NODE_HEALTHADDR: "0.0.0.0:8081"
+      APP_NODE_MAXCONCURRENTTASKS: "4"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8081/livez || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 15s
+    depends_on:
+      schema-init:
+        condition: service_completed_successfully
+
+# ─── Networks ─────────────────────────────────────────────────────────────────
+networks:
+  internal:
+    driver: bridge
+  external:
+    driver: bridge
+
+# ─── Volumes ──────────────────────────────────────────────────────────────────
+volumes:
+  postgres_data:

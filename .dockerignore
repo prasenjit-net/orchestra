@@ -1,0 +1,25 @@
+# Build outputs
+build/
+ui/dist/
+ui/node_modules/
+
+# Development files
+data/
+*.db
+.env
+.env.local
+config.toml
+config.yaml
+
+# Git and editor
+.git/
+.gitignore
+*.md
+*.code-workspace
+.vscode/
+.idea/
+
+# Docker files themselves (no need in image)
+Dockerfile
+docker-compose.yml
+.dockerignore
