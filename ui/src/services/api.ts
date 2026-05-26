@@ -17,7 +17,6 @@ import type {
   WorkflowDefinitionsResponse,
   WorkflowHistoryResponse,
   WorkflowOperationsResponse,
-  WorkflowReplay,
   WorkflowInstance,
   WorkflowTask,
   WorkflowTaskAction,
@@ -252,8 +251,6 @@ export const workflowApi = {
         body: JSON.stringify(payload),
       }),
     ),
-  replayWorkflow: async (workflowId: string) =>
-    handleResponse<WorkflowReplay>(await fetch(buildApiUrl(`/workflows/${workflowId}/replay`))),
   listTasks: async (params?: { limit?: number; offset?: number; status?: string; excludeCompleted?: boolean }) => {
     const qs = new URLSearchParams()
     if (params?.limit) qs.set('limit', String(params.limit))

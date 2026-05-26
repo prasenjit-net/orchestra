@@ -143,19 +143,6 @@ type SignalWorkflowInput struct {
 	Payload json.RawMessage `json:"payload,omitempty"`
 }
 
-type WorkflowReplay struct {
-	WorkflowID         string          `json:"workflowId"`
-	Status             string          `json:"status"`
-	CurrentStepName    string          `json:"currentStepName,omitempty"`
-	CurrentActivity    string          `json:"currentActivity,omitempty"`
-	LastEventSequence  int             `json:"lastEventSequence"`
-	LastError          string          `json:"lastError,omitempty"`
-	LastOutput         json.RawMessage `json:"lastOutput,omitempty"`
-	Context            json.RawMessage `json:"context,omitempty"`
-	EventCount         int             `json:"eventCount"`
-	WorkflowDefinition string          `json:"definitionId,omitempty"`
-}
-
 type ActivityDescriptor struct {
 	Name          string         `json:"name"`
 	DisplayName   string         `json:"displayName,omitempty"`

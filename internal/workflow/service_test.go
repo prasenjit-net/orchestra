@@ -914,7 +914,7 @@ func TestWorkflowCarriesContextBetweenSteps(t *testing.T) {
 	}
 }
 
-func TestWorkflowSignalUpdatesContextAndReplay(t *testing.T) {
+func TestWorkflowSignalUpdatesContext(t *testing.T) {
 	cfg := config.Default()
 	cfg.Workflow.DatabasePath = filepath.Join(t.TempDir(), "workflows.db")
 	service, err := NewService(cfg.Workflow, slog.New(slog.NewTextHandler(io.Discard, nil)))
@@ -964,17 +964,6 @@ func TestWorkflowSignalUpdatesContextAndReplay(t *testing.T) {
 	}
 	if approval["count"] != float64(1) {
 		t.Fatalf("expected approval signal count 1, got %#v", approval["count"])
-	}
-
-	replay, err := service.ReplayWorkflow(context.Background(), instance.ID)
-	if err != nil {
-		t.Fatalf("ReplayWorkflow returned error: %v", err)
-	}
-	if replay.EventCount == 0 {
-		t.Fatal("expected replay to include events")
-	}
-	if !json.Valid(replay.Context) {
-		t.Fatalf("expected replay context JSON, got %s", string(replay.Context))
 	}
 }
 

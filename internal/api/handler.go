@@ -426,21 +426,6 @@ func (h *Handler) SignalWorkflow(w http.ResponseWriter, r *http.Request, workflo
 	respondJSON(w, http.StatusOK, instance)
 }
 
-func (h *Handler) ReplayWorkflow(w http.ResponseWriter, r *http.Request, workflowID string) {
-	if h.workflow == nil {
-		writeError(w, http.StatusServiceUnavailable, "workflow service unavailable")
-		return
-	}
-
-	replay, err := h.workflow.ReplayWorkflow(r.Context(), workflowID)
-	if err != nil {
-		writeWorkflowError(w, err)
-		return
-	}
-
-	respondJSON(w, http.StatusOK, replay)
-}
-
 func (h *Handler) ListWorkflowTasks(w http.ResponseWriter, r *http.Request) {
 	if h.workflow == nil {
 		writeError(w, http.StatusServiceUnavailable, "workflow service unavailable")

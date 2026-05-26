@@ -186,18 +186,6 @@ export interface WorkflowTasksResponse {
 
 export type WorkflowTaskAction = 'retry' | 'requeue' | 'pause' | 'resume' | 'cancel'
 
-export interface WorkflowReplay {
-  workflowId: string
-  status: string
-  currentStepName?: string
-  currentActivity?: string
-  lastEventSequence: number
-  lastError?: string
-  lastOutput?: unknown
-  context?: Record<string, unknown>
-  eventCount: number
-  definitionId?: string
-}
 
 export interface WorkflowLiveEvent {
   type: string
