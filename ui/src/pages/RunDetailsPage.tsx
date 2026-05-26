@@ -165,6 +165,7 @@ export default function RunDetailsPage() {
   const queryClient = useQueryClient()
   const [eventFilter, setEventFilter] = useState<'all' | 'lifecycle' | 'failure' | 'queue'>('all')
   const [showTaskHistory, setShowTaskHistory] = useState(false)
+  const [historyLimit, setHistoryLimit] = useState(50)
 
   const workflowQuery = useQuery({
     queryKey: ['workflow', workflowId],
@@ -172,8 +173,8 @@ export default function RunDetailsPage() {
     enabled: Boolean(workflowId),
   })
   const historyQuery = useQuery({
-    queryKey: ['workflow-history', workflowId],
-    queryFn: () => workflowApi.getWorkflowHistory(workflowId),
+    queryKey: ['workflow-history', workflowId, historyLimit],
+    queryFn: () => workflowApi.getWorkflowHistory(workflowId, historyLimit),
     enabled: Boolean(workflowId),
   })
   const tasksQuery = useQuery({
@@ -202,7 +203,10 @@ export default function RunDetailsPage() {
   }
 
   const workflow = workflowQuery.data
-  const history = historyQuery.data?.events ?? []
+  const historyData = historyQuery.data
+  const history = historyData?.events ?? []
+  const historyTotal = historyData?.total ?? 0
+  const hasMoreHistory = historyTotal > history.length
   const allTasks = (tasksQuery.data?.tasks ?? []).filter((t) => t.workflowId === workflow.id)
   const activeTasks = allTasks.filter((t) => ['pending', 'running', 'waiting', 'paused'].includes(t.status))
   const doneTasks = allTasks.filter((t) => ['completed', 'failed', 'canceled'].includes(t.status))
@@ -213,7 +217,7 @@ export default function RunDetailsPage() {
   const hasContext = Boolean(workflow.context && Object.keys(workflow.context).length > 0)
 
   const filterTabs: { key: 'all' | 'lifecycle' | 'failure' | 'queue'; label: string }[] = [
-    { key: 'all', label: `All (${history.length})` },
+    { key: 'all', label: `All (${historyTotal > history.length ? `${history.length}/${historyTotal}` : history.length})` },
     { key: 'lifecycle', label: 'Lifecycle' },
     { key: 'failure', label: 'Failures' },
     { key: 'queue', label: 'Queue' },
@@ -382,6 +386,17 @@ export default function RunDetailsPage() {
             {[...filteredEvents].reverse().map((event) => (
               <EventRow key={`${event.sequence}-${event.eventType}`} event={event} />
             ))}
+          </div>
+        )}
+        {hasMoreHistory && (
+          <div className="border-t border-gray-100 px-4 py-3 dark:border-slate-800">
+            <button
+              type="button"
+              onClick={() => setHistoryLimit((l) => l + 50)}
+              className="text-xs font-medium text-primary-600 hover:underline dark:text-primary-400"
+            >
+              Load more ({historyTotal - history.length} remaining)
+            </button>
           </div>
         )}
       </div>

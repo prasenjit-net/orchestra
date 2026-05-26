@@ -153,6 +153,9 @@ export interface WorkflowEvent {
 
 export interface WorkflowHistoryResponse {
   events: WorkflowEvent[]
+  total: number
+  limit: number
+  offset: number
 }
 
 export interface WorkflowOperationsResponse {

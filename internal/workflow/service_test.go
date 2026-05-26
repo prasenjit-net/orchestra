@@ -67,10 +67,11 @@ func TestWorkflowCompletesBuiltInActivities(t *testing.T) {
 		t.Fatalf("expected completed workflow, got %s", instance.Status)
 	}
 
-	events, err := service.GetWorkflowHistory(context.Background(), instance.ID)
+	historyResult, err := service.GetWorkflowHistory(context.Background(), instance.ID, WorkflowHistoryInput{})
 	if err != nil {
 		t.Fatalf("GetWorkflowHistory returned error: %v", err)
 	}
+	events := historyResult.Events
 	if len(events) < 5 {
 		t.Fatalf("expected event history, got %d events", len(events))
 	}
@@ -167,12 +168,12 @@ func TestWorkflowBranchesUsingTransitionConditions(t *testing.T) {
 		t.Fatal("expected approved branch to execute")
 	}
 
-	events, err := service.GetWorkflowHistory(context.Background(), instance.ID)
+	historyResult2, err := service.GetWorkflowHistory(context.Background(), instance.ID, WorkflowHistoryInput{})
 	if err != nil {
 		t.Fatalf("GetWorkflowHistory returned error: %v", err)
 	}
 	foundTransition := false
-	for _, event := range events {
+	for _, event := range historyResult2.Events {
 		if event.EventType == "TransitionSelected" {
 			foundTransition = true
 		}
@@ -451,16 +452,17 @@ func TestDelayActivityWaitsDurably(t *testing.T) {
 		t.Fatalf("expected completed workflow after delay, got %s", instance.Status)
 	}
 
-	events, err := service.GetWorkflowHistory(context.Background(), instance.ID)
+	historyResult3, err := service.GetWorkflowHistory(context.Background(), instance.ID, WorkflowHistoryInput{})
 	if err != nil {
 		t.Fatalf("GetWorkflowHistory returned error: %v", err)
 	}
-	if len(events) == 0 {
+	events3 := historyResult3.Events
+	if len(events3) == 0 {
 		t.Fatal("expected events for delayed workflow")
 	}
 	hasCompleted := false
 	hasWaiting := false
-	for _, event := range events {
+	for _, event := range events3 {
 		if event.EventType == "ActivityWaiting" {
 			hasWaiting = true
 		}
@@ -542,12 +544,12 @@ func TestHTTPRequestActivitySucceeds(t *testing.T) {
 		t.Fatalf("expected completed workflow, got %s", instance.Status)
 	}
 
-	events, err := service.GetWorkflowHistory(context.Background(), instance.ID)
+	historyResult4, err := service.GetWorkflowHistory(context.Background(), instance.ID, WorkflowHistoryInput{})
 	if err != nil {
 		t.Fatalf("GetWorkflowHistory returned error: %v", err)
 	}
 	var completedPayload map[string]any
-	for _, event := range events {
+	for _, event := range historyResult4.Events {
 		if event.EventType == "ActivityCompleted" {
 			if err := json.Unmarshal(event.Payload, &completedPayload); err != nil {
 				t.Fatalf("Unmarshal returned error: %v", err)
@@ -1062,12 +1064,12 @@ func TestWaitSignalActivityCompletesAfterSignal(t *testing.T) {
 	if processed {
 		t.Fatal("expected no work while task is parked waiting for signal")
 	}
-	history, err := service.GetWorkflowHistory(context.Background(), instance.ID)
+	historyResult5, err := service.GetWorkflowHistory(context.Background(), instance.ID, WorkflowHistoryInput{})
 	if err != nil {
 		t.Fatalf("GetWorkflowHistory returned error: %v", err)
 	}
 	waitEvents := 0
-	for _, event := range history {
+	for _, event := range historyResult5.Events {
 		if event.EventType == "ActivityWaitingForSignal" {
 			waitEvents++
 		}

@@ -63,6 +63,20 @@ func (b *Bus) Publish(event Event) {
 		select {
 		case ch <- event:
 		default:
+			// Buffer full: discard the oldest event to make room, then send a
+			// missed_events notification so the subscriber knows to re-fetch.
+			select {
+			case <-ch:
+			default:
+			}
+			select {
+			case ch <- Event{
+				Type:      "missed_events",
+				Entity:    event.Entity,
+				Timestamp: time.Now().UTC(),
+			}:
+			default:
+			}
 		}
 	}
 }

@@ -268,8 +268,15 @@ export const workflowApi = {
     return handleResponse<WorkflowOperationsResponse>(response)
   },
   getWorkflow: async (workflowId: string) => handleResponse<WorkflowInstance>(await fetch(buildApiUrl(`/workflows/${workflowId}`))),
-  getWorkflowHistory: async (workflowId: string) =>
-    handleResponse<WorkflowHistoryResponse>(await fetch(buildApiUrl(`/workflows/${workflowId}/history`))),
+  getWorkflowHistory: async (workflowId: string, limit?: number, offset?: number) => {
+    const params = new URLSearchParams()
+    if (limit) params.set('limit', String(limit))
+    if (offset) params.set('offset', String(offset))
+    const qs = params.toString()
+    return handleResponse<WorkflowHistoryResponse>(
+      await fetch(buildApiUrl(`/workflows/${workflowId}/history${qs ? '?' + qs : ''}`)),
+    )
+  },
   cancelWorkflow: async (workflowId: string) =>
     handleResponse<WorkflowInstance>(
       await fetch(buildApiUrl(`/workflows/${workflowId}/cancel`), {
