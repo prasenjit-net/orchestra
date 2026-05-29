@@ -44,6 +44,7 @@ export interface MetaResponse {
     commit: string
     buildDate: string
   }
+  configEditable: boolean
 }
 
 export interface WorkflowActivity {

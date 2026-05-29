@@ -23,11 +23,12 @@ import (
 )
 
 type Options struct {
-	DevMode   bool
-	UIFS      fs.FS
-	Live      *livebus.Bus
-	Workflow  *workflow.Service
-	RestartCh chan struct{}
+	DevMode        bool
+	UIFS           fs.FS
+	Live           *livebus.Bus
+	Workflow       *workflow.Service
+	RestartCh      chan struct{}
+	ConfigEditable bool
 }
 
 type App struct {
@@ -49,7 +50,7 @@ func (a *App) Handler() http.Handler {
 	r.Use(middleware.Heartbeat("/livez"))
 	r.Use(requestLogger(a.logger))
 
-	r.Mount("/api", api.NewRouter(a.cfg, a.logger, a.build, a.options.Live, a.options.Workflow, a.options.RestartCh))
+	r.Mount("/api", api.NewRouter(a.cfg, a.logger, a.build, a.options.Live, a.options.Workflow, a.options.RestartCh, a.options.ConfigEditable))
 
 	if extRouter, err := api.NewExtRouter(a.cfg, a.options.Workflow); err != nil {
 		a.logger.Error("failed to create ext router", "error", err)

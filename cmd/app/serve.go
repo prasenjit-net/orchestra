@@ -124,11 +124,12 @@ func runServe(cmd *cobra.Command, args []string) error {
 		}()
 
 		appServer, err := server.New(cfg, logger, buildInfo, server.Options{
-			DevMode:   devMode,
-			UIFS:      uiFS,
-			Live:      live,
-			Workflow:  workflowService,
-			RestartCh: restartCh,
+			DevMode:        devMode,
+			UIFS:           uiFS,
+			Live:           live,
+			Workflow:       workflowService,
+			RestartCh:      restartCh,
+			ConfigEditable: isController && isWorker,
 		})
 		if err != nil {
 			return err

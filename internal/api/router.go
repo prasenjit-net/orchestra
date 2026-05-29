@@ -14,16 +14,18 @@ import (
 	"github.com/prasenjit-net/orchestra/internal/workflow"
 )
 
-func NewRouter(cfg config.Config, logger *slog.Logger, build version.Info, live *livebus.Bus, workflowService *workflow.Service, restartCh chan struct{}) http.Handler {
+func NewRouter(cfg config.Config, logger *slog.Logger, build version.Info, live *livebus.Bus, workflowService *workflow.Service, restartCh chan struct{}, configEditable bool) http.Handler {
 	r := chi.NewRouter()
 	r.Use(middleware.Timeout(30 * time.Second))
 
-	h := NewHandler(cfg, build, live, workflowService, restartCh)
+	h := NewHandler(cfg, build, live, workflowService, restartCh, configEditable)
 	r.Get("/health", h.Health)
 	r.Get("/example", h.Example)
 	r.Get("/meta", h.Meta)
-	r.Get("/config/raw", h.GetConfigRaw)
-	r.Put("/config/raw", h.PutConfigRaw)
+	if configEditable {
+		r.Get("/config/raw", h.GetConfigRaw)
+		r.Put("/config/raw", h.PutConfigRaw)
+	}
 	r.Post("/admin/restart", h.Restart)
 	if live != nil {
 		r.Get("/ws", h.WorkflowStream)

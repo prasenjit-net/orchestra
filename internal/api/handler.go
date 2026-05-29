@@ -22,11 +22,12 @@ import (
 )
 
 type Handler struct {
-	config    config.Config
-	version   version.Info
-	live      *livebus.Bus
-	workflow  *workflow.Service
-	restartCh chan struct{}
+	config         config.Config
+	version        version.Info
+	live           *livebus.Bus
+	workflow       *workflow.Service
+	restartCh      chan struct{}
+	configEditable bool
 }
 
 type HealthResponse struct {
@@ -48,16 +49,17 @@ type exampleResponse struct {
 }
 
 type metaResponse struct {
-	Name        string       `json:"name"`
-	Description string       `json:"description"`
-	Environment string       `json:"environment"`
-	URL         string       `json:"url"`
-	UIProxy     string       `json:"uiProxy"`
-	Version     version.Info `json:"version"`
+	Name           string       `json:"name"`
+	Description    string       `json:"description"`
+	Environment    string       `json:"environment"`
+	URL            string       `json:"url"`
+	UIProxy        string       `json:"uiProxy"`
+	Version        version.Info `json:"version"`
+	ConfigEditable bool         `json:"configEditable"`
 }
 
-func NewHandler(cfg config.Config, build version.Info, live *livebus.Bus, workflowService *workflow.Service, restartCh chan struct{}) *Handler {
-	return &Handler{config: cfg, version: build, live: live, workflow: workflowService, restartCh: restartCh}
+func NewHandler(cfg config.Config, build version.Info, live *livebus.Bus, workflowService *workflow.Service, restartCh chan struct{}, configEditable bool) *Handler {
+	return &Handler{config: cfg, version: build, live: live, workflow: workflowService, restartCh: restartCh, configEditable: configEditable}
 }
 
 func BuildHealthResponse(cfg config.Config, build version.Info) HealthResponse {
@@ -92,12 +94,13 @@ func (h *Handler) Example(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) Meta(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, metaResponse{
-		Name:        h.config.App.Name,
-		Description: h.config.App.Description,
-		Environment: h.config.App.Env,
-		URL:         h.config.App.URL,
-		UIProxy:     h.config.UI.DevProxyURL,
-		Version:     h.version,
+		Name:           h.config.App.Name,
+		Description:    h.config.App.Description,
+		Environment:    h.config.App.Env,
+		URL:            h.config.App.URL,
+		UIProxy:        h.config.UI.DevProxyURL,
+		Version:        h.version,
+		ConfigEditable: h.configEditable,
 	})
 }
 

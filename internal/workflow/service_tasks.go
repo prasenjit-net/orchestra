@@ -60,7 +60,7 @@ func (s *Service) ListTasks(ctx context.Context, input ListTasksInput) (ListTask
 		where = "WHERE " + strings.Join(conds, " AND ")
 	}
 	var total int
-	if err := s.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM workflow_tasks "+where, filterArgs...).Scan(&total); err != nil {
+	if err := s.db.QueryRowContext(ctx, s.rebind("SELECT COUNT(*) FROM workflow_tasks "+where), filterArgs...).Scan(&total); err != nil {
 		return ListTasksResult{}, fmt.Errorf("count workflow tasks: %w", err)
 	}
 
@@ -83,7 +83,7 @@ func (s *Service) ListTasks(ctx context.Context, input ListTasksInput) (ListTask
 		pageArgs = append(pageArgs, input.Limit, input.Offset)
 	}
 
-	rows, err := s.db.QueryContext(ctx, query, pageArgs...)
+	rows, err := s.db.QueryContext(ctx, s.rebind(query), pageArgs...)
 	if err != nil {
 		return ListTasksResult{}, fmt.Errorf("query workflow tasks: %w", err)
 	}
