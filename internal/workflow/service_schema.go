@@ -64,6 +64,7 @@ func (s *Service) initSchema(ctx context.Context) error {
 			lease_expires_at TEXT,
 			last_error TEXT NOT NULL,
 			state_json TEXT NOT NULL DEFAULT '',
+			executed_by TEXT NOT NULL DEFAULT '',
 			created_at TEXT NOT NULL,
 			updated_at TEXT NOT NULL
 		)`,
@@ -165,6 +166,7 @@ func ensureWorkflowTaskColumns(ctx context.Context, db *sql.DB) error {
 	defer rows.Close()
 
 	hasStateJSON := false
+	hasExecutedBy := false
 	for rows.Next() {
 		var (
 			cid        int
@@ -177,18 +179,25 @@ func ensureWorkflowTaskColumns(ctx context.Context, db *sql.DB) error {
 		if err := rows.Scan(&cid, &name, &dataType, &notNull, &defaultV, &primaryKey); err != nil {
 			return fmt.Errorf("scan workflow_tasks schema: %w", err)
 		}
-		if name == "state_json" {
+		switch name {
+		case "state_json":
 			hasStateJSON = true
+		case "executed_by":
+			hasExecutedBy = true
 		}
 	}
 	if err := rows.Err(); err != nil {
 		return fmt.Errorf("iterate workflow_tasks schema: %w", err)
 	}
-	if hasStateJSON {
-		return nil
+	if !hasStateJSON {
+		if _, err := db.ExecContext(ctx, `ALTER TABLE workflow_tasks ADD COLUMN state_json TEXT NOT NULL DEFAULT ''`); err != nil {
+			return fmt.Errorf("add workflow_tasks.state_json column: %w", err)
+		}
 	}
-	if _, err := db.ExecContext(ctx, `ALTER TABLE workflow_tasks ADD COLUMN state_json TEXT NOT NULL DEFAULT ''`); err != nil {
-		return fmt.Errorf("add workflow_tasks.state_json column: %w", err)
+	if !hasExecutedBy {
+		if _, err := db.ExecContext(ctx, `ALTER TABLE workflow_tasks ADD COLUMN executed_by TEXT NOT NULL DEFAULT ''`); err != nil {
+			return fmt.Errorf("add workflow_tasks.executed_by column: %w", err)
+		}
 	}
 	return nil
 }

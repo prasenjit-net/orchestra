@@ -1,10 +1,11 @@
 import { useState, useEffect } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ArrowLeft, Save, Trash2 } from 'lucide-react'
+import { ArrowLeft, CheckCircle, Save, Sparkles, Trash2, XCircle } from 'lucide-react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import Editor from '@monaco-editor/react'
+import ScriptAssistModal from '../components/ScriptAssistModal'
 import { useMonacoTheme } from '../hooks/useMonacoTheme'
-import { scriptsApi } from '../services/api'
+import { scriptAiApi, scriptsApi } from '../services/api'
 import type { CreateScriptInput } from '../types'
 
 const BUILTINS_HINT = `json        — json.encode / json.decode
@@ -29,6 +30,9 @@ export default function ScriptEditorPage() {
   const [exportsRaw, setExportsRaw] = useState('result')
   const [pageError, setPageError] = useState<string | null>(null)
   const [saved, setSaved] = useState(false)
+  const [showAssist, setShowAssist] = useState(false)
+  const [validation, setValidation] = useState<{ valid: boolean; error?: string } | null>(null)
+  const [isValidating, setIsValidating] = useState(false)
 
   const scriptQuery = useQuery({
     queryKey: ['script', scriptId],
@@ -113,6 +117,20 @@ export default function ScriptEditorPage() {
 
   const monacoTheme = useMonacoTheme()
 
+  const handleValidate = async () => {
+    if (!source.trim()) return
+    setIsValidating(true)
+    setValidation(null)
+    try {
+      const result = await scriptAiApi.validate(source)
+      setValidation(result)
+    } catch (err) {
+      setValidation({ valid: false, error: (err as Error).message })
+    } finally {
+      setIsValidating(false)
+    }
+  }
+
   const handleDelete = () => {
     if (!window.confirm('Delete this script? Workflow steps that reference it will fail at runtime.')) {
       return
@@ -149,6 +167,27 @@ export default function ScriptEditorPage() {
           <div className="flex items-center gap-2">
             {saved && <span className="text-xs font-medium text-emerald-600 dark:text-emerald-400">Saved</span>}
             {pageError && <span className="text-xs font-medium text-red-600 dark:text-red-400">{pageError}</span>}
+            <button
+              type="button"
+              onClick={() => void handleValidate()}
+              disabled={isValidating || !source.trim()}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 px-3 py-2 text-sm font-semibold text-gray-700 transition-colors hover:bg-gray-50 disabled:opacity-50 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800"
+            >
+              {validation?.valid
+                ? <CheckCircle className="h-4 w-4 text-emerald-500" />
+                : validation?.error
+                  ? <XCircle className="h-4 w-4 text-red-500" />
+                  : null}
+              {isValidating ? 'Validating…' : 'Validate'}
+            </button>
+            <button
+              type="button"
+              onClick={() => setShowAssist(true)}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-violet-200 px-3 py-2 text-sm font-semibold text-violet-700 transition-colors hover:bg-violet-50 dark:border-violet-800/50 dark:text-violet-300 dark:hover:bg-violet-950/20"
+            >
+              <Sparkles className="h-4 w-4" />
+              AI Assist
+            </button>
             {!isNew && (
               <button
                 type="button"
@@ -247,14 +286,28 @@ export default function ScriptEditorPage() {
         {/* Right panel — Monaco source editor */}
         <div className="flex flex-1 flex-col overflow-hidden bg-white dark:bg-slate-950">
           <div className="shrink-0 px-4 pt-4 pb-2">
-            <label className="text-[11px] font-semibold uppercase tracking-wide text-gray-400 dark:text-slate-400">Source</label>
+            <div className="flex items-center justify-between gap-4">
+              <label className="text-[11px] font-semibold uppercase tracking-wide text-gray-400 dark:text-slate-400">Source</label>
+              {validation && (
+                validation.valid ? (
+                  <span className="flex items-center gap-1 text-xs font-medium text-emerald-600 dark:text-emerald-400">
+                    <CheckCircle className="h-3.5 w-3.5" /> Valid
+                  </span>
+                ) : (
+                  <span className="flex items-center gap-1 text-xs font-medium text-red-600 dark:text-red-400" title={validation.error}>
+                    <XCircle className="h-3.5 w-3.5" />
+                    {validation.error ? validation.error.replace('workflow.star:', 'Line ') : 'Invalid'}
+                  </span>
+                )
+              )}
+            </div>
           </div>
           <div className="flex-1 overflow-hidden">
             <Editor
               height="100%"
               language="python"
               value={source}
-              onChange={(val) => setSource(val ?? '')}
+              onChange={(val) => { setSource(val ?? ''); setValidation(null) }}
               theme={monacoTheme}
               options={{
                 minimap: { enabled: false },
@@ -271,6 +324,14 @@ export default function ScriptEditorPage() {
           </div>
         </div>
       </div>
+
+      {showAssist && (
+        <ScriptAssistModal
+          currentScript={source}
+          onApply={(script) => { setSource(script); setValidation(null) }}
+          onClose={() => setShowAssist(false)}
+        />
+      )}
     </div>
   )
 }

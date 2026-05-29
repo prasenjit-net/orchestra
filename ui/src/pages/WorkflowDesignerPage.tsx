@@ -9,7 +9,7 @@ import {
   type Edge,
   type EdgeProps,
   EdgeLabelRenderer,
-  getSmoothStepPath,
+  getBezierPath,
   Handle,
   MarkerType,
   MiniMap,
@@ -23,8 +23,9 @@ import {
   useNodesState,
   useReactFlow,
 } from '@xyflow/react'
-import { AlertCircle, ArrowLeft, Bot, CheckCircle2, ChevronDown, ChevronRight, ClipboardList, Clock3, Code2, FileText, GitBranch, Globe, Grip, Plus, Radio, Save, Send, Shuffle, SquareTerminal, Trash2, TriangleAlert, UserCheck, Users, Webhook, X } from 'lucide-react'
+import { AlertCircle, ArrowLeft, Bot, CheckCircle2, ChevronDown, ChevronRight, ClipboardList, Clock3, Code2, FileText, GitBranch, Globe, Grip, Plus, Radio, Save, Send, Shuffle, Sparkles, SquareTerminal, Trash2, TriangleAlert, UserCheck, Users, Webhook, X } from 'lucide-react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
+import ScriptAssistModal from '../components/ScriptAssistModal'
 import { agentsApi, scriptsApi, workflowApi } from '../services/api'
 import type { Agent, Script, WorkflowActivity, WorkflowDefinitionDocument, WorkflowStepTransition, WorkflowTransitionCondition } from '../types'
 import ContextExpressionPicker, { type PrecedingStep } from '../components/ContextExpressionPicker'
@@ -509,7 +510,7 @@ function ConditionalEdge({
   markerEnd,
   selected,
 }: EdgeProps<Edge<EdgeConditionData>>) {
-  const [edgePath, labelX, labelY] = getSmoothStepPath({ sourceX, sourceY, sourcePosition, targetX, targetY, targetPosition })
+  const [edgePath, labelX, labelY] = getBezierPath({ sourceX, sourceY, sourcePosition, targetX, targetY, targetPosition })
   const hasCondition = Boolean((data as EdgeConditionData | undefined)?.condition)
   const label = (data as EdgeConditionData | undefined)?.label
 
@@ -582,7 +583,8 @@ function ScriptActivityFields({
   setField: (key: string, value: string, options?: { removeWhenBlank?: boolean }) => void
   onUpdate: (updater: (data: ActivityNodeData) => ActivityNodeData) => void
 }) {
-  const savedMode = Boolean(findInputRowValue(node.data.inputRows, 'scriptId'))
+  const [savedMode, setSavedMode] = useState(() => Boolean(findInputRowValue(node.data.inputRows, 'scriptId')))
+  const [showAssist, setShowAssist] = useState(false)
 
   const scriptsQuery = useQuery({
     queryKey: ['scripts'],
@@ -593,13 +595,15 @@ function ScriptActivityFields({
   const selectedScript = scripts.find((s) => s.id === findInputRowValue(node.data.inputRows, 'scriptId'))
 
   const switchToSaved = () => {
+    setSavedMode(true)
     onUpdate((data) => ({
       ...data,
-      inputRows: data.inputRows.filter((r) => r.key !== 'script'),
+      inputRows: data.inputRows.filter((r) => r.key !== 'source'),
     }))
   }
 
   const switchToInline = () => {
+    setSavedMode(false)
     onUpdate((data) => ({
       ...data,
       inputRows: data.inputRows.filter((r) => r.key !== 'scriptId'),
@@ -749,7 +753,17 @@ function ScriptActivityFields({
             />
           </div>
           <div>
-            <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wide text-gray-500 dark:text-slate-400">Script</label>
+            <div className="mb-1.5 flex items-center justify-between gap-2">
+              <label className="text-[11px] font-semibold uppercase tracking-wide text-gray-500 dark:text-slate-400">Script</label>
+              <button
+                type="button"
+                onClick={() => setShowAssist(true)}
+                className="inline-flex items-center gap-1 rounded-md border border-violet-200 px-2 py-0.5 text-[10px] font-semibold text-violet-700 transition-colors hover:bg-violet-50 dark:border-violet-800/50 dark:text-violet-400 dark:hover:bg-violet-950/20"
+              >
+                <Sparkles className="h-3 w-3" />
+                AI Assist
+              </button>
+            </div>
             <textarea
               rows={10}
               value={String((payload as Record<string, unknown>).script ?? '')}
@@ -761,6 +775,13 @@ function ScriptActivityFields({
           <div className="rounded-lg border border-dashed border-gray-300 p-3 text-[11px] text-gray-500 dark:border-slate-700 dark:text-slate-400">
             Use the builtins <span className="font-mono">json</span>, <span className="font-mono">strings</span>, <span className="font-mono">collections</span>, <span className="font-mono">workflow</span>, and <span className="font-mono">asserts</span>. Workflow context is available in <span className="font-mono">ctx</span>.
           </div>
+          {showAssist && (
+            <ScriptAssistModal
+              currentScript={String((payload as Record<string, unknown>).script ?? '')}
+              onApply={(script) => { setField('script', script); setShowAssist(false) }}
+              onClose={() => setShowAssist(false)}
+            />
+          )}
         </>
       )}
       <div>
@@ -1991,7 +2012,7 @@ function WorkflowDesignerCanvas() {
     [setEdges],
   )
 
-  const onEdgeClick = useCallback(
+  const onEdgeDoubleClick = useCallback(
     (_: ReactMouseEvent, edge: Edge) => {
       setEditingEdgeID(edge.id)
     },
@@ -2287,7 +2308,7 @@ function WorkflowDesignerCanvas() {
             onPaneClick={() => setContextMenu(null)}
             onPaneContextMenu={onPaneContextMenu}
             onConnect={onConnect}
-            onEdgeClick={onEdgeClick}
+            onEdgeDoubleClick={onEdgeDoubleClick}
             fitView
             nodeTypes={nodeTypes}
             edgeTypes={edgeTypes}

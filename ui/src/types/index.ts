@@ -11,6 +11,16 @@ export interface ClusterNode {
   status: 'online' | 'offline'
 }
 
+export interface NodeHealthResult {
+  id: string
+  address: string
+  ok: boolean
+  status?: number
+  latencyMs: number
+  error?: string
+  checkedAt: string
+}
+
 export interface HealthResponse {
   status: string
   service: string
@@ -192,6 +202,7 @@ export interface WorkflowTask {
   lastError?: string
   leaseOwner?: string
   leaseExpiresAt?: string
+  executedBy?: string
   createdAt: string
   updatedAt: string
 }
@@ -299,4 +310,34 @@ export interface CreateMCPServerInput {
 
 export interface MCPServersResponse {
   servers: MCPServer[]
+}
+
+// ─── Import / Export ──────────────────────────────────────────────────────────
+
+export interface DefinitionExport {
+  id: string
+  name: string
+  description: string
+  document: WorkflowDefinitionDocument
+}
+
+export interface ImportBundle {
+  version: number
+  exportedAt: string
+  bundleType: 'workflow' | 'agent' | 'script' | 'connector'
+  definition?: DefinitionExport
+  scripts?: Script[]
+  agents?: Agent[]
+  connectors?: MCPServer[]
+}
+
+export interface ImportItem {
+  type: 'definition' | 'script' | 'agent' | 'connector'
+  id: string
+  name: string
+}
+
+export interface ImportAnalysis {
+  ready: ImportItem[]      // don't exist — always imported
+  conflicts: ImportItem[]  // already exist — user may skip or override
 }

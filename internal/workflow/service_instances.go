@@ -525,7 +525,7 @@ func (s *Service) ListRecentEvents(ctx context.Context, input ListRecentEventsIn
 	}
 
 	var total int
-	if err := s.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM workflow_events").Scan(&total); err != nil {
+	if err := s.db.QueryRowContext(ctx, s.rebind("SELECT COUNT(*) FROM workflow_events")).Scan(&total); err != nil {
 		return ListRecentEventsResult{}, fmt.Errorf("count workflow events: %w", err)
 	}
 
@@ -565,7 +565,7 @@ func (s *Service) ListRecentEvents(ctx context.Context, input ListRecentEventsIn
 func (s *Service) wakeTasksWaitingForSignalTx(ctx context.Context, tx *sql.Tx, workflowID string, signalName string, now time.Time) ([]int64, error) {
 	rows, err := tx.QueryContext(ctx, s.rebind(`
 		SELECT id, workflow_id, step_index, step_name, activity_name, status, attempts, max_attempts,
-		       run_at, last_error, lease_owner, lease_expires_at, state_json, created_at, updated_at
+		       run_at, last_error, lease_owner, lease_expires_at, state_json, executed_by, created_at, updated_at
 		FROM workflow_tasks
 		WHERE workflow_id = ? AND status = ?
 		ORDER BY id ASC
@@ -573,34 +573,45 @@ func (s *Service) wakeTasksWaitingForSignalTx(ctx context.Context, tx *sql.Tx, w
 	if err != nil {
 		return nil, fmt.Errorf("query signal-waiting tasks: %w", err)
 	}
-	defer rows.Close()
 
-	var wokenIDs []int64
+	// Collect matching IDs while the cursor is open, then close it before
+	// executing any DML. With pgx the connection is still reading rows until
+	// rows.Close(), so running ExecContext inside the loop causes a "conn busy"
+	// error on PostgreSQL, silently dropping the wake-up.
+	var idsToWake []int64
 	for rows.Next() {
 		task, err := scanWorkflowTask(rows)
 		if err != nil {
+			rows.Close()
 			return nil, err
 		}
 		state, initialized, err := decodeWaitSignalState(task.State)
 		if err != nil {
+			rows.Close()
 			return nil, err
 		}
 		if !initialized || strings.TrimSpace(state.SignalName) != signalName {
 			continue
 		}
-		if _, err := tx.ExecContext(ctx, s.rebind(`
-			UPDATE workflow_tasks
-			SET status = ?, run_at = ?, lease_owner = '', lease_expires_at = NULL, updated_at = ?
-			WHERE id = ?
-		`), StatusPending, formatTime(now), formatTime(now), task.ID); err != nil {
-			return nil, fmt.Errorf("wake signal-waiting task %d: %w", task.ID, err)
-		}
-		wokenIDs = append(wokenIDs, task.ID)
+		idsToWake = append(idsToWake, task.ID)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, fmt.Errorf("close signal-waiting tasks cursor: %w", err)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate signal-waiting tasks: %w", err)
 	}
-	return wokenIDs, nil
+
+	for _, id := range idsToWake {
+		if _, err := tx.ExecContext(ctx, s.rebind(`
+			UPDATE workflow_tasks
+			SET status = ?, run_at = ?, lease_owner = '', lease_expires_at = NULL, updated_at = ?
+			WHERE id = ?
+		`), StatusPending, formatTime(now), formatTime(now), id); err != nil {
+			return nil, fmt.Errorf("wake signal-waiting task %d: %w", id, err)
+		}
+	}
+	return idsToWake, nil
 }
 
 func (s *Service) getWorkflowTx(ctx context.Context, tx *sql.Tx, workflowID string) (WorkflowInstance, error) {
@@ -706,7 +717,7 @@ func (s *Service) setCallbackStatus(workflowID, status string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if _, err := s.db.ExecContext(ctx,
-		`UPDATE workflow_instances SET callback_status = ? WHERE id = ?`,
+		s.rebind(`UPDATE workflow_instances SET callback_status = ? WHERE id = ?`),
 		status, workflowID,
 	); err != nil {
 		s.logger.Error("update callback_status", "workflowId", workflowID, "error", err)
@@ -714,16 +725,17 @@ func (s *Service) setCallbackStatus(workflowID, status string) {
 }
 
 func buildInitialContext(definitionID string, version int, input map[string]any) json.RawMessage {
+	if input == nil {
+		input = map[string]any{}
+	}
 	ctx := map[string]any{
 		"workflow": map[string]any{
 			"definitionId":      definitionID,
 			"definitionVersion": version,
 		},
+		"input":   input,
 		"steps":   map[string]any{},
 		"signals": map[string]any{},
-	}
-	if len(input) > 0 {
-		ctx["input"] = input
 	}
 	payload, _ := json.Marshal(ctx)
 	return json.RawMessage(payload)

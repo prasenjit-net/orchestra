@@ -1,11 +1,10 @@
 import { useEffect } from 'react'
-import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { Activity, Cpu, Network, WifiOff } from 'lucide-react'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { Activity, CheckCircle, Cpu, Network, RefreshCw, WifiOff, XCircle } from 'lucide-react'
 import SectionHeader from '../components/SectionHeader'
 import StatCard from '../components/StatCard'
-import { clusterApi } from '../services/api'
-import type { ClusterNode } from '../types'
-import { buildWebSocketUrl } from '../services/api'
+import { buildWebSocketUrl, clusterApi } from '../services/api'
+import type { ClusterNode, NodeHealthResult } from '../types'
 
 function roleBadge(role: ClusterNode['role']) {
   const classes: Record<ClusterNode['role'], string> = {
@@ -54,6 +53,10 @@ export default function ClusterPage() {
     refetchInterval: 10_000,
   })
 
+  const healthMutation = useMutation({
+    mutationFn: () => clusterApi.checkHealth(),
+  })
+
   // Re-fetch on nodes.updated WebSocket events.
   useEffect(() => {
     const ws = new WebSocket(buildWebSocketUrl())
@@ -78,6 +81,17 @@ export default function ClusterPage() {
       <SectionHeader
         title="Cluster"
         description="Registered nodes and their health status"
+        action={
+          <button
+            type="button"
+            onClick={() => healthMutation.mutate()}
+            disabled={healthMutation.isPending || nodes.length === 0}
+            className="inline-flex items-center gap-2 rounded-lg border border-gray-200 px-4 py-2 text-sm font-semibold text-gray-700 transition-colors hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-60 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800"
+          >
+            <RefreshCw className={`h-4 w-4 ${healthMutation.isPending ? 'animate-spin' : ''}`} />
+            {healthMutation.isPending ? 'Checking…' : 'Check health'}
+          </button>
+        }
       />
 
       {/* Summary cards */}
@@ -112,6 +126,83 @@ export default function ClusterPage() {
           <span>
             <strong>No online nodes found.</strong> Workflow tasks will not execute until a worker node comes online.
           </span>
+        </div>
+      )}
+
+      {/* Health check results */}
+      {(healthMutation.data || healthMutation.isPending || healthMutation.error) && (
+        <div className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900">
+          <div className="border-b border-gray-200 px-6 py-4 dark:border-slate-800">
+            <h2 className="text-base font-semibold text-gray-900 dark:text-slate-100">Health check results</h2>
+            {healthMutation.data && (
+              <p className="mt-0.5 text-xs text-gray-500 dark:text-slate-400">
+                Checked at {new Date(healthMutation.data[0]?.checkedAt ?? '').toLocaleTimeString()}
+              </p>
+            )}
+          </div>
+          <div className="overflow-x-auto">
+            <table className="min-w-full divide-y divide-gray-200 text-sm dark:divide-slate-800">
+              <thead className="bg-gray-50 dark:bg-slate-800/60">
+                <tr>
+                  {['Node ID', 'Address', 'Result', 'HTTP Status', 'Latency'].map((h) => (
+                    <th
+                      key={h}
+                      className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-slate-400"
+                    >
+                      {h}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-100 dark:divide-slate-800">
+                {healthMutation.isPending && (
+                  <tr>
+                    <td colSpan={5} className="px-4 py-6 text-center text-gray-400 dark:text-slate-500">
+                      Probing nodes…
+                    </td>
+                  </tr>
+                )}
+                {healthMutation.error && (
+                  <tr>
+                    <td colSpan={5} className="px-4 py-6 text-center text-red-500 dark:text-red-400">
+                      {(healthMutation.error as Error).message}
+                    </td>
+                  </tr>
+                )}
+                {healthMutation.data?.map((r: NodeHealthResult) => (
+                  <tr key={r.id} className="hover:bg-gray-50 dark:hover:bg-slate-800/40">
+                    <td className="px-4 py-3 font-mono text-xs text-gray-700 dark:text-slate-300">
+                      {r.id.length > 20 ? r.id.slice(0, 20) + '…' : r.id}
+                    </td>
+                    <td className="px-4 py-3 font-mono text-xs text-gray-500 dark:text-slate-400">
+                      {r.address || '—'}
+                    </td>
+                    <td className="px-4 py-3">
+                      {r.ok ? (
+                        <span className="inline-flex items-center gap-1 text-xs font-medium text-green-600 dark:text-green-400">
+                          <CheckCircle className="h-3.5 w-3.5" /> Healthy
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1 text-xs font-medium text-red-600 dark:text-red-400" title={r.error}>
+                          <XCircle className="h-3.5 w-3.5" /> {r.error ? 'Unreachable' : 'Unhealthy'}
+                        </span>
+                      )}
+                    </td>
+                    <td className="px-4 py-3 text-xs text-gray-600 dark:text-slate-400">
+                      {r.status ? (
+                        <span className={r.ok ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}>
+                          {r.status}
+                        </span>
+                      ) : '—'}
+                    </td>
+                    <td className="px-4 py-3 text-xs text-gray-600 dark:text-slate-400">
+                      {r.latencyMs > 0 ? `${r.latencyMs} ms` : '—'}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </div>
       )}
 

@@ -113,6 +113,7 @@ var sqliteDDL = []string{
 	lease_expires_at TEXT,
 	last_error TEXT NOT NULL,
 	state_json TEXT NOT NULL DEFAULT '',
+	executed_by TEXT NOT NULL DEFAULT '',
 	created_at TEXT NOT NULL,
 	updated_at TEXT NOT NULL
 )`,
@@ -250,6 +251,7 @@ var postgresDDL = []string{
 	lease_expires_at TEXT,
 	last_error TEXT NOT NULL,
 	state_json TEXT NOT NULL DEFAULT '',
+	executed_by TEXT NOT NULL DEFAULT '',
 	created_at TEXT NOT NULL,
 	updated_at TEXT NOT NULL
 )`,

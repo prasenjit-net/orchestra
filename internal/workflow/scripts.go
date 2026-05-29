@@ -50,10 +50,10 @@ func (s *Service) CreateScript(ctx context.Context, input CreateScriptInput) (Sc
 		return Script{}, fmt.Errorf("encode exports: %w", err)
 	}
 	ts := formatTime(now)
-	if _, err := s.db.ExecContext(ctx, `
+	if _, err := s.db.ExecContext(ctx, s.rebind(`
 		INSERT INTO scripts (id, name, description, language, source, timeout_ms, exports_json, created_at, updated_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, id, input.Name, input.Description, lang, input.Source, input.TimeoutMs, string(exportsJSON), ts, ts); err != nil {
+	`), id, input.Name, input.Description, lang, input.Source, input.TimeoutMs, string(exportsJSON), ts, ts); err != nil {
 		return Script{}, fmt.Errorf("insert script: %w", err)
 	}
 	script := Script{
@@ -99,10 +99,10 @@ func (s *Service) ListScripts(ctx context.Context) ([]Script, error) {
 }
 
 func (s *Service) GetScript(ctx context.Context, id string) (Script, error) {
-	row := s.db.QueryRowContext(ctx, `
+	row := s.db.QueryRowContext(ctx, s.rebind(`
 		SELECT id, name, description, language, source, timeout_ms, exports_json, created_at, updated_at
 		FROM scripts WHERE id = ?
-	`, id)
+	`), id)
 	sc, err := scanScript(row)
 	if err != nil {
 		return Script{}, err
@@ -125,10 +125,10 @@ func (s *Service) UpdateScript(ctx context.Context, id string, input CreateScrip
 		return Script{}, fmt.Errorf("encode exports: %w", err)
 	}
 	ts := formatTime(now)
-	res, err := s.db.ExecContext(ctx, `
+	res, err := s.db.ExecContext(ctx, s.rebind(`
 		UPDATE scripts SET name=?, description=?, language=?, source=?, timeout_ms=?, exports_json=?, updated_at=?
 		WHERE id=?
-	`, input.Name, input.Description, lang, input.Source, input.TimeoutMs, string(exportsJSON), ts, id)
+	`), input.Name, input.Description, lang, input.Source, input.TimeoutMs, string(exportsJSON), ts, id)
 	if err != nil {
 		return Script{}, fmt.Errorf("update script: %w", err)
 	}
@@ -145,7 +145,7 @@ func (s *Service) UpdateScript(ctx context.Context, id string, input CreateScrip
 }
 
 func (s *Service) DeleteScript(ctx context.Context, id string) error {
-	res, err := s.db.ExecContext(ctx, `DELETE FROM scripts WHERE id = ?`, id)
+	res, err := s.db.ExecContext(ctx, s.rebind(`DELETE FROM scripts WHERE id = ?`), id)
 	if err != nil {
 		return fmt.Errorf("delete script: %w", err)
 	}

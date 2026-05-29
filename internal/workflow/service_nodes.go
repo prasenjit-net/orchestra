@@ -32,8 +32,10 @@ type NodeStatus struct {
 	Status        string    `json:"status"` // "online" | "offline" — derived, not stored
 }
 
-// RegisterNode upserts a row in the nodes table for this process.
+// RegisterNode upserts a row in the nodes table for this process and syncs
+// the service's workerID so lease_owner matches the cluster node ID.
 func (s *Service) RegisterNode(ctx context.Context, info NodeInfo) error {
+	s.workerID = info.ID
 	caps, err := json.Marshal(info.Capabilities)
 	if err != nil {
 		return fmt.Errorf("marshal node capabilities: %w", err)

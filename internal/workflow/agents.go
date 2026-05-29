@@ -42,10 +42,10 @@ func (s *Service) CreateAgent(ctx context.Context, input CreateAgentInput) (Agen
 		model = "gpt-4o"
 	}
 	ts := formatTime(now)
-	if _, err := s.db.ExecContext(ctx, `
+	if _, err := s.db.ExecContext(ctx, s.rebind(`
 		INSERT INTO agents (id, name, description, model, system_prompt, max_tokens, temperature, created_at, updated_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, id, input.Name, input.Description, model, input.SystemPrompt, input.MaxTokens, input.Temperature, ts, ts); err != nil {
+	`), id, input.Name, input.Description, model, input.SystemPrompt, input.MaxTokens, input.Temperature, ts, ts); err != nil {
 		return Agent{}, fmt.Errorf("insert agent: %w", err)
 	}
 	agent := Agent{
@@ -91,10 +91,10 @@ func (s *Service) ListAgents(ctx context.Context) ([]Agent, error) {
 }
 
 func (s *Service) GetAgent(ctx context.Context, id string) (Agent, error) {
-	row := s.db.QueryRowContext(ctx, `
+	row := s.db.QueryRowContext(ctx, s.rebind(`
 		SELECT id, name, description, model, system_prompt, max_tokens, temperature, created_at, updated_at
 		FROM agents WHERE id = ?
-	`, id)
+	`), id)
 	ag, err := scanAgent(row)
 	if err != nil {
 		return Agent{}, err
@@ -116,10 +116,10 @@ func (s *Service) UpdateAgent(ctx context.Context, id string, input CreateAgentI
 		model = "gpt-4o"
 	}
 	ts := formatTime(now)
-	res, err := s.db.ExecContext(ctx, `
+	res, err := s.db.ExecContext(ctx, s.rebind(`
 		UPDATE agents SET name=?, description=?, model=?, system_prompt=?, max_tokens=?, temperature=?, updated_at=?
 		WHERE id=?
-	`, input.Name, input.Description, model, input.SystemPrompt, input.MaxTokens, input.Temperature, ts, id)
+	`), input.Name, input.Description, model, input.SystemPrompt, input.MaxTokens, input.Temperature, ts, id)
 	if err != nil {
 		return Agent{}, fmt.Errorf("update agent: %w", err)
 	}
@@ -136,7 +136,7 @@ func (s *Service) UpdateAgent(ctx context.Context, id string, input CreateAgentI
 }
 
 func (s *Service) DeleteAgent(ctx context.Context, id string) error {
-	res, err := s.db.ExecContext(ctx, `DELETE FROM agents WHERE id = ?`, id)
+	res, err := s.db.ExecContext(ctx, s.rebind(`DELETE FROM agents WHERE id = ?`), id)
 	if err != nil {
 		return fmt.Errorf("delete agent: %w", err)
 	}

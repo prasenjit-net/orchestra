@@ -32,6 +32,7 @@ func NewRouter(cfg config.Config, logger *slog.Logger, build version.Info, live 
 	}
 	if workflowService != nil {
 		r.Get("/nodes", h.ListNodes)
+		r.Post("/nodes/healthcheck", h.CheckNodeHealth)
 		r.Get("/scripts", h.ListScripts)
 		r.Post("/scripts", h.CreateScript)
 		r.Route("/scripts/{scriptID}", func(r chi.Router) {
@@ -44,6 +45,7 @@ func NewRouter(cfg config.Config, logger *slog.Logger, build version.Info, live 
 			r.Delete("/", func(w http.ResponseWriter, r *http.Request) {
 				h.DeleteScript(w, r, chi.URLParam(r, "scriptID"))
 			})
+			r.Get("/export", h.ExportScript)
 		})
 		r.Get("/agents", h.ListAgents)
 		r.Post("/agents", h.CreateAgent)
@@ -63,6 +65,7 @@ func NewRouter(cfg config.Config, logger *slog.Logger, build version.Info, live 
 			r.Put("/mcp-servers", func(w http.ResponseWriter, r *http.Request) {
 				h.SetAgentMCPServers(w, r, chi.URLParam(r, "agentID"))
 			})
+			r.Get("/export", h.ExportAgent)
 		})
 		r.Get("/mcp-servers", h.ListMCPServers)
 		r.Post("/mcp-servers", h.CreateMCPServer)
@@ -79,8 +82,11 @@ func NewRouter(cfg config.Config, logger *slog.Logger, build version.Info, live 
 			r.Post("/explore", func(w http.ResponseWriter, r *http.Request) {
 				h.ExploreMCPServer(w, r, chi.URLParam(r, "serverID"))
 			})
+			r.Get("/export", h.ExportConnector)
 		})
 		r.Post("/ai/enhance-prompt", h.EnhancePrompt)
+		r.Post("/ai/script-assist", h.ScriptAssist)
+		r.Post("/ai/validate-script", h.ValidateScript)
 		r.Get("/workflows/activities", h.ListWorkflowActivities)
 		r.Get("/workflows", h.ListWorkflows)
 		r.Get("/workflows/events", h.ListWorkflowOperations)
@@ -147,7 +153,10 @@ func NewRouter(cfg config.Config, logger *slog.Logger, build version.Info, live 
 				}
 				h.PublishWorkflowDefinitionVersion(w, r, chi.URLParam(r, "definitionID"), version)
 			})
+			r.Get("/export", h.ExportWorkflowDefinition)
 		})
+		r.Post("/import/analyze", h.AnalyzeImport)
+		r.Post("/import/apply", h.ApplyImport)
 		r.Route("/workflows/{workflowID}", func(r chi.Router) {
 			r.Get("/", func(w http.ResponseWriter, r *http.Request) {
 				h.GetWorkflow(w, r, chi.URLParam(r, "workflowID"))

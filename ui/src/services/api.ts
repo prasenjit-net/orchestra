@@ -2,9 +2,12 @@ import type {
   Agent,
   AgentsResponse,
   ClusterNode,
+  NodeHealthResult,
   CreateAgentInput,
   CreateMCPServerInput,
   CreateScriptInput,
+  ImportAnalysis,
+  ImportBundle,
   MCPServer,
   MCPServersResponse,
   ExampleResponse,
@@ -63,6 +66,10 @@ export const healthApi = {
 
 export const clusterApi = {
   listNodes: async () => handleResponse<ClusterNode[]>(await fetch(buildApiUrl('/nodes'))),
+  checkHealth: async () =>
+    handleResponse<NodeHealthResult[]>(
+      await fetch(buildApiUrl('/nodes/healthcheck'), { method: 'POST' }),
+    ),
 }
 
 export const aiApi = {
@@ -311,4 +318,62 @@ export const workflowApi = {
         method: 'POST',
       }),
     ),
+}
+
+export const importExportApi = {
+  exportWorkflow: async (id: string) =>
+    handleResponse<ImportBundle>(await fetch(buildApiUrl(`/workflow-definitions/${id}/export`))),
+  exportAgent: async (id: string) =>
+    handleResponse<ImportBundle>(await fetch(buildApiUrl(`/agents/${id}/export`))),
+  exportScript: async (id: string) =>
+    handleResponse<ImportBundle>(await fetch(buildApiUrl(`/scripts/${id}/export`))),
+  exportConnector: async (id: string) =>
+    handleResponse<ImportBundle>(await fetch(buildApiUrl(`/mcp-servers/${id}/export`))),
+  analyze: async (bundle: ImportBundle) =>
+    handleResponse<ImportAnalysis>(
+      await fetch(buildApiUrl('/import/analyze'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(bundle),
+      }),
+    ),
+  apply: async (bundle: ImportBundle, overrideIds: string[]) =>
+    handleResponse<{ imported: number }>(
+      await fetch(buildApiUrl('/import/apply'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ bundle, overrideIds }),
+      }),
+    ),
+}
+
+export const scriptAiApi = {
+  assist: async (messages: { role: string; content: string }[], currentScript?: string) =>
+    handleResponse<{ content: string }>(
+      await fetch(buildApiUrl('/ai/script-assist'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ messages, currentScript: currentScript ?? '' }),
+      }),
+    ),
+  validate: async (source: string) =>
+    handleResponse<{ valid: boolean; error?: string }>(
+      await fetch(buildApiUrl('/ai/validate-script'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ source }),
+      }),
+    ),
+}
+
+export function downloadBundle(bundle: ImportBundle, name: string) {
+  const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || bundle.bundleType
+  const json = JSON.stringify(bundle, null, 2)
+  const blob = new Blob([json], { type: 'application/json' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = `${slug}.orchestra.json`
+  a.click()
+  URL.revokeObjectURL(url)
 }
