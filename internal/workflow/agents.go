@@ -136,13 +136,33 @@ func (s *Service) UpdateAgent(ctx context.Context, id string, input CreateAgentI
 }
 
 func (s *Service) DeleteAgent(ctx context.Context, id string) error {
-	res, err := s.db.ExecContext(ctx, s.rebind(`DELETE FROM agents WHERE id = ?`), id)
+	refs, err := s.findDefinitionsReferencingAgent(ctx, id)
+	if err != nil {
+		return fmt.Errorf("usage check for agent: %w", err)
+	}
+	if len(refs) > 0 {
+		return &EntityInUseError{Kind: "agent", ID: id, References: refs}
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck
+
+	if _, err := tx.ExecContext(ctx, s.rebind(`DELETE FROM agent_mcp_servers WHERE agent_id = ?`), id); err != nil {
+		return fmt.Errorf("delete agent_mcp_servers: %w", err)
+	}
+	res, err := tx.ExecContext(ctx, s.rebind(`DELETE FROM agents WHERE id = ?`), id)
 	if err != nil {
 		return fmt.Errorf("delete agent: %w", err)
 	}
 	n, _ := res.RowsAffected()
 	if n == 0 {
 		return ErrNotFound
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit: %w", err)
 	}
 	s.emitLiveEvent("agent.deleted", "agent", id, nil)
 	return nil

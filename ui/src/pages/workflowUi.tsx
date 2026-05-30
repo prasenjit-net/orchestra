@@ -1,6 +1,92 @@
 /* eslint-disable react-refresh/only-export-components */
 import { Link } from 'react-router-dom'
-import type { WorkflowEvent, WorkflowTask, WorkflowTaskAction } from '../types'
+import type { EntityInUseError, WorkflowEvent, WorkflowTask, WorkflowTaskAction } from '../types'
+
+/** Muted badge shown when a referenced entity has been deleted. */
+export function MissingRefBadge({ kind, id }: { kind: string; id: string }) {
+  return (
+    <span className="inline-flex items-center rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-medium text-slate-500 dark:bg-slate-800 dark:text-slate-400">
+      {kind} (deleted): {id}
+    </span>
+  )
+}
+
+/** Modal confirmation dialog for destructive delete actions. */
+export function ConfirmDeleteDialog({
+  name,
+  onConfirm,
+  onClose,
+  isPending,
+}: {
+  name: string
+  onConfirm: () => void
+  onClose: () => void
+  isPending?: boolean
+}) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm">
+      <div className="w-full max-w-sm rounded-2xl border border-gray-200 bg-white p-6 shadow-xl dark:border-slate-700 dark:bg-slate-900">
+        <h2 className="text-base font-semibold text-gray-900 dark:text-slate-100">Confirm delete</h2>
+        <p className="mt-2 text-sm text-gray-500 dark:text-slate-400">
+          Are you sure you want to delete{' '}
+          <span className="font-medium text-gray-800 dark:text-slate-200">"{name}"</span>? This action cannot be undone.
+        </p>
+        <div className="mt-5 flex justify-end gap-3">
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={isPending}
+            className="rounded-lg border border-gray-200 px-4 py-2 text-sm font-semibold text-gray-700 transition-colors hover:bg-gray-50 disabled:opacity-60 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={onConfirm}
+            disabled={isPending}
+            className="rounded-lg bg-red-600 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-red-700 disabled:opacity-60"
+          >
+            {isPending ? 'Deleting…' : 'Delete'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+/**
+ * Dialog shown when a DELETE returns 409 Conflict (entity in use).
+ * Lists the blocking references so the user knows what to fix first.
+ */
+export function InUseDialog({ error, onClose }: { error: InstanceType<typeof EntityInUseError>; onClose: () => void }) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm">
+      <div className="w-full max-w-md rounded-2xl border border-red-200 bg-white p-6 shadow-xl dark:border-red-900/40 dark:bg-slate-900">
+        <h2 className="text-base font-semibold text-red-700 dark:text-red-300">Cannot delete — still in use</h2>
+        <p className="mt-1 text-sm text-gray-500 dark:text-slate-400">
+          Remove the following references first, then retry the delete.
+        </p>
+        <ul className="mt-4 space-y-2">
+          {error.references.map((ref) => (
+            <li key={ref.id} className="rounded-lg border border-gray-200 px-3 py-2 dark:border-slate-700">
+              <span className="text-xs font-semibold uppercase tracking-wide text-gray-400 dark:text-slate-500">{ref.kind}</span>
+              <p className="mt-0.5 text-sm font-medium text-gray-900 dark:text-slate-100">{ref.label ?? ref.id}</p>
+              <p className="text-xs text-gray-400 dark:text-slate-500">{ref.id}</p>
+            </li>
+          ))}
+        </ul>
+        <button
+          type="button"
+          onClick={onClose}
+          className="mt-5 w-full rounded-lg bg-gray-100 px-4 py-2 text-sm font-semibold text-gray-700 transition-colors hover:bg-gray-200 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700"
+        >
+          Close
+        </button>
+      </div>
+    </div>
+  )
+}
+
 
 export function formatDate(value?: string) {
   if (!value) {

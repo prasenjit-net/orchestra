@@ -139,6 +139,9 @@ func NewRouter(cfg config.Config, logger *slog.Logger, build version.Info, live 
 			r.Get("/", func(w http.ResponseWriter, r *http.Request) {
 				h.GetWorkflowDefinition(w, r, chi.URLParam(r, "definitionID"))
 			})
+			r.Delete("/", func(w http.ResponseWriter, r *http.Request) {
+				h.DeleteWorkflowDefinition(w, r, chi.URLParam(r, "definitionID"))
+			})
 			r.Post("/versions", func(w http.ResponseWriter, r *http.Request) {
 				h.CreateWorkflowDefinitionVersion(w, r, chi.URLParam(r, "definitionID"))
 			})

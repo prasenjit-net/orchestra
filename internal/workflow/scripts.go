@@ -145,13 +145,30 @@ func (s *Service) UpdateScript(ctx context.Context, id string, input CreateScrip
 }
 
 func (s *Service) DeleteScript(ctx context.Context, id string) error {
-	res, err := s.db.ExecContext(ctx, s.rebind(`DELETE FROM scripts WHERE id = ?`), id)
+	refs, err := s.findDefinitionsReferencingScript(ctx, id)
+	if err != nil {
+		return fmt.Errorf("usage check for script: %w", err)
+	}
+	if len(refs) > 0 {
+		return &EntityInUseError{Kind: "script", ID: id, References: refs}
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck
+
+	res, err := tx.ExecContext(ctx, s.rebind(`DELETE FROM scripts WHERE id = ?`), id)
 	if err != nil {
 		return fmt.Errorf("delete script: %w", err)
 	}
 	n, _ := res.RowsAffected()
 	if n == 0 {
 		return ErrNotFound
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit: %w", err)
 	}
 	s.emitLiveEvent("script.deleted", "script", id, nil)
 	return nil

@@ -1,18 +1,34 @@
-import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { Code2, Download, Plus, Upload } from 'lucide-react'
+import { useState } from 'react'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { Code2, Download, Plus, Trash2, Upload } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import ImportModal from '../components/ImportModal'
 import { useImport } from '../hooks/useImport'
 import { downloadBundle, importExportApi, scriptsApi } from '../services/api'
-import { formatDate } from './workflowUi'
+import { EntityInUseError } from '../types'
+import { ConfirmDeleteDialog, formatDate, InUseDialog } from './workflowUi'
 
 export default function ScriptsPage() {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
+  const [confirmTarget, setConfirmTarget] = useState<{ id: string; name: string } | null>(null)
+  const [inUseError, setInUseError] = useState<InstanceType<typeof EntityInUseError> | null>(null)
 
   const scriptsQuery = useQuery({
     queryKey: ['scripts'],
     queryFn: scriptsApi.list,
+  })
+
+  const deleteMutation = useMutation({
+    mutationFn: (id: string) => scriptsApi.delete(id),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['scripts'] })
+    },
+    onError: (err: unknown) => {
+      if (err instanceof EntityInUseError) {
+        setInUseError(err)
+      }
+    },
   })
 
   const importHook = useImport(() => {
@@ -82,20 +98,31 @@ export default function ScriptsPage() {
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {scripts.map((script) => (
             <div key={script.id} className="group relative flex flex-col rounded-2xl border border-gray-200 bg-white p-5 text-left shadow-sm transition-shadow hover:shadow-md dark:border-slate-800 dark:bg-slate-900">
-              <button
-                type="button"
-                onClick={async (e) => { e.stopPropagation(); const b = await importExportApi.exportScript(script.id); downloadBundle(b, script.name) }}
-                title="Export script"
-                className="absolute right-3 top-3 rounded-lg border border-gray-200 p-1.5 text-gray-300 opacity-0 transition-all hover:bg-gray-50 hover:text-gray-500 group-hover:opacity-100 dark:border-slate-700 dark:text-slate-600 dark:hover:bg-slate-800 dark:hover:text-slate-400"
-              >
-                <Download className="h-3.5 w-3.5" />
-              </button>
+              <div className="absolute right-3 top-3 flex items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100">
+                <button
+                  type="button"
+                  onClick={async (e) => { e.stopPropagation(); const b = await importExportApi.exportScript(script.id); downloadBundle(b, script.name) }}
+                  title="Export script"
+                  className="rounded-lg border border-gray-200 p-1.5 text-gray-300 hover:bg-gray-50 hover:text-gray-500 dark:border-slate-700 dark:text-slate-600 dark:hover:bg-slate-800 dark:hover:text-slate-400"
+                >
+                  <Download className="h-3.5 w-3.5" />
+                </button>
+                <button
+                  type="button"
+                  onClick={(e) => { e.stopPropagation(); setConfirmTarget({ id: script.id, name: script.name }) }}
+                  title="Delete script"
+                  disabled={deleteMutation.isPending}
+                  className="rounded-lg border border-red-200 p-1.5 text-red-300 hover:bg-red-50 hover:text-red-500 disabled:opacity-50 dark:border-red-900/40 dark:text-red-700 dark:hover:bg-red-950/20 dark:hover:text-red-400"
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                </button>
+              </div>
               <button
                 type="button"
                 onClick={() => navigate(`/scripts/${script.id}/editor`)}
                 className="flex flex-col text-left"
               >
-                <div className="flex items-start justify-between gap-3 pr-8">
+                <div className="flex items-start justify-between gap-3 pr-16">
                   <p className="font-semibold text-gray-900 group-hover:text-primary-600 dark:text-slate-100 dark:group-hover:text-primary-400">
                     {script.name}
                   </p>
@@ -121,6 +148,16 @@ export default function ScriptsPage() {
           onClose={importHook.close}
         />
       )}
+
+      {confirmTarget && (
+        <ConfirmDeleteDialog
+          name={confirmTarget.name}
+          isPending={deleteMutation.isPending}
+          onConfirm={() => { deleteMutation.mutate(confirmTarget.id); setConfirmTarget(null) }}
+          onClose={() => setConfirmTarget(null)}
+        />
+      )}
+      {inUseError && <InUseDialog error={inUseError} onClose={() => setInUseError(null)} />}
     </div>
   )
 }

@@ -27,6 +27,7 @@ import type {
   WorkflowTasksResponse,
   WorkflowsResponse,
 } from '../types'
+import { EntityInUseError } from '../types'
 
 export const API_BASE = import.meta.env.VITE_API_BASE || '/api'
 
@@ -48,16 +49,37 @@ async function handleResponse<T>(response: Response): Promise<T> {
     let message = `HTTP ${response.status}`
     try {
       const payload = await response.json()
+      if (response.status === 409 && payload?.error === 'in_use') {
+        throw new EntityInUseError(payload.kind ?? '', payload.id ?? '', payload.references ?? [])
+      }
       if (payload?.error) {
         message = payload.error
       }
-    } catch {
+    } catch (e) {
+      if (e instanceof EntityInUseError) throw e
       // ignore invalid JSON
     }
     throw new Error(message)
   }
 
   return response.json() as Promise<T>
+}
+
+async function handleDeleteResponse(response: Response): Promise<void> {
+  if (!response.ok) {
+    let message = `HTTP ${response.status}`
+    try {
+      const payload = await response.json()
+      if (response.status === 409 && payload?.error === 'in_use') {
+        throw new EntityInUseError(payload.kind ?? '', payload.id ?? '', payload.references ?? [])
+      }
+      if (payload?.error) message = payload.error
+    } catch (e) {
+      if (e instanceof EntityInUseError) throw e
+      // ignore
+    }
+    throw new Error(message)
+  }
 }
 
 export const healthApi = {
@@ -131,15 +153,7 @@ export const scriptsApi = {
       }),
     ),
   delete: async (id: string) => {
-    const response = await fetch(buildApiUrl(`/scripts/${id}`), { method: 'DELETE' })
-    if (!response.ok) {
-      let message = `HTTP ${response.status}`
-      try {
-        const payload = await response.json()
-        if (payload?.error) message = payload.error
-      } catch { /* ignore */ }
-      throw new Error(message)
-    }
+    await handleDeleteResponse(await fetch(buildApiUrl(`/scripts/${id}`), { method: 'DELETE' }))
   },
 }
 
@@ -163,15 +177,7 @@ export const agentsApi = {
       }),
     ),
   delete: async (id: string) => {
-    const response = await fetch(buildApiUrl(`/agents/${id}`), { method: 'DELETE' })
-    if (!response.ok) {
-      let message = `HTTP ${response.status}`
-      try {
-        const payload = await response.json()
-        if (payload?.error) message = payload.error
-      } catch { /* ignore */ }
-      throw new Error(message)
-    }
+    await handleDeleteResponse(await fetch(buildApiUrl(`/agents/${id}`), { method: 'DELETE' }))
   },
   getMCPServers: async (id: string) =>
     handleResponse<MCPServersResponse>(await fetch(buildApiUrl(`/agents/${id}/mcp-servers`))),
@@ -212,15 +218,7 @@ export const mcpServersApi = {
       }),
     ),
   delete: async (id: string) => {
-    const response = await fetch(buildApiUrl(`/mcp-servers/${id}`), { method: 'DELETE' })
-    if (!response.ok) {
-      let message = `HTTP ${response.status}`
-      try {
-        const payload = await response.json()
-        if (payload?.error) message = payload.error
-      } catch { /* ignore */ }
-      throw new Error(message)
-    }
+    await handleDeleteResponse(await fetch(buildApiUrl(`/mcp-servers/${id}`), { method: 'DELETE' }))
   },
   explore: async (id: string) =>
     handleResponse<MCPServer>(
@@ -241,6 +239,9 @@ export const workflowApi = {
     ),
   getDefinition: async (definitionId: string) =>
     handleResponse<WorkflowDefinitionDetails>(await fetch(buildApiUrl(`/workflow-definitions/${definitionId}`))),
+  deleteDefinition: async (definitionId: string) => {
+    await handleDeleteResponse(await fetch(buildApiUrl(`/workflow-definitions/${definitionId}`), { method: 'DELETE' }))
+  },
   createDefinitionVersion: async (definitionId: string, payload: WorkflowDefinitionDocument) =>
     handleResponse<WorkflowDefinitionDetails>(
       await fetch(buildApiUrl(`/workflow-definitions/${definitionId}/versions`), {

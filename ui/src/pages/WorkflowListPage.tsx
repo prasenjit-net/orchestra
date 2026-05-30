@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Check, Copy, Download, GitBranch, PencilRuler, Play, Plus, Upload, Wand2 } from 'lucide-react'
+import { Check, Copy, Download, GitBranch, PencilRuler, Play, Plus, Trash2, Upload, Wand2 } from 'lucide-react'
 import { Link, useNavigate } from 'react-router-dom'
 import ImportModal from '../components/ImportModal'
 import SectionHeader from '../components/SectionHeader'
@@ -8,7 +8,8 @@ import StatCard from '../components/StatCard'
 import StartWorkflowModal from '../components/StartWorkflowModal'
 import { useImport } from '../hooks/useImport'
 import { downloadBundle, importExportApi, workflowApi } from '../services/api'
-import { formatDate, statusClasses } from './workflowUi'
+import { ConfirmDeleteDialog, formatDate, statusClasses, InUseDialog } from './workflowUi'
+import { EntityInUseError } from '../types'
 import type { WorkflowDefinitionSummary } from '../types'
 
 function WebhookUrl({ definitionId }: { definitionId: string }) {
@@ -43,6 +44,8 @@ export default function WorkflowListPage() {
   const [pageError, setPageError] = useState<string | null>(null)
   const [startTarget, setStartTarget] = useState<WorkflowDefinitionSummary | null>(null)
   const [startError, setStartError] = useState<string | null>(null)
+  const [inUseError, setInUseError] = useState<InstanceType<typeof EntityInUseError> | null>(null)
+  const [confirmDeleteTarget, setConfirmDeleteTarget] = useState<WorkflowDefinitionSummary | null>(null)
 
   const importHook = useImport(() => {
     setNotice('Import successful.')
@@ -52,6 +55,21 @@ export default function WorkflowListPage() {
   const definitionsQuery = useQuery({
     queryKey: ['workflow-definitions'],
     queryFn: workflowApi.listDefinitions,
+  })
+
+  const deleteDefinitionMutation = useMutation({
+    mutationFn: (id: string) => workflowApi.deleteDefinition(id),
+    onSuccess: () => {
+      setNotice('Workflow definition deleted.')
+      void queryClient.invalidateQueries({ queryKey: ['workflow-definitions'] })
+    },
+    onError: (err: unknown) => {
+      if (err instanceof EntityInUseError) {
+        setInUseError(err)
+      } else {
+        setPageError(err instanceof Error ? err.message : String(err))
+      }
+    },
   })
 
   const startWorkflowMutation = useMutation({
@@ -281,6 +299,15 @@ export default function WorkflowListPage() {
                   >
                     <Download className="h-3.5 w-3.5" />
                   </button>
+                  <button
+                    type="button"
+                    title="Delete workflow definition"
+                    onClick={() => setConfirmDeleteTarget(definition)}
+                    disabled={deleteDefinitionMutation.isPending}
+                    className="rounded-lg border border-red-200 p-1.5 text-red-300 transition-colors hover:bg-red-50 hover:text-red-500 disabled:opacity-50 dark:border-red-900/40 dark:text-red-700 dark:hover:bg-red-950/20 dark:hover:text-red-400"
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </button>
                   <Link
                     to={`/runs?definitionId=${definition.id}`}
                     className="ml-auto text-xs font-semibold text-gray-500 hover:text-gray-700 dark:text-slate-400 dark:hover:text-slate-200"
@@ -322,6 +349,16 @@ export default function WorkflowListPage() {
           Import error: {importHook.state.error}
         </div>
       )}
+
+      {confirmDeleteTarget && (
+        <ConfirmDeleteDialog
+          name={confirmDeleteTarget.name}
+          isPending={deleteDefinitionMutation.isPending}
+          onConfirm={() => { deleteDefinitionMutation.mutate(confirmDeleteTarget.id); setConfirmDeleteTarget(null) }}
+          onClose={() => setConfirmDeleteTarget(null)}
+        />
+      )}
+      {inUseError && <InUseDialog error={inUseError} onClose={() => setInUseError(null)} />}
     </div>
   )
 }

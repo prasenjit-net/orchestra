@@ -159,15 +159,20 @@ func (s *Service) UpdateMCPServer(ctx context.Context, id string, input CreateMC
 }
 
 func (s *Service) DeleteMCPServer(ctx context.Context, id string) error {
+	refs, err := s.findAgentsUsingMCPServer(ctx, id)
+	if err != nil {
+		return fmt.Errorf("usage check for mcp server: %w", err)
+	}
+	if len(refs) > 0 {
+		return &EntityInUseError{Kind: "mcp_server", ID: id, References: refs}
+	}
+
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin tx: %w", err)
 	}
 	defer tx.Rollback() //nolint:errcheck
 
-	if _, err := tx.ExecContext(ctx, s.rebind(`DELETE FROM agent_mcp_servers WHERE server_id = ?`), id); err != nil {
-		return fmt.Errorf("delete agent_mcp_servers: %w", err)
-	}
 	res, err := tx.ExecContext(ctx, s.rebind(`DELETE FROM mcp_servers WHERE id = ?`), id)
 	if err != nil {
 		return fmt.Errorf("delete mcp server: %w", err)

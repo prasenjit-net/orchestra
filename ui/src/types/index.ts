@@ -1,3 +1,23 @@
+export interface EntityRef {
+  kind: string
+  id: string
+  label?: string
+}
+
+export class EntityInUseError extends Error {
+  kind: string
+  entityId: string
+  references: EntityRef[]
+
+  constructor(kind: string, id: string, references: EntityRef[]) {
+    super(`${kind} "${id}" is in use`)
+    this.name = 'EntityInUseError'
+    this.kind = kind
+    this.entityId = id
+    this.references = references
+  }
+}
+
 export interface ClusterNode {
   id: string
   role: 'controller' | 'worker' | 'all'

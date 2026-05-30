@@ -219,6 +219,18 @@ func (h *Handler) GetWorkflowDefinition(w http.ResponseWriter, r *http.Request, 
 	respondJSON(w, http.StatusOK, definition)
 }
 
+func (h *Handler) DeleteWorkflowDefinition(w http.ResponseWriter, r *http.Request, definitionID string) {
+	if h.workflow == nil {
+		writeError(w, http.StatusServiceUnavailable, "workflow service unavailable")
+		return
+	}
+	if err := h.workflow.DeleteWorkflowDefinition(r.Context(), definitionID); err != nil {
+		writeWorkflowError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func (h *Handler) CreateWorkflowDefinitionVersion(w http.ResponseWriter, r *http.Request, definitionID string) {
 	if h.workflow == nil {
 		writeError(w, http.StatusServiceUnavailable, "workflow service unavailable")
@@ -612,6 +624,18 @@ func writeError(w http.ResponseWriter, status int, message string) {
 func writeWorkflowError(w http.ResponseWriter, err error) {
 	if errors.Is(err, workflow.ErrNotFound) {
 		writeError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	var inUse *workflow.EntityInUseError
+	if errors.As(err, &inUse) {
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.WriteHeader(http.StatusConflict)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"error":      "in_use",
+			"kind":       inUse.Kind,
+			"id":         inUse.ID,
+			"references": inUse.References,
+		})
 		return
 	}
 	writeError(w, http.StatusInternalServerError, err.Error())
