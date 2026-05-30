@@ -94,7 +94,7 @@ function TaskActionButton({ action, onClick, disabled }: { action: WorkflowTaskA
 
 function ActiveTaskCard({ task, onAction, isPending }: { task: WorkflowTask; onAction: (id: number, action: WorkflowTaskAction) => void; isPending: boolean }) {
   return (
-    <div className="rounded-xl border border-primary-200 bg-primary-50/60 p-4 dark:border-primary-900/40 dark:bg-primary-950/20">
+    <div className="rounded-xl border border-primary-200 bg-primary-50/60 p-4 dark:border-primary-800/50 dark:bg-slate-800">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
@@ -102,14 +102,14 @@ function ActiveTaskCard({ task, onAction, isPending }: { task: WorkflowTask; onA
             <span className={`inline-flex rounded-full px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${statusClasses(task.status)}`}>
               {task.status}
             </span>
-            <span className="rounded-full bg-white px-2.5 py-0.5 text-[10px] font-semibold text-primary-700 shadow-sm dark:bg-slate-900 dark:text-primary-300">
+            <span className="rounded-full bg-white px-2.5 py-0.5 text-[10px] font-semibold text-primary-700 shadow-sm dark:bg-slate-700 dark:text-primary-300">
               {task.activityName}
             </span>
           </div>
           <div className="mt-1.5 flex flex-wrap gap-x-4 gap-y-1 text-xs text-gray-500 dark:text-slate-400">
             <span>Attempt {task.attempts} of {task.maxAttempts}</span>
             <span>Scheduled {formatDate(task.runAt)}</span>
-            {task.leaseOwner && <span>Leased by {task.leaseOwner}</span>}
+            {task.executedBy && <span>Node: <span className="font-mono">{task.executedBy}</span></span>}
           </div>
           {task.lastError && (
             <div className="mt-2 flex items-start gap-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700 dark:border-red-900/40 dark:bg-red-950/20 dark:text-red-400">
@@ -429,6 +429,7 @@ export default function RunDetailsPage() {
                     <th className="px-4 py-2 text-left text-[10px] font-semibold uppercase tracking-wide text-gray-400 dark:text-slate-500">Activity</th>
                     <th className="px-4 py-2 text-left text-[10px] font-semibold uppercase tracking-wide text-gray-400 dark:text-slate-500">Status</th>
                     <th className="px-4 py-2 text-left text-[10px] font-semibold uppercase tracking-wide text-gray-400 dark:text-slate-500">Attempts</th>
+                    <th className="px-4 py-2 text-left text-[10px] font-semibold uppercase tracking-wide text-gray-400 dark:text-slate-500">Node</th>
                     <th className="px-4 py-2 text-left text-[10px] font-semibold uppercase tracking-wide text-gray-400 dark:text-slate-500">Completed</th>
                   </tr>
                 </thead>
@@ -443,6 +444,7 @@ export default function RunDetailsPage() {
                         </span>
                       </td>
                       <td className="px-4 py-2.5 text-gray-500 dark:text-slate-400">{task.attempts}/{task.maxAttempts}</td>
+                      <td className="px-4 py-2.5 font-mono text-xs text-gray-500 dark:text-slate-400">{task.executedBy || '—'}</td>
                       <td className="px-4 py-2.5 text-gray-500 dark:text-slate-400">{timeAgo(task.updatedAt)}</td>
                     </tr>
                   ))}

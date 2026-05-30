@@ -126,6 +126,7 @@ type WorkflowTask struct {
 	LastError      string          `json:"lastError,omitempty"`
 	LeaseOwner     string          `json:"leaseOwner,omitempty"`
 	LeaseExpiresAt *time.Time      `json:"leaseExpiresAt,omitempty"`
+	ExecutedBy     string          `json:"executedBy,omitempty"`
 	CreatedAt      time.Time       `json:"createdAt"`
 	UpdatedAt      time.Time       `json:"updatedAt"`
 	State          json.RawMessage `json:"-"`

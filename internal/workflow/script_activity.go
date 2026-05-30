@@ -10,11 +10,20 @@ import (
 	starlarkjson "go.starlark.net/lib/json"
 	"go.starlark.net/starlark"
 	"go.starlark.net/starlarkstruct"
+	"go.starlark.net/syntax"
 
 	"github.com/prasenjit-net/orchestra/internal/config"
 )
 
 const scriptThreadLocalKey = "workflow-script-runtime"
+
+// scriptFileOptions enables the full Starlark feature set needed for
+// workflow scripts: top-level if/for/while, global reassignment, and set literals.
+var scriptFileOptions = &syntax.FileOptions{
+	TopLevelControl: true,
+	GlobalReassign:  true,
+	Set:             true,
+}
 
 type scriptActivity struct {
 	cfg          config.WorkflowConfig
@@ -156,7 +165,7 @@ func (a scriptActivity) executeStarlark(ctx context.Context, req ActivityExecuti
 		return nil, err
 	}
 
-	globals, err := starlark.ExecFile(thread, "workflow.star", input.Script, predeclared)
+	globals, err := starlark.ExecFileOptions(scriptFileOptions, thread, "workflow.star", input.Script, predeclared)
 	if err != nil {
 		return nil, fmt.Errorf("execute script activity: %w", err)
 	}

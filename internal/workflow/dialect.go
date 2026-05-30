@@ -113,6 +113,7 @@ var sqliteDDL = []string{
 	lease_expires_at TEXT,
 	last_error TEXT NOT NULL,
 	state_json TEXT NOT NULL DEFAULT '',
+	executed_by TEXT NOT NULL DEFAULT '',
 	created_at TEXT NOT NULL,
 	updated_at TEXT NOT NULL
 )`,
@@ -170,6 +171,17 @@ var sqliteDDL = []string{
 	agent_id TEXT NOT NULL,
 	server_id TEXT NOT NULL,
 	PRIMARY KEY (agent_id, server_id)
+)`,
+	`CREATE TABLE IF NOT EXISTS nodes (
+	id TEXT PRIMARY KEY,
+	role TEXT NOT NULL DEFAULT 'all',
+	address TEXT NOT NULL DEFAULT '',
+	capabilities TEXT NOT NULL DEFAULT '[]',
+	max_concurrent INTEGER NOT NULL DEFAULT 0,
+	version TEXT NOT NULL DEFAULT '',
+	hostname TEXT NOT NULL DEFAULT '',
+	last_seen_at TEXT NOT NULL,
+	registered_at TEXT NOT NULL
 )`,
 }
 
@@ -239,6 +251,7 @@ var postgresDDL = []string{
 	lease_expires_at TEXT,
 	last_error TEXT NOT NULL,
 	state_json TEXT NOT NULL DEFAULT '',
+	executed_by TEXT NOT NULL DEFAULT '',
 	created_at TEXT NOT NULL,
 	updated_at TEXT NOT NULL
 )`,
@@ -296,5 +309,16 @@ var postgresDDL = []string{
 	agent_id TEXT NOT NULL,
 	server_id TEXT NOT NULL,
 	PRIMARY KEY (agent_id, server_id)
+)`,
+	`CREATE TABLE IF NOT EXISTS nodes (
+	id TEXT PRIMARY KEY,
+	role TEXT NOT NULL DEFAULT 'all',
+	address TEXT NOT NULL DEFAULT '',
+	capabilities TEXT NOT NULL DEFAULT '[]',
+	max_concurrent INTEGER NOT NULL DEFAULT 0,
+	version TEXT NOT NULL DEFAULT '',
+	hostname TEXT NOT NULL DEFAULT '',
+	last_seen_at TEXT NOT NULL,
+	registered_at TEXT NOT NULL
 )`,
 }

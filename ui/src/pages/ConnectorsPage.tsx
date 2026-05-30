@@ -1,15 +1,22 @@
-import { useQuery } from '@tanstack/react-query'
-import { Plus, Server, Wrench } from 'lucide-react'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { Download, Plus, Server, Upload, Wrench } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
-import { mcpServersApi } from '../services/api'
+import ImportModal from '../components/ImportModal'
+import { useImport } from '../hooks/useImport'
+import { downloadBundle, importExportApi, mcpServersApi } from '../services/api'
 import { formatDate } from './workflowUi'
 
 export default function ConnectorsPage() {
   const navigate = useNavigate()
+  const queryClient = useQueryClient()
 
   const serversQuery = useQuery({
     queryKey: ['connectors'],
     queryFn: mcpServersApi.list,
+  })
+
+  const importHook = useImport(() => {
+    void queryClient.invalidateQueries({ queryKey: ['connectors'] })
   })
 
   if (serversQuery.isLoading) {
@@ -31,15 +38,33 @@ export default function ConnectorsPage() {
             Reusable Model Context Protocol connectors you can attach to agents.
           </p>
         </div>
-        <button
-          type="button"
-          onClick={() => navigate('/connectors/new')}
-          className="inline-flex items-center gap-2 rounded-lg bg-primary-600 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-primary-700"
-        >
-          <Plus className="h-4 w-4" />
-          New Connector
-        </button>
+        <div className="flex items-center gap-2">
+          <input ref={importHook.fileInputRef} type="file" accept=".json" className="hidden" onChange={importHook.onFileChange} />
+          <button
+            type="button"
+            onClick={importHook.openFilePicker}
+            disabled={importHook.state.isAnalyzing || importHook.state.isApplying}
+            className="inline-flex items-center gap-2 rounded-lg border border-gray-200 px-4 py-2 text-sm font-semibold text-gray-700 transition-colors hover:bg-gray-50 disabled:opacity-60 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800"
+          >
+            <Upload className="h-4 w-4" />
+            {importHook.state.isAnalyzing ? 'Analyzing…' : importHook.state.isApplying ? 'Importing…' : 'Import'}
+          </button>
+          <button
+            type="button"
+            onClick={() => navigate('/connectors/new')}
+            className="inline-flex items-center gap-2 rounded-lg bg-primary-600 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-primary-700"
+          >
+            <Plus className="h-4 w-4" />
+            New Connector
+          </button>
+        </div>
       </div>
+
+      {importHook.state.error && (
+        <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-900/40 dark:bg-red-950/30 dark:text-red-300">
+          Import error: {importHook.state.error}
+        </div>
+      )}
 
       {servers.length === 0 ? (
         <div className="flex flex-col items-center justify-center rounded-2xl border border-dashed border-gray-300 py-20 dark:border-slate-700">
@@ -60,44 +85,62 @@ export default function ConnectorsPage() {
       ) : (
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {servers.map((srv) => (
-            <button
-              key={srv.id}
-              type="button"
-              onClick={() => navigate(`/connectors/${srv.id}/editor`)}
-              className="group flex flex-col rounded-2xl border border-gray-200 bg-white p-5 text-left shadow-sm transition-shadow hover:shadow-md dark:border-slate-800 dark:bg-slate-900"
-            >
-              <div className="flex items-start justify-between gap-3">
-                <p className="font-semibold text-gray-900 group-hover:text-primary-600 dark:text-slate-100 dark:group-hover:text-primary-400">
-                  {srv.name}
-                </p>
-                <div className="flex shrink-0 items-center gap-1.5">
-                  {srv.group ? (
-                    <span className="rounded-full bg-blue-100 px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-blue-700 dark:bg-blue-900/30 dark:text-blue-300">
-                      {srv.group}
-                    </span>
-                  ) : null}
-                  <span
-                    className={`h-2 w-2 rounded-full ${srv.enabled ? 'bg-emerald-400' : 'bg-gray-300 dark:bg-slate-600'}`}
-                    title={srv.enabled ? 'Enabled' : 'Disabled'}
-                  />
+            <div key={srv.id} className="group relative flex flex-col rounded-2xl border border-gray-200 bg-white p-5 text-left shadow-sm transition-shadow hover:shadow-md dark:border-slate-800 dark:bg-slate-900">
+              <button
+                type="button"
+                onClick={async (e) => { e.stopPropagation(); const b = await importExportApi.exportConnector(srv.id); downloadBundle(b, srv.name) }}
+                title="Export connector"
+                className="absolute right-3 top-3 rounded-lg border border-gray-200 p-1.5 text-gray-300 opacity-0 transition-all hover:bg-gray-50 hover:text-gray-500 group-hover:opacity-100 dark:border-slate-700 dark:text-slate-600 dark:hover:bg-slate-800 dark:hover:text-slate-400"
+              >
+                <Download className="h-3.5 w-3.5" />
+              </button>
+              <button
+                type="button"
+                onClick={() => navigate(`/connectors/${srv.id}/editor`)}
+                className="flex flex-col text-left"
+              >
+                <div className="flex items-start justify-between gap-3 pr-8">
+                  <p className="font-semibold text-gray-900 group-hover:text-primary-600 dark:text-slate-100 dark:group-hover:text-primary-400">
+                    {srv.name}
+                  </p>
+                  <div className="flex shrink-0 items-center gap-1.5">
+                    {srv.group ? (
+                      <span className="rounded-full bg-blue-100 px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-blue-700 dark:bg-blue-900/30 dark:text-blue-300">
+                        {srv.group}
+                      </span>
+                    ) : null}
+                    <span
+                      className={`h-2 w-2 rounded-full ${srv.enabled ? 'bg-emerald-400' : 'bg-gray-300 dark:bg-slate-600'}`}
+                      title={srv.enabled ? 'Enabled' : 'Disabled'}
+                    />
+                  </div>
                 </div>
-              </div>
-              {srv.description ? (
-                <p className="mt-2 line-clamp-2 text-sm text-gray-500 dark:text-slate-400">{srv.description}</p>
-              ) : null}
-              <p className="mt-2 truncate text-xs text-gray-400 dark:text-slate-500">{srv.url}</p>
-              <div className="mt-auto flex items-center justify-between gap-2 pt-3">
-                <p className="text-xs text-gray-400 dark:text-slate-500">Updated {formatDate(srv.updatedAt)}</p>
-                {srv.tools && srv.tools.length > 0 && (
-                  <span className="inline-flex items-center gap-1 text-[10px] text-gray-400 dark:text-slate-500">
-                    <Wrench className="h-3 w-3" />
-                    {srv.tools.length} {srv.tools.length === 1 ? 'tool' : 'tools'}
-                  </span>
-                )}
-              </div>
-            </button>
+                {srv.description ? (
+                  <p className="mt-2 line-clamp-2 text-sm text-gray-500 dark:text-slate-400">{srv.description}</p>
+                ) : null}
+                <p className="mt-2 truncate text-xs text-gray-400 dark:text-slate-500">{srv.url}</p>
+                <div className="mt-auto flex items-center justify-between gap-2 pt-3">
+                  <p className="text-xs text-gray-400 dark:text-slate-500">Updated {formatDate(srv.updatedAt)}</p>
+                  {srv.tools && srv.tools.length > 0 && (
+                    <span className="inline-flex items-center gap-1 text-[10px] text-gray-400 dark:text-slate-500">
+                      <Wrench className="h-3 w-3" />
+                      {srv.tools.length} {srv.tools.length === 1 ? 'tool' : 'tools'}
+                    </span>
+                  )}
+                </div>
+              </button>
+            </div>
           ))}
         </div>
+      )}
+
+      {importHook.state.analysis && (
+        <ImportModal
+          analysis={importHook.state.analysis}
+          isPending={importHook.state.isApplying}
+          onConfirm={importHook.confirm}
+          onClose={importHook.close}
+        />
       )}
     </div>
   )

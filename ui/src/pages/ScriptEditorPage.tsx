@@ -1,19 +1,112 @@
 import { useState, useEffect } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ArrowLeft, Save, Trash2 } from 'lucide-react'
+import { ArrowLeft, BookOpen, CheckCircle, Save, Sparkles, Trash2, X, XCircle } from 'lucide-react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import Editor from '@monaco-editor/react'
+import ScriptAssistModal from '../components/ScriptAssistModal'
 import { useMonacoTheme } from '../hooks/useMonacoTheme'
-import { scriptsApi } from '../services/api'
+import { scriptAiApi, scriptsApi } from '../services/api'
 import type { CreateScriptInput } from '../types'
 
-const BUILTINS_HINT = `json        — json.encode / json.decode
-strings     — lower, upper, trim, contains, replace
-collections — compact, flatten
-workflow    — id, step_name, step_output(name), signal(name), fail(msg)
-asserts     — non_empty(v), equals(l, r)
-ctx         — full workflow context object
-input       — data passed to this step`
+// ─── Builtins reference ───────────────────────────────────────────────────────
+
+const BUILTINS: { name: string; members: { sig: string; desc: string }[] }[] = [
+  {
+    name: 'ctx — workflow context',
+    members: [
+      { sig: 'ctx["input"]', desc: 'Dict of workflow start input fields' },
+      { sig: 'ctx["steps"]["name"]', desc: 'Output dict of a completed step' },
+      { sig: 'ctx["signals"]["name"]', desc: 'Last received signal payload dict' },
+      { sig: 'ctx["workflow"]', desc: 'Workflow metadata (id, definition_id, …)' },
+    ],
+  },
+  {
+    name: 'input',
+    members: [
+      { sig: 'input', desc: 'The step\'s static data field configured in the workflow definition' },
+    ],
+  },
+  {
+    name: 'workflow',
+    members: [
+      { sig: 'workflow.id', desc: 'Current run ID' },
+      { sig: 'workflow.definition_id', desc: 'Definition ID' },
+      { sig: 'workflow.definition_version', desc: 'Version number (int)' },
+      { sig: 'workflow.step_name', desc: 'Current step name' },
+      { sig: 'workflow.step_output("name")', desc: 'Output dict of a past step' },
+      { sig: 'workflow.signal("name")', desc: 'Last signal payload dict' },
+      { sig: 'workflow.fail("message")', desc: 'Fail the step with an error' },
+    ],
+  },
+  {
+    name: 'strings',
+    members: [
+      { sig: 'strings.lower(v)', desc: 'Lowercase string' },
+      { sig: 'strings.upper(v)', desc: 'Uppercase string' },
+      { sig: 'strings.trim(v)', desc: 'Strip surrounding whitespace' },
+      { sig: 'strings.contains(v, part)', desc: 'True if v contains part' },
+      { sig: 'strings.replace(v, old, new)', desc: 'Replace all occurrences' },
+    ],
+  },
+  {
+    name: 'collections',
+    members: [
+      { sig: 'collections.compact(list_or_dict)', desc: 'Remove falsy/empty values' },
+      { sig: 'collections.flatten(list)', desc: 'Flatten one nesting level' },
+    ],
+  },
+  {
+    name: 'json',
+    members: [
+      { sig: 'json.encode(value)', desc: 'Serialise to JSON string' },
+      { sig: 'json.decode(str)', desc: 'Parse JSON string to value' },
+    ],
+  },
+  {
+    name: 'asserts',
+    members: [
+      { sig: 'asserts.non_empty(value, msg?)', desc: 'Fail the step if value is empty or falsy' },
+      { sig: 'asserts.equals(left, right, msg?)', desc: 'Fail if left != right' },
+    ],
+  },
+]
+
+function BuiltinsDrawer({ onClose }: { onClose: () => void }) {
+  return (
+    <div className="absolute inset-y-0 right-0 z-20 flex w-80 flex-col border-l border-gray-200 bg-white shadow-xl dark:border-slate-700 dark:bg-slate-900">
+      <div className="flex shrink-0 items-center justify-between border-b border-gray-200 px-4 py-3 dark:border-slate-700">
+        <span className="text-sm font-semibold text-gray-900 dark:text-slate-100">Available builtins</span>
+        <button
+          type="button"
+          onClick={onClose}
+          className="rounded-lg p-1 text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-600 dark:text-slate-500 dark:hover:bg-slate-800 dark:hover:text-slate-300"
+        >
+          <X className="h-4 w-4" />
+        </button>
+      </div>
+      <div className="flex-1 space-y-5 overflow-y-auto px-4 py-4">
+        <p className="text-[11px] text-gray-400 dark:text-slate-500">
+          Assign output to <span className="font-mono font-semibold">result</span>. Booleans are <span className="font-mono">True</span> / <span className="font-mono">False</span>. No imports or I/O.
+        </p>
+        {BUILTINS.map((group) => (
+          <div key={group.name}>
+            <p className="mb-2 text-[10px] font-semibold uppercase tracking-wide text-gray-500 dark:text-slate-400">{group.name}</p>
+            <div className="space-y-1.5">
+              {group.members.map((m) => (
+                <div key={m.sig} className="rounded-lg bg-gray-50 px-3 py-2 dark:bg-slate-800">
+                  <p className="font-mono text-[11px] font-medium text-primary-700 dark:text-primary-400">{m.sig}</p>
+                  <p className="mt-0.5 text-[11px] text-gray-500 dark:text-slate-400">{m.desc}</p>
+                </div>
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+// ─── Page ─────────────────────────────────────────────────────────────────────
 
 export default function ScriptEditorPage() {
   const { scriptId } = useParams<{ scriptId: string }>()
@@ -23,12 +116,14 @@ export default function ScriptEditorPage() {
 
   const [name, setName] = useState('')
   const [description, setDescription] = useState('')
-  const [language, setLanguage] = useState('starlark')
   const [source, setSource] = useState('')
   const [timeoutMs, setTimeoutMs] = useState('')
-  const [exportsRaw, setExportsRaw] = useState('result')
   const [pageError, setPageError] = useState<string | null>(null)
   const [saved, setSaved] = useState(false)
+  const [showAssist, setShowAssist] = useState(false)
+  const [showBuiltins, setShowBuiltins] = useState(false)
+  const [validation, setValidation] = useState<{ valid: boolean; error?: string } | null>(null)
+  const [isValidating, setIsValidating] = useState(false)
 
   const scriptQuery = useQuery({
     queryKey: ['script', scriptId],
@@ -41,23 +136,18 @@ export default function ScriptEditorPage() {
       const s = scriptQuery.data
       setName(s.name)
       setDescription(s.description)
-      setLanguage(s.language)
       setSource(s.source)
       setTimeoutMs(s.timeoutMs ? String(s.timeoutMs) : '')
-      setExportsRaw((s.exports ?? ['result']).join(', '))
     }
   }, [scriptQuery.data])
 
   const buildInput = (): CreateScriptInput => ({
     name: name.trim(),
     description: description.trim(),
-    language: language.trim() || 'starlark',
+    language: 'starlark',
     source,
     timeoutMs: timeoutMs ? parseInt(timeoutMs, 10) : 0,
-    exports: exportsRaw
-      .split(',')
-      .map((e) => e.trim())
-      .filter(Boolean),
+    exports: ['result'],
   })
 
   const createMutation = useMutation({
@@ -68,9 +158,7 @@ export default function ScriptEditorPage() {
       void queryClient.invalidateQueries({ queryKey: ['scripts'] })
       navigate(`/scripts/${script.id}/editor`, { replace: true })
     },
-    onError: (error: Error) => {
-      setPageError(error.message)
-    },
+    onError: (error: Error) => setPageError(error.message),
   })
 
   const updateMutation = useMutation({
@@ -82,9 +170,7 @@ export default function ScriptEditorPage() {
       void queryClient.setQueryData(['script', scriptId], script)
       setTimeout(() => setSaved(false), 2000)
     },
-    onError: (error: Error) => {
-      setPageError(error.message)
-    },
+    onError: (error: Error) => setPageError(error.message),
   })
 
   const deleteMutation = useMutation({
@@ -93,45 +179,46 @@ export default function ScriptEditorPage() {
       void queryClient.invalidateQueries({ queryKey: ['scripts'] })
       navigate('/scripts', { replace: true })
     },
-    onError: (error: Error) => {
-      setPageError(error.message)
-    },
+    onError: (error: Error) => setPageError(error.message),
   })
 
   const handleSave = () => {
     const input = buildInput()
-    if (!input.name) {
-      setPageError('Name is required.')
-      return
+    if (!input.name) { setPageError('Name is required.'); return }
+    if (isNew) { createMutation.mutate(input) } else { updateMutation.mutate(input) }
+  }
+
+  const handleValidate = async () => {
+    if (!source.trim()) return
+    setIsValidating(true)
+    setValidation(null)
+    try {
+      setValidation(await scriptAiApi.validate(source))
+    } catch (err) {
+      setValidation({ valid: false, error: (err as Error).message })
+    } finally {
+      setIsValidating(false)
     }
-    if (isNew) {
-      createMutation.mutate(input)
-    } else {
-      updateMutation.mutate(input)
-    }
+  }
+
+  const handleDelete = () => {
+    if (!window.confirm('Delete this script? Workflow steps that reference it will fail at runtime.')) return
+    deleteMutation.mutate()
   }
 
   const monacoTheme = useMonacoTheme()
-
-  const handleDelete = () => {
-    if (!window.confirm('Delete this script? Workflow steps that reference it will fail at runtime.')) {
-      return
-    }
-    deleteMutation.mutate()
-  }
+  const isSaving = createMutation.isPending || updateMutation.isPending
 
   if (!isNew && scriptQuery.isLoading) {
     return <div className="p-8 text-sm text-gray-500 dark:text-slate-400">Loading script…</div>
   }
-
   if (!isNew && scriptQuery.error) {
     return <div className="p-8 text-sm text-red-600 dark:text-red-300">Could not load script.</div>
   }
 
-  const isSaving = createMutation.isPending || updateMutation.isPending
-
   return (
     <div className="flex h-full flex-col overflow-hidden">
+
       {/* Header bar */}
       <div className="shrink-0 border-b border-gray-200 bg-white px-5 py-3 dark:border-slate-800 dark:bg-slate-900">
         <div className="flex items-center justify-between gap-4">
@@ -148,7 +235,36 @@ export default function ScriptEditorPage() {
           </div>
           <div className="flex items-center gap-2">
             {saved && <span className="text-xs font-medium text-emerald-600 dark:text-emerald-400">Saved</span>}
-            {pageError && <span className="text-xs font-medium text-red-600 dark:text-red-400">{pageError}</span>}
+            {pageError && <span className="max-w-xs truncate text-xs font-medium text-red-600 dark:text-red-400">{pageError}</span>}
+            <button
+              type="button"
+              onClick={() => setShowBuiltins((v) => !v)}
+              className={`inline-flex items-center gap-1.5 rounded-lg border px-3 py-2 text-sm font-semibold transition-colors ${showBuiltins ? 'border-primary-300 bg-primary-50 text-primary-700 dark:border-primary-700 dark:bg-primary-900/20 dark:text-primary-300' : 'border-gray-200 text-gray-700 hover:bg-gray-50 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800'}`}
+            >
+              <BookOpen className="h-4 w-4" />
+              Builtins
+            </button>
+            <button
+              type="button"
+              onClick={() => void handleValidate()}
+              disabled={isValidating || !source.trim()}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 px-3 py-2 text-sm font-semibold text-gray-700 transition-colors hover:bg-gray-50 disabled:opacity-50 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800"
+            >
+              {validation?.valid
+                ? <CheckCircle className="h-4 w-4 text-emerald-500" />
+                : validation?.error
+                  ? <XCircle className="h-4 w-4 text-red-500" />
+                  : null}
+              {isValidating ? 'Validating…' : 'Validate'}
+            </button>
+            <button
+              type="button"
+              onClick={() => setShowAssist(true)}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-violet-200 px-3 py-2 text-sm font-semibold text-violet-700 transition-colors hover:bg-violet-50 dark:border-violet-800/50 dark:text-violet-300 dark:hover:bg-violet-950/20"
+            >
+              <Sparkles className="h-4 w-4" />
+              AI Assist
+            </button>
             {!isNew && (
               <button
                 type="button"
@@ -173,7 +289,7 @@ export default function ScriptEditorPage() {
         </div>
       </div>
 
-      {/* Metadata bar */}
+      {/* Metadata bar — name, description, timeout on one row */}
       <div className="shrink-0 border-b border-gray-200 bg-gray-50 px-5 py-2.5 dark:border-slate-800 dark:bg-slate-950">
         <div className="flex flex-wrap items-center gap-4">
           <div className="flex items-center gap-2">
@@ -194,83 +310,65 @@ export default function ScriptEditorPage() {
               className="w-full rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-sm text-gray-900 outline-none transition-colors focus:border-primary-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
             />
           </div>
-          <span className="rounded-full bg-violet-100 px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-violet-700 dark:bg-violet-900/30 dark:text-violet-300">
-            {language}
-          </span>
-        </div>
-      </div>
-
-      {/* Canvas */}
-      <div className="flex flex-1 overflow-hidden">
-        {/* Left panel */}
-        <div className="flex w-72 shrink-0 flex-col gap-4 overflow-y-auto border-r border-gray-200 bg-white p-5 dark:border-slate-800 dark:bg-slate-900">
-          <div>
-            <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wide text-gray-500 dark:text-slate-400">Language</label>
-            <input
-              value={language}
-              onChange={(e) => setLanguage(e.target.value || 'starlark')}
-              placeholder="starlark"
-              className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-900 outline-none transition-colors focus:border-primary-500 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
-            />
-          </div>
-          <div>
-            <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wide text-gray-500 dark:text-slate-400">Timeout ms</label>
+          <div className="flex items-center gap-2">
+            <label className="shrink-0 text-[11px] font-semibold uppercase tracking-wide text-gray-400 dark:text-slate-500">Timeout ms</label>
             <input
               type="number"
               min={1}
               value={timeoutMs}
               onChange={(e) => setTimeoutMs(e.target.value)}
-              placeholder="100"
-              className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-900 outline-none transition-colors focus:border-primary-500 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
+              placeholder="default"
+              className="w-28 rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-sm text-gray-900 outline-none transition-colors focus:border-primary-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
             />
           </div>
-          <div>
-            <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wide text-gray-500 dark:text-slate-400">Exports</label>
-            <input
-              value={exportsRaw}
-              onChange={(e) => setExportsRaw(e.target.value)}
-              placeholder="result, extra_value"
-              className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-900 outline-none transition-colors focus:border-primary-500 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
-            />
-            <p className="mt-1 text-[11px] text-gray-400 dark:text-slate-500">Comma-separated variable names to export.</p>
-          </div>
-          <div>
-            <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wide text-gray-500 dark:text-slate-400">Available builtins</label>
-            <pre className="rounded-lg bg-slate-950 p-3 text-[11px] leading-relaxed text-slate-300">{BUILTINS_HINT}</pre>
-          </div>
-          <div className="rounded-lg border border-dashed border-gray-300 p-3 text-[11px] text-gray-500 dark:border-slate-700 dark:text-slate-400">
-            Reference this script in a workflow step by setting <span className="font-mono">scriptId</span> to{' '}
-            <span className="font-mono font-semibold">{isNew ? '<id after save>' : scriptId}</span>.
-          </div>
-        </div>
-
-        {/* Right panel — Monaco source editor */}
-        <div className="flex flex-1 flex-col overflow-hidden bg-white dark:bg-slate-950">
-          <div className="shrink-0 px-4 pt-4 pb-2">
-            <label className="text-[11px] font-semibold uppercase tracking-wide text-gray-400 dark:text-slate-400">Source</label>
-          </div>
-          <div className="flex-1 overflow-hidden">
-            <Editor
-              height="100%"
-              language="python"
-              value={source}
-              onChange={(val) => setSource(val ?? '')}
-              theme={monacoTheme}
-              options={{
-                minimap: { enabled: false },
-                fontSize: 13,
-                lineHeight: 20,
-                padding: { top: 8, bottom: 16 },
-                scrollBeyondLastLine: false,
-                wordWrap: 'on',
-                renderLineHighlight: 'line',
-                smoothScrolling: true,
-                cursorBlinking: 'smooth',
-              }}
-            />
-          </div>
+          {!isNew && (
+            <span className="font-mono text-[11px] text-gray-400 dark:text-slate-500">
+              id: {scriptId}
+            </span>
+          )}
         </div>
       </div>
+
+      {/* Editor + builtins drawer */}
+      <div className="relative flex-1 overflow-hidden">
+        {/* Validation result */}
+        {validation && (
+          <div className={`absolute left-3 top-2 z-10 flex items-center gap-1 rounded-lg px-2.5 py-1 text-xs font-medium shadow-sm ${validation.valid ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-900/20 dark:text-emerald-400' : 'bg-red-50 text-red-700 dark:bg-red-900/20 dark:text-red-400'}`}>
+            {validation.valid
+              ? <><CheckCircle className="h-3.5 w-3.5" /> Valid</>
+              : <><XCircle className="h-3.5 w-3.5" /> {validation.error ? validation.error.replace('workflow.star:', 'Line ') : 'Invalid'}</>}
+          </div>
+        )}
+
+        <Editor
+          height="100%"
+          language="python"
+          value={source}
+          onChange={(val) => { setSource(val ?? ''); setValidation(null) }}
+          theme={monacoTheme}
+          options={{
+            minimap: { enabled: false },
+            fontSize: 13,
+            lineHeight: 20,
+            padding: { top: 32, bottom: 16 },
+            scrollBeyondLastLine: false,
+            wordWrap: 'on',
+            renderLineHighlight: 'line',
+            smoothScrolling: true,
+            cursorBlinking: 'smooth',
+          }}
+        />
+
+        {showBuiltins && <BuiltinsDrawer onClose={() => setShowBuiltins(false)} />}
+      </div>
+
+      {showAssist && (
+        <ScriptAssistModal
+          currentScript={source}
+          onApply={(script) => { setSource(script); setValidation(null) }}
+          onClose={() => setShowAssist(false)}
+        />
+      )}
     </div>
   )
 }

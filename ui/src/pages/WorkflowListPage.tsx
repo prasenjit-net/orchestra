@@ -1,11 +1,13 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Check, Copy, GitBranch, PencilRuler, Play, Plus, Wand2 } from 'lucide-react'
+import { Check, Copy, Download, GitBranch, PencilRuler, Play, Plus, Upload, Wand2 } from 'lucide-react'
 import { Link, useNavigate } from 'react-router-dom'
+import ImportModal from '../components/ImportModal'
 import SectionHeader from '../components/SectionHeader'
 import StatCard from '../components/StatCard'
 import StartWorkflowModal from '../components/StartWorkflowModal'
-import { workflowApi } from '../services/api'
+import { useImport } from '../hooks/useImport'
+import { downloadBundle, importExportApi, workflowApi } from '../services/api'
 import { formatDate, statusClasses } from './workflowUi'
 import type { WorkflowDefinitionSummary } from '../types'
 
@@ -41,6 +43,11 @@ export default function WorkflowListPage() {
   const [pageError, setPageError] = useState<string | null>(null)
   const [startTarget, setStartTarget] = useState<WorkflowDefinitionSummary | null>(null)
   const [startError, setStartError] = useState<string | null>(null)
+
+  const importHook = useImport(() => {
+    setNotice('Import successful.')
+    void queryClient.invalidateQueries({ queryKey: ['workflow-definitions'] })
+  })
 
   const definitionsQuery = useQuery({
     queryKey: ['workflow-definitions'],
@@ -99,14 +106,26 @@ export default function WorkflowListPage() {
         title="Workflows"
         description="Manage versioned workflow definitions, publish drafts, and start new runs."
         action={
-          <button
-            type="button"
-            onClick={() => navigate('/workflows/new')}
-            className="inline-flex items-center gap-2 rounded-lg bg-primary-600 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-primary-700"
-          >
-            <PencilRuler className="h-4 w-4" />
-            New workflow
-          </button>
+          <div className="flex items-center gap-2">
+            <input ref={importHook.fileInputRef} type="file" accept=".json" className="hidden" onChange={importHook.onFileChange} />
+            <button
+              type="button"
+              onClick={importHook.openFilePicker}
+              disabled={importHook.state.isAnalyzing || importHook.state.isApplying}
+              className="inline-flex items-center gap-2 rounded-lg border border-gray-200 px-4 py-2 text-sm font-semibold text-gray-700 transition-colors hover:bg-gray-50 disabled:opacity-60 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800"
+            >
+              <Upload className="h-4 w-4" />
+              {importHook.state.isAnalyzing ? 'Analyzing…' : importHook.state.isApplying ? 'Importing…' : 'Import'}
+            </button>
+            <button
+              type="button"
+              onClick={() => navigate('/workflows/new')}
+              className="inline-flex items-center gap-2 rounded-lg bg-primary-600 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-primary-700"
+            >
+              <PencilRuler className="h-4 w-4" />
+              New workflow
+            </button>
+          </div>
         }
       />
 
@@ -251,6 +270,17 @@ export default function WorkflowListPage() {
                       Publish draft
                     </button>
                   ) : null}
+                  <button
+                    type="button"
+                    title="Export workflow"
+                    onClick={async () => {
+                      const bundle = await importExportApi.exportWorkflow(definition.id)
+                      downloadBundle(bundle, definition.name)
+                    }}
+                    className="rounded-lg border border-gray-200 p-1.5 text-gray-400 transition-colors hover:bg-gray-50 hover:text-gray-600 dark:border-slate-700 dark:text-slate-500 dark:hover:bg-slate-800 dark:hover:text-slate-300"
+                  >
+                    <Download className="h-3.5 w-3.5" />
+                  </button>
                   <Link
                     to={`/runs?definitionId=${definition.id}`}
                     className="ml-auto text-xs font-semibold text-gray-500 hover:text-gray-700 dark:text-slate-400 dark:hover:text-slate-200"
@@ -277,6 +307,20 @@ export default function WorkflowListPage() {
             startWorkflowMutation.mutate({ definitionId: startTarget.id, input, callbackUrl })
           }}
         />
+      )}
+
+      {importHook.state.analysis && (
+        <ImportModal
+          analysis={importHook.state.analysis}
+          isPending={importHook.state.isApplying}
+          onConfirm={importHook.confirm}
+          onClose={importHook.close}
+        />
+      )}
+      {importHook.state.error && (
+        <div className="fixed bottom-4 right-4 z-50 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 shadow-lg dark:border-red-900/40 dark:bg-red-950/30 dark:text-red-300">
+          Import error: {importHook.state.error}
+        </div>
       )}
     </div>
   )

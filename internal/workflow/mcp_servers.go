@@ -57,10 +57,10 @@ func (s *Service) CreateMCPServer(ctx context.Context, input CreateMCPServerInpu
 		enabled = 1
 	}
 	ts := formatTime(now)
-	if _, err := s.db.ExecContext(ctx, `
+	if _, err := s.db.ExecContext(ctx, s.rebind(`
 		INSERT INTO mcp_servers (id, name, description, group_name, url, headers_json, enabled, tools_json, explored_at, created_at, updated_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, '[]', NULL, ?, ?)
-	`, id, input.Name, input.Description, input.Group, input.URL, string(headersJSON), enabled, ts, ts); err != nil {
+	`), id, input.Name, input.Description, input.Group, input.URL, string(headersJSON), enabled, ts, ts); err != nil {
 		return MCPServer{}, fmt.Errorf("insert mcp server: %w", err)
 	}
 	srv := MCPServer{
@@ -109,10 +109,10 @@ func (s *Service) ListMCPServers(ctx context.Context) ([]MCPServer, error) {
 }
 
 func (s *Service) GetMCPServer(ctx context.Context, id string) (MCPServer, error) {
-	row := s.db.QueryRowContext(ctx, `
+	row := s.db.QueryRowContext(ctx, s.rebind(`
 		SELECT id, name, description, group_name, url, headers_json, enabled, tools_json, explored_at, created_at, updated_at
 		FROM mcp_servers WHERE id = ?
-	`, id)
+	`), id)
 	return scanMCPServer(row)
 }
 
@@ -135,10 +135,10 @@ func (s *Service) UpdateMCPServer(ctx context.Context, id string, input CreateMC
 	// Capture old URL to decide whether to re-explore.
 	old, oldErr := s.GetMCPServer(ctx, id)
 
-	res, err := s.db.ExecContext(ctx, `
+	res, err := s.db.ExecContext(ctx, s.rebind(`
 		UPDATE mcp_servers SET name=?, description=?, group_name=?, url=?, headers_json=?, enabled=?, updated_at=?
 		WHERE id=?
-	`, input.Name, input.Description, input.Group, input.URL, string(headersJSON), enabled, ts, id)
+	`), input.Name, input.Description, input.Group, input.URL, string(headersJSON), enabled, ts, id)
 	if err != nil {
 		return MCPServer{}, fmt.Errorf("update mcp server: %w", err)
 	}
@@ -165,10 +165,10 @@ func (s *Service) DeleteMCPServer(ctx context.Context, id string) error {
 	}
 	defer tx.Rollback() //nolint:errcheck
 
-	if _, err := tx.ExecContext(ctx, `DELETE FROM agent_mcp_servers WHERE server_id = ?`, id); err != nil {
+	if _, err := tx.ExecContext(ctx, s.rebind(`DELETE FROM agent_mcp_servers WHERE server_id = ?`), id); err != nil {
 		return fmt.Errorf("delete agent_mcp_servers: %w", err)
 	}
-	res, err := tx.ExecContext(ctx, `DELETE FROM mcp_servers WHERE id = ?`, id)
+	res, err := tx.ExecContext(ctx, s.rebind(`DELETE FROM mcp_servers WHERE id = ?`), id)
 	if err != nil {
 		return fmt.Errorf("delete mcp server: %w", err)
 	}
@@ -203,9 +203,9 @@ func (s *Service) ExploreMCPServer(ctx context.Context, id string) (MCPServer, e
 	}
 	now := time.Now().UTC()
 	ts := formatTime(now)
-	if _, err := s.db.ExecContext(ctx, `
+	if _, err := s.db.ExecContext(ctx, s.rebind(`
 		UPDATE mcp_servers SET tools_json=?, explored_at=?, updated_at=? WHERE id=?
-	`, string(toolsJSON), ts, ts, id); err != nil {
+	`), string(toolsJSON), ts, ts, id); err != nil {
 		return MCPServer{}, fmt.Errorf("save explored tools: %w", err)
 	}
 
@@ -226,13 +226,13 @@ func (s *Service) exploreInBackground(id, url string, headers map[string]string)
 }
 
 func (s *Service) GetAgentMCPServers(ctx context.Context, agentID string) ([]MCPServer, error) {
-	rows, err := s.db.QueryContext(ctx, `
+	rows, err := s.db.QueryContext(ctx, s.rebind(`
 		SELECT ms.id, ms.name, ms.description, ms.group_name, ms.url, ms.headers_json, ms.enabled, ms.tools_json, ms.explored_at, ms.created_at, ms.updated_at
 		FROM mcp_servers ms
 		JOIN agent_mcp_servers ams ON ams.server_id = ms.id
 		WHERE ams.agent_id = ?
 		ORDER BY ms.group_name, ms.name
-	`, agentID)
+	`), agentID)
 	if err != nil {
 		return nil, fmt.Errorf("query agent mcp servers: %w", err)
 	}
@@ -262,11 +262,11 @@ func (s *Service) SetAgentMCPServers(ctx context.Context, agentID string, server
 	}
 	defer tx.Rollback() //nolint:errcheck
 
-	if _, err := tx.ExecContext(ctx, `DELETE FROM agent_mcp_servers WHERE agent_id = ?`, agentID); err != nil {
+	if _, err := tx.ExecContext(ctx, s.rebind(`DELETE FROM agent_mcp_servers WHERE agent_id = ?`), agentID); err != nil {
 		return fmt.Errorf("clear agent mcp servers: %w", err)
 	}
 	for _, sid := range serverIDs {
-		if _, err := tx.ExecContext(ctx, `INSERT INTO agent_mcp_servers (agent_id, server_id) VALUES (?, ?)`, agentID, sid); err != nil {
+		if _, err := tx.ExecContext(ctx, s.rebind(`INSERT INTO agent_mcp_servers (agent_id, server_id) VALUES (?, ?)`), agentID, sid); err != nil {
 			return fmt.Errorf("insert agent mcp server %s: %w", sid, err)
 		}
 	}

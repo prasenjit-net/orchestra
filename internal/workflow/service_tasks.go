@@ -60,12 +60,12 @@ func (s *Service) ListTasks(ctx context.Context, input ListTasksInput) (ListTask
 		where = "WHERE " + strings.Join(conds, " AND ")
 	}
 	var total int
-	if err := s.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM workflow_tasks "+where, filterArgs...).Scan(&total); err != nil {
+	if err := s.db.QueryRowContext(ctx, s.rebind("SELECT COUNT(*) FROM workflow_tasks "+where), filterArgs...).Scan(&total); err != nil {
 		return ListTasksResult{}, fmt.Errorf("count workflow tasks: %w", err)
 	}
 
 	query := `SELECT id, workflow_id, step_index, step_name, activity_name, status, attempts, max_attempts,
-		       run_at, last_error, lease_owner, lease_expires_at, state_json, created_at, updated_at
+		       run_at, last_error, lease_owner, lease_expires_at, state_json, executed_by, created_at, updated_at
 		FROM workflow_tasks ` + where + `
 		ORDER BY CASE status
 			WHEN 'failed'  THEN 0
@@ -83,7 +83,7 @@ func (s *Service) ListTasks(ctx context.Context, input ListTasksInput) (ListTask
 		pageArgs = append(pageArgs, input.Limit, input.Offset)
 	}
 
-	rows, err := s.db.QueryContext(ctx, query, pageArgs...)
+	rows, err := s.db.QueryContext(ctx, s.rebind(query), pageArgs...)
 	if err != nil {
 		return ListTasksResult{}, fmt.Errorf("query workflow tasks: %w", err)
 	}
@@ -840,7 +840,7 @@ func (s *Service) claimNextTask(ctx context.Context) (WorkflowTask, bool, error)
 	now := time.Now().UTC()
 	rows, err := tx.QueryContext(ctx, s.rebind(`
 		SELECT id, workflow_id, step_index, step_name, activity_name, status, attempts, max_attempts,
-		       run_at, last_error, lease_owner, lease_expires_at, state_json, created_at, updated_at
+		       run_at, last_error, lease_owner, lease_expires_at, state_json, executed_by, created_at, updated_at
 		FROM workflow_tasks
 		WHERE (status = ? AND run_at <= ?) OR (status = ? AND run_at <= ?)
 		ORDER BY run_at ASC, id ASC
@@ -849,13 +849,18 @@ func (s *Service) claimNextTask(ctx context.Context) (WorkflowTask, bool, error)
 	if err != nil {
 		return WorkflowTask{}, false, fmt.Errorf("select runnable workflow task: %w", err)
 	}
-	defer rows.Close()
 
 	if !rows.Next() {
+		rows.Close()
 		return WorkflowTask{}, false, nil
 	}
-
 	task, err := scanWorkflowTask(rows)
+	// Close the cursor before executing any DML on the same connection.
+	// pgx streams rows lazily; the connection is busy until rows.Close(),
+	// so calling ExecContext with an open cursor returns a "conn busy" error.
+	if closeErr := rows.Close(); closeErr != nil && err == nil {
+		err = closeErr
+	}
 	if err != nil {
 		return WorkflowTask{}, false, err
 	}
@@ -863,9 +868,9 @@ func (s *Service) claimNextTask(ctx context.Context) (WorkflowTask, bool, error)
 	leaseExpiresAt := now.Add(s.cfg.LeaseDuration)
 	result, err := tx.ExecContext(ctx, s.rebind(`
 		UPDATE workflow_tasks
-		SET status = ?, attempts = attempts + 1, lease_owner = ?, lease_expires_at = ?, updated_at = ?
+		SET status = ?, attempts = attempts + 1, lease_owner = ?, lease_expires_at = ?, executed_by = ?, updated_at = ?
 		WHERE id = ? AND status = ?
-	`), StatusRunning, s.workerID, formatTime(leaseExpiresAt), formatTime(now), task.ID, StatusPending)
+	`), StatusRunning, s.workerID, formatTime(leaseExpiresAt), s.workerID, formatTime(now), task.ID, StatusPending)
 	if err != nil {
 		return WorkflowTask{}, false, fmt.Errorf("claim workflow task: %w", err)
 	}
@@ -893,7 +898,7 @@ func (s *Service) claimNextTask(ctx context.Context) (WorkflowTask, bool, error)
 func (s *Service) GetTask(ctx context.Context, taskID int64) (WorkflowTask, error) {
 	row := s.db.QueryRowContext(ctx, s.rebind(`
 		SELECT id, workflow_id, step_index, step_name, activity_name, status, attempts, max_attempts,
-		       run_at, last_error, lease_owner, lease_expires_at, state_json, created_at, updated_at
+		       run_at, last_error, lease_owner, lease_expires_at, state_json, executed_by, created_at, updated_at
 		FROM workflow_tasks
 		WHERE id = ?
 	`), taskID)
@@ -937,7 +942,7 @@ func (s *Service) requeueExpiredTasks(ctx context.Context) error {
 func (s *Service) getTaskTx(ctx context.Context, tx *sql.Tx, taskID int64) (WorkflowTask, error) {
 	row := tx.QueryRowContext(ctx, s.rebind(`
 		SELECT id, workflow_id, step_index, step_name, activity_name, status, attempts, max_attempts,
-		       run_at, last_error, lease_owner, lease_expires_at, state_json, created_at, updated_at
+		       run_at, last_error, lease_owner, lease_expires_at, state_json, executed_by, created_at, updated_at
 		FROM workflow_tasks
 		WHERE id = ?
 	`), taskID)
@@ -955,8 +960,8 @@ func insertTaskTx(ctx context.Context, tx *sql.Tx, rebind func(string) string, w
 	_, err := tx.ExecContext(ctx, rebind(`
 		INSERT INTO workflow_tasks (
 			workflow_id, step_index, step_name, activity_name, status, attempts, max_attempts,
-			run_at, lease_owner, lease_expires_at, last_error, state_json, created_at, updated_at
-		) VALUES (?, ?, ?, ?, ?, 0, ?, ?, '', NULL, '', '', ?, ?)
+			run_at, lease_owner, lease_expires_at, last_error, state_json, executed_by, created_at, updated_at
+		) VALUES (?, ?, ?, ?, ?, 0, ?, ?, '', NULL, '', '', '', ?, ?)
 	`), workflowID, stepIndex, step.Name, step.Activity, StatusPending, step.Retry.MaxAttempts, formatTime(now), formatTime(now), formatTime(now))
 	if err != nil {
 		return fmt.Errorf("insert workflow task: %w", err)
@@ -1001,6 +1006,7 @@ func scanWorkflowTask(scanner interface{ Scan(...any) error }) (WorkflowTask, er
 		leaseOwner   sql.NullString
 		leaseExpires sql.NullString
 		state        sql.NullString
+		executedBy   sql.NullString
 		createdAt    string
 		updatedAt    string
 	)
@@ -1018,6 +1024,7 @@ func scanWorkflowTask(scanner interface{ Scan(...any) error }) (WorkflowTask, er
 		&leaseOwner,
 		&leaseExpires,
 		&state,
+		&executedBy,
 		&createdAt,
 		&updatedAt,
 	); err != nil {
@@ -1031,6 +1038,7 @@ func scanWorkflowTask(scanner interface{ Scan(...any) error }) (WorkflowTask, er
 		task.LeaseExpiresAt = &parsed
 	}
 	task.State = json.RawMessage(state.String)
+	task.ExecutedBy = executedBy.String
 	task.CreatedAt = mustParseTime(createdAt)
 	task.UpdatedAt = mustParseTime(updatedAt)
 	return task, nil

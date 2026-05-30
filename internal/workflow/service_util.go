@@ -20,6 +20,9 @@ func ensureDatabasePath(path string) error {
 	return nil
 }
 
+// GenerateNodeID returns a new random node ID with a "node-" prefix.
+func GenerateNodeID() string { return generateID("node") }
+
 func generateID(prefix string) string {
 	var raw [8]byte
 	if _, err := rand.Read(raw[:]); err != nil {
