@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -89,9 +90,15 @@ type aiProviderClient struct {
 }
 
 func newAIProviderClient(cfg config.AIConfig) *aiProviderClient {
+	transport := http.DefaultTransport
+	if raw := strings.TrimSpace(cfg.HTTPProxy); raw != "" {
+		if proxyURL, err := url.Parse(raw); err == nil {
+			transport = &http.Transport{Proxy: http.ProxyURL(proxyURL)}
+		}
+	}
 	return &aiProviderClient{
 		cfg:        cfg,
-		httpClient: &http.Client{Timeout: defaultAIRequestTimeout},
+		httpClient: &http.Client{Timeout: defaultAIRequestTimeout, Transport: transport},
 	}
 }
 

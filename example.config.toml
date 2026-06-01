@@ -28,6 +28,11 @@ devProxyURL = "http://localhost:5173"
 # ---------------------------------------------------------------------------
 [ai]
 
+# Optional HTTP proxy for all AI provider requests.
+# Supports credentials: http://user:pass@proxy.example.com:8080
+# Also settable via APP_AI_HTTP_PROXY env var.
+# httpProxy = ""
+
 # --- OpenAI ---
 # openaiAPIKey = ""    # set via APP_AI_OPENAI_API_KEY env var or here
 # openaiBaseURL = ""   # optional: override for proxies / Azure OpenAI

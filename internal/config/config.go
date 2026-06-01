@@ -28,6 +28,11 @@ type Config struct {
 // AIConfig holds credentials and defaults for all AI providers.
 // Configure at least one provider to use AI-powered agents and features.
 type AIConfig struct {
+	// HTTPProxy is an optional proxy URL used for all AI provider requests.
+	// Supports credentials: http://user:pass@proxy.example.com:8080
+	// Also configurable via APP_AI_HTTP_PROXY (or the standard HTTP_PROXY env var).
+	HTTPProxy string `mapstructure:"httpProxy" yaml:"httpProxy"`
+
 	// OpenAI
 	OpenAIAPIKey  string `mapstructure:"openaiAPIKey" yaml:"openaiAPIKey"`
 	OpenAIBaseURL string `mapstructure:"openaiBaseURL" yaml:"openaiBaseURL"`
@@ -220,6 +225,7 @@ func SetDefaults(v *viper.Viper) {
 	// camelCase→env mapping produces hard-to-type names.  Each BindEnv call
 	// below also keeps the auto-mapped name working, so users can use either.
 	_ = v.BindEnv("workflow.databaseURL", "APP_WORKFLOW_DATABASE_URL", "APP_WORKFLOW_DATABASEURL")
+	_ = v.BindEnv("ai.httpProxy", "APP_AI_HTTP_PROXY")
 	_ = v.BindEnv("ai.openaiAPIKey", "APP_AI_OPENAI_API_KEY")
 	_ = v.BindEnv("ai.openaiBaseURL", "APP_AI_OPENAI_BASE_URL")
 	_ = v.BindEnv("ai.claudeAPIKey", "APP_AI_CLAUDE_API_KEY")
@@ -311,6 +317,11 @@ devProxyURL = "http://localhost:5173"
 # configured provider in preference order: openai → copilot → claude.
 # ---------------------------------------------------------------------------
 [ai]
+
+# Optional HTTP proxy for all AI provider requests.
+# Supports credentials: http://user:pass@proxy.example.com:8080
+# Also settable via APP_AI_HTTP_PROXY env var.
+# httpProxy = ""
 
 # --- OpenAI ---
 # openaiAPIKey = ""   # or set APP_AI_OPENAI_API_KEY
