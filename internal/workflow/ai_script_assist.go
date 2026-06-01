@@ -1,12 +1,9 @@
 package workflow
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
-	"net/http"
 	"strings"
 	"time"
 
@@ -104,78 +101,33 @@ type ScriptChatMessage struct {
 	Content string `json:"content"`
 }
 
-// ScriptAssist sends the conversation history to GPT-4o with the script system
-// prompt and returns the assistant's next message.
+// ScriptAssist sends the conversation history to the configured AI provider
+// with the script system prompt and returns the assistant's next message.
+// The provider is auto-selected from whichever credential is configured
+// (openai → copilot → claude preference order).
 func (s *Service) ScriptAssist(ctx context.Context, messages []ScriptChatMessage, currentScript string) (string, error) {
-	apiKey := s.cfg.OpenAIAPIKey
-	if apiKey == "" {
-		return "", fmt.Errorf("OpenAI API key not configured (set workflow.openaiAPIKey or APP_WORKFLOW_OPENAI_API_KEY)")
-	}
-
 	systemContent := scriptAssistSystemPrompt
 	if strings.TrimSpace(currentScript) != "" {
 		systemContent += "\n\n## User's current script\n```python\n" + currentScript + "\n```"
 	}
 
-	oaiMessages := []map[string]string{
-		{"role": "system", "content": systemContent},
-	}
+	aiMessages := make([]aiMessage, 0, len(messages))
 	for _, m := range messages {
-		oaiMessages = append(oaiMessages, map[string]string{
-			"role":    m.Role,
-			"content": m.Content,
+		aiMessages = append(aiMessages, aiMessage{
+			Role:    m.Role,
+			Content: m.Content,
 		})
 	}
 
-	reqBody, err := json.Marshal(map[string]any{
-		"model":      "gpt-4o",
-		"messages":   oaiMessages,
-		"max_tokens": 2048,
+	resp, err := s.ai.Complete(ctx, aiChatRequest{
+		SystemPrompt: systemContent,
+		Messages:     aiMessages,
+		MaxTokens:    2048,
 	})
 	if err != nil {
-		return "", fmt.Errorf("encode script assist request: %w", err)
+		return "", fmt.Errorf("script assist: %w", err)
 	}
-
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost,
-		"https://api.openai.com/v1/chat/completions", bytes.NewReader(reqBody))
-	if err != nil {
-		return "", fmt.Errorf("build script assist request: %w", err)
-	}
-	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("Authorization", "Bearer "+apiKey)
-
-	resp, err := http.DefaultClient.Do(httpReq)
-	if err != nil {
-		return "", fmt.Errorf("call OpenAI: %w", err)
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", fmt.Errorf("read OpenAI response: %w", err)
-	}
-
-	var oaiResp struct {
-		Choices []struct {
-			Message struct {
-				Content string `json:"content"`
-			} `json:"message"`
-		} `json:"choices"`
-		Error *struct {
-			Message string `json:"message"`
-			Type    string `json:"type"`
-		} `json:"error"`
-	}
-	if err := json.Unmarshal(body, &oaiResp); err != nil {
-		return "", fmt.Errorf("decode OpenAI response: %w", err)
-	}
-	if oaiResp.Error != nil {
-		return "", fmt.Errorf("OpenAI error (%s): %s", oaiResp.Error.Type, oaiResp.Error.Message)
-	}
-	if len(oaiResp.Choices) == 0 {
-		return "", fmt.Errorf("OpenAI returned no choices")
-	}
-	return oaiResp.Choices[0].Message.Content, nil
+	return resp.Content, nil
 }
 
 // ValidateScriptResult is the result of a dry-run script validation.

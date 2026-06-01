@@ -924,14 +924,18 @@ func (h *Handler) Restart(w http.ResponseWriter, r *http.Request) {
 // sensitiveConfigEntries maps each sensitive config key to its redaction placeholder.
 // The placeholder is intentionally key-specific so it cannot be confused with a real value.
 var sensitiveConfigEntries = map[string]string{
-	"openaiAPIKey":  "<openaiAPIKey>",
-	"databaseURL":   "<databaseURL>",
-	"openai_api_key": "<openaiAPIKey>",
-	"database_url":  "<databaseURL>",
+	"openaiAPIKey":        "<openaiAPIKey>",
+	"claudeAPIKey":        "<claudeAPIKey>",
+	"copilotOAuthToken":   "<copilotOAuthToken>",
+	"databaseURL":         "<databaseURL>",
+	"openai_api_key":      "<openaiAPIKey>",
+	"claude_api_key":      "<claudeAPIKey>",
+	"copilot_oauth_token": "<copilotOAuthToken>",
+	"database_url":        "<databaseURL>",
 }
 
 var sensitiveConfigKeys = regexp.MustCompile(
-	`(?im)^(\s*(?:openaiAPIKey|databaseURL|openai_api_key|database_url)\s*=\s*)(".+"|'.+'|[^\s#]+)`)
+	`(?im)^(\s*(?:openaiAPIKey|claudeAPIKey|copilotOAuthToken|databaseURL|openai_api_key|claude_api_key|copilot_oauth_token|database_url)\s*=\s*)(".+"|'.+'|[^\s#]+)`)
 
 func redactConfigSecrets(content string) string {
 	return sensitiveConfigKeys.ReplaceAllStringFunc(content, func(line string) string {
@@ -1032,7 +1036,9 @@ func (h *Handler) EnhancePrompt(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		Prompt string `json:"prompt"`
+		Prompt   string `json:"prompt"`
+		Provider string `json:"provider"`
+		Model    string `json:"model"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid JSON body")
@@ -1042,7 +1048,7 @@ func (h *Handler) EnhancePrompt(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "prompt is required")
 		return
 	}
-	enhanced, err := h.workflow.EnhancePrompt(r.Context(), body.Prompt)
+	enhanced, err := h.workflow.EnhancePrompt(r.Context(), body.Prompt, body.Provider, body.Model)
 	if err != nil {
 		writeError(w, http.StatusBadGateway, err.Error())
 		return

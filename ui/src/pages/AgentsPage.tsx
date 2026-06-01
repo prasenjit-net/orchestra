@@ -36,7 +36,7 @@ export default function AgentsPage() {
         <div>
           <h1 className="text-2xl font-bold text-gray-900 dark:text-slate-100">Agents</h1>
           <p className="mt-1 text-sm text-gray-500 dark:text-slate-400">
-            AI agents powered by OpenAI that you can invoke as workflow steps.
+            AI agents powered by OpenAI, Claude, or GitHub Copilot that you can invoke as workflow steps.
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -108,8 +108,11 @@ export default function AgentsPage() {
                     {agent.model}
                   </span>
                 </div>
+                <p className="mt-2 text-[11px] font-semibold uppercase tracking-wide text-sky-600 dark:text-sky-300">
+                  {agent.provider}
+                </p>
                 {agent.description ? (
-                  <p className="mt-2 line-clamp-2 text-sm text-gray-500 dark:text-slate-400">{agent.description}</p>
+                  <p className="mt-1 line-clamp-2 text-sm text-gray-500 dark:text-slate-400">{agent.description}</p>
                 ) : null}
                 <p className="mt-auto pt-4 text-xs text-gray-400 dark:text-slate-500">Updated {formatDate(agent.updatedAt)}</p>
               </button>

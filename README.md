@@ -6,10 +6,10 @@ Orchestra is a **durable workflow engine** that ships as a single Go binary with
 
 - **Visual workflow designer** — drag-and-drop canvas, double-click to configure any step, conditional branching with per-edge conditions
 - **Durable execution** — SQLite-backed state machine with lease-based task polling, automatic retries, and crash recovery
-- **Rich activity catalog** — HTTP request, delay, log, script (Starlark), AI agent (OpenAI-compatible), branch, wait-signal, approval, manual-task, webhook, and more
+- **Rich activity catalog** — HTTP request, delay, log, script (Starlark), AI agent (OpenAI, Claude, or GitHub Copilot), branch, wait-signal, approval, manual-task, webhook, and more
 - **Conditional branching** — draw multiple outgoing edges from any step, attach path/operator/value conditions, and fan back in to a shared step
 - **Script management** — write and reuse Starlark scripts with typed exports; attach them to workflow steps by reference
-- **AI agents** — configure OpenAI-compatible agents with system prompts, model, and MCP server tool sets; invoke them as workflow steps
+- **AI agents** — configure OpenAI, Claude, or GitHub Copilot agents with system prompts, model, and MCP server tool sets; invoke them as workflow steps
 - **MCP connectors** — connect agents to Model Context Protocol servers for real-time tool calling
 - **Signal delivery** — send named signals to running workflows to wake waiting steps or resume paused branches
 - **Operations console** — live task queue view with retry, requeue, pause/resume, and cancel controls
@@ -37,7 +37,7 @@ make install-deps
 
 ```bash
 cp example.config.toml config.toml
-# Edit config.toml as needed (port, database path, OpenAI key, etc.)
+# Edit config.toml as needed (port, database path, and AI provider keys)
 ```
 
 ### 3. Initialise the data directory
@@ -110,6 +110,8 @@ scriptEnabled          = false          # set true to enable Starlark scripts
 scriptTimeout          = "250ms"
 scriptMaxSourceBytes   = 16384
 # openaiAPIKey = ""                     # or use APP_WORKFLOW_OPENAI_API_KEY
+# claudeAPIKey = ""                     # or use APP_WORKFLOW_CLAUDE_API_KEY
+# copilotOAuthToken = ""                # or use APP_WORKFLOW_COPILOT_OAUTH_TOKEN
 ```
 
 ---
@@ -131,6 +133,8 @@ APP_LOGGING_LEVEL=info
 APP_LOGGING_FORMAT=json
 APP_WORKFLOW_DATABASE_PATH=/data/workflows.db
 APP_WORKFLOW_OPENAI_API_KEY=sk-...
+APP_WORKFLOW_CLAUDE_API_KEY=sk-ant-...
+APP_WORKFLOW_COPILOT_OAUTH_TOKEN=gho_...
 APP_WORKFLOW_SCRIPT_ENABLED=true
 ```
 
@@ -236,7 +240,7 @@ Output keys match the `exports` list and are available as `{{steps.StepName.resu
 
 ### AI Agent (`agent`)
 
-Calls an OpenAI-compatible chat completions endpoint with optional MCP tool calling.
+Calls the selected agent provider — OpenAI, Claude, or GitHub Copilot — with optional MCP tool calling.
 
 ```json
 {
@@ -245,7 +249,7 @@ Calls an OpenAI-compatible chat completions endpoint with optional MCP tool call
 }
 ```
 
-Requires `workflow.openaiAPIKey` (or `APP_WORKFLOW_OPENAI_API_KEY`). The agent loops until the model responds with `finish_reason: stop`, executing any MCP tool calls along the way.
+Requires the matching provider credentials in `workflow.*` config (`openaiAPIKey`, `claudeAPIKey`, or `copilotOAuthToken`). The agent loops until the model stops or finishes its tool calls, executing any MCP tool calls along the way.
 
 Output: `{ "content": "...", "usage": { "promptTokens": N, "completionTokens": N } }`
 

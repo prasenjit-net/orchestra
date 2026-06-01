@@ -10,9 +10,9 @@ import (
 // ─── Bundle types ─────────────────────────────────────────────────────────────
 
 type ImportBundle struct {
-	Version    int              `json:"version"`
-	ExportedAt string           `json:"exportedAt"`
-	BundleType string           `json:"bundleType"` // "workflow" | "agent" | "script" | "connector"
+	Version    int               `json:"version"`
+	ExportedAt string            `json:"exportedAt"`
+	BundleType string            `json:"bundleType"` // "workflow" | "agent" | "script" | "connector"
 	Definition *DefinitionExport `json:"definition,omitempty"`
 	Scripts    []Script          `json:"scripts,omitempty"`
 	Agents     []Agent           `json:"agents,omitempty"`
@@ -335,16 +335,20 @@ func (s *Service) upsertScript(ctx context.Context, sc Script, now time.Time) er
 }
 
 func (s *Service) upsertAgent(ctx context.Context, ag Agent, now time.Time) error {
+	provider, model, err := normalizeAgentSettings(ag.Provider, ag.Model)
+	if err != nil {
+		return err
+	}
 	ts := formatTime(now)
 	if _, err := s.db.ExecContext(ctx, s.rebind(`
-		INSERT INTO agents (id, name, description, model, system_prompt, max_tokens, temperature, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO agents (id, name, description, provider, model, system_prompt, max_tokens, temperature, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (id) DO UPDATE SET
 			name = EXCLUDED.name, description = EXCLUDED.description,
-			model = EXCLUDED.model, system_prompt = EXCLUDED.system_prompt,
+			provider = EXCLUDED.provider, model = EXCLUDED.model, system_prompt = EXCLUDED.system_prompt,
 			max_tokens = EXCLUDED.max_tokens, temperature = EXCLUDED.temperature,
 			updated_at = EXCLUDED.updated_at
-	`), ag.ID, ag.Name, ag.Description, ag.Model, ag.SystemPrompt, ag.MaxTokens, ag.Temperature, ts, ts); err != nil {
+	`), ag.ID, ag.Name, ag.Description, provider, model, ag.SystemPrompt, ag.MaxTokens, ag.Temperature, ts, ts); err != nil {
 		return err
 	}
 

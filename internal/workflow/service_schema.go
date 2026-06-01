@@ -97,6 +97,7 @@ func (s *Service) initSchema(ctx context.Context) error {
 			id TEXT PRIMARY KEY,
 			name TEXT NOT NULL,
 			description TEXT NOT NULL DEFAULT '',
+			provider TEXT NOT NULL DEFAULT 'openai',
 			model TEXT NOT NULL DEFAULT 'gpt-4o',
 			system_prompt TEXT NOT NULL DEFAULT '',
 			max_tokens INTEGER NOT NULL DEFAULT 0,
@@ -152,6 +153,9 @@ func (s *Service) initSchema(ctx context.Context) error {
 		return err
 	}
 	if err := ensureWorkflowInstanceColumns(ctx, s.db); err != nil {
+		return err
+	}
+	if err := ensureAgentColumns(ctx, s.db); err != nil {
 		return err
 	}
 
@@ -257,6 +261,41 @@ func ensureWorkflowDefinitionVersionColumns(ctx context.Context, db *sql.DB) err
 	}
 	if _, err := db.ExecContext(ctx, `UPDATE workflow_definition_versions SET published_at = created_at WHERE status = 'published' AND (published_at IS NULL OR published_at = '')`); err != nil {
 		return fmt.Errorf("backfill workflow_definition_versions.published_at: %w", err)
+	}
+	return nil
+}
+
+func ensureAgentColumns(ctx context.Context, db *sql.DB) error {
+	rows, err := db.QueryContext(ctx, `PRAGMA table_info(agents)`)
+	if err != nil {
+		return fmt.Errorf("inspect agents schema: %w", err)
+	}
+	defer rows.Close()
+
+	hasProvider := false
+	for rows.Next() {
+		var (
+			cid        int
+			name       string
+			dataType   string
+			notNull    int
+			defaultVal sql.NullString
+			primaryKey int
+		)
+		if err := rows.Scan(&cid, &name, &dataType, &notNull, &defaultVal, &primaryKey); err != nil {
+			return fmt.Errorf("scan agents schema: %w", err)
+		}
+		if name == "provider" {
+			hasProvider = true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterate agents schema: %w", err)
+	}
+	if !hasProvider {
+		if _, err := db.ExecContext(ctx, `ALTER TABLE agents ADD COLUMN provider TEXT NOT NULL DEFAULT 'openai'`); err != nil {
+			return fmt.Errorf("add agents.provider column: %w", err)
+		}
 	}
 	return nil
 }

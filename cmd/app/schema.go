@@ -67,6 +67,8 @@ func runSchema(cmd *cobra.Command, _ []string) error {
 	dialect := workflow.Dialect(driver)
 	statements := dialect.DDL()
 
+	migrations := dialect.Migrations()
+
 	if !schemaCreateFlag {
 		// Print to stdout.
 		fmt.Printf("-- Orchestra schema DDL (%s)\n", dialect)
@@ -76,23 +78,36 @@ func runSchema(cmd *cobra.Command, _ []string) error {
 			fmt.Println(strings.TrimSpace(stmt) + ";")
 			fmt.Println()
 		}
+		if len(migrations) > 0 {
+			fmt.Println("-- Idempotent migration statements (safe to run on existing databases):")
+			for _, stmt := range migrations {
+				fmt.Println(strings.TrimSpace(stmt) + ";")
+				fmt.Println()
+			}
+		}
 		return nil
 	}
 
-	// --create: open the database and execute.
+	// --create: open the database and execute DDL then migrations.
 	db, err := openSchemaDB(cfg, dialect)
 	if err != nil {
 		return err
 	}
 	defer db.Close()
 
-	fmt.Fprintf(os.Stderr, "Applying %d DDL statements to %s database…\n", len(statements), dialect)
+	total := len(statements) + len(migrations)
+	fmt.Fprintf(os.Stderr, "Applying %d DDL statements to %s database…\n", total, dialect)
 	for _, stmt := range statements {
 		if _, err := db.Exec(stmt); err != nil {
 			return fmt.Errorf("execute DDL: %w\n\nStatement:\n%s", err, strings.TrimSpace(stmt))
 		}
 	}
-	fmt.Fprintln(os.Stderr, "Schema created successfully.")
+	for _, stmt := range migrations {
+		if _, err := db.Exec(stmt); err != nil {
+			return fmt.Errorf("execute migration: %w\n\nStatement:\n%s", err, strings.TrimSpace(stmt))
+		}
+	}
+	fmt.Fprintln(os.Stderr, "Schema applied successfully.")
 	return nil
 }
 

@@ -6,9 +6,31 @@ import Editor from '@monaco-editor/react'
 import ReactMarkdown from 'react-markdown'
 import { useMonacoTheme } from '../hooks/useMonacoTheme'
 import { agentsApi, aiApi, mcpServersApi } from '../services/api'
-import type { CreateAgentInput } from '../types'
+import type { AIProvider, CreateAgentInput } from '../types'
 
 type PromptMode = 'edit' | 'preview'
+
+const providerOptions: Record<AIProvider, { label: string; defaultModel: string; help: string }> = {
+  openai: {
+    label: 'OpenAI',
+    defaultModel: 'gpt-4o',
+    help: 'OpenAI chat models such as gpt-4o and gpt-4o-mini. Requires workflow.openaiAPIKey.',
+  },
+  claude: {
+    label: 'Claude',
+    defaultModel: 'claude-sonnet-4-6',
+    help: 'Anthropic Claude models such as claude-sonnet-4-6. Requires workflow.claudeAPIKey.',
+  },
+  copilot: {
+    label: 'GitHub Copilot',
+    defaultModel: 'gpt-4o',
+    help: 'GitHub Copilot chat models via the Copilot API. Requires workflow.copilotOAuthToken.',
+  },
+}
+
+function isAIProvider(value: string): value is AIProvider {
+  return value === 'openai' || value === 'claude' || value === 'copilot'
+}
 
 export default function AgentEditorPage() {
   const { agentId } = useParams<{ agentId: string }>()
@@ -18,6 +40,7 @@ export default function AgentEditorPage() {
 
   const [name, setName] = useState('')
   const [description, setDescription] = useState('')
+  const [provider, setProvider] = useState<AIProvider>('openai')
   const [model, setModel] = useState('gpt-4o')
   const [systemPrompt, setSystemPrompt] = useState('')
   const [maxTokens, setMaxTokens] = useState('')
@@ -49,6 +72,7 @@ export default function AgentEditorPage() {
       const a = agentQuery.data
       setName(a.name)
       setDescription(a.description)
+      setProvider(isAIProvider(a.provider) ? a.provider : 'openai')
       setModel(a.model)
       setSystemPrompt(a.systemPrompt)
       setMaxTokens(a.maxTokens ? String(a.maxTokens) : '')
@@ -65,11 +89,20 @@ export default function AgentEditorPage() {
   const buildInput = (): CreateAgentInput => ({
     name: name.trim(),
     description: description.trim(),
-    model: model.trim() || 'gpt-4o',
+    provider,
+    model: model.trim() || providerOptions[provider].defaultModel,
     systemPrompt: systemPrompt.trim(),
     maxTokens: maxTokens ? parseInt(maxTokens, 10) : 0,
     temperature: temperature ? parseFloat(temperature) : 0,
   })
+
+  const handleProviderChange = (nextProvider: AIProvider) => {
+    const currentDefault = providerOptions[provider].defaultModel
+    setProvider(nextProvider)
+    if (!model.trim() || model.trim() === currentDefault) {
+      setModel(providerOptions[nextProvider].defaultModel)
+    }
+  }
 
   const createMutation = useMutation({
     mutationFn: agentsApi.create,
@@ -126,7 +159,7 @@ export default function AgentEditorPage() {
 
   const [enhanceError, setEnhanceError] = useState<string | null>(null)
   const enhanceMutation = useMutation({
-    mutationFn: () => aiApi.enhancePrompt(systemPrompt),
+    mutationFn: () => aiApi.enhancePrompt(systemPrompt, provider, model.trim() || providerOptions[provider].defaultModel),
     onSuccess: (result) => {
       setSystemPrompt(result.prompt)
       setEnhanceError(null)
@@ -212,8 +245,11 @@ export default function AgentEditorPage() {
               className="w-full rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-sm text-gray-900 outline-none transition-colors focus:border-primary-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
             />
           </div>
+          <span className="rounded-full bg-sky-100 px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-sky-700 dark:bg-sky-900/30 dark:text-sky-300">
+            {providerOptions[provider].label}
+          </span>
           <span className="rounded-full bg-emerald-100 px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300">
-            {model}
+            {model.trim() || providerOptions[provider].defaultModel}
           </span>
         </div>
       </div>
@@ -223,14 +259,27 @@ export default function AgentEditorPage() {
         {/* Left panel */}
         <div className="flex w-80 shrink-0 flex-col gap-4 overflow-y-auto border-r border-gray-200 bg-white p-5 dark:border-slate-800 dark:bg-slate-900">
           <div>
+            <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wide text-gray-500 dark:text-slate-400">Provider</label>
+            <select
+              value={provider}
+              onChange={(e) => handleProviderChange(e.target.value as AIProvider)}
+              className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-900 outline-none transition-colors focus:border-primary-500 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
+            >
+              {Object.entries(providerOptions).map(([value, option]) => (
+                <option key={value} value={value}>{option.label}</option>
+              ))}
+            </select>
+            <p className="mt-1 text-[11px] text-gray-400 dark:text-slate-500">{providerOptions[provider].help}</p>
+          </div>
+          <div>
             <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wide text-gray-500 dark:text-slate-400">Model</label>
             <input
               value={model}
-              onChange={(e) => setModel(e.target.value || 'gpt-4o')}
-              placeholder="gpt-4o"
+              onChange={(e) => setModel(e.target.value || providerOptions[provider].defaultModel)}
+              placeholder={providerOptions[provider].defaultModel}
               className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-900 outline-none transition-colors focus:border-primary-500 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
             />
-            <p className="mt-1 text-[11px] text-gray-400 dark:text-slate-500">e.g. gpt-4o, gpt-4o-mini, o1-preview</p>
+            <p className="mt-1 text-[11px] text-gray-400 dark:text-slate-500">Default: {providerOptions[provider].defaultModel}</p>
           </div>
           <div>
             <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wide text-gray-500 dark:text-slate-400">Temperature</label>
@@ -275,7 +324,7 @@ export default function AgentEditorPage() {
                 type="button"
                 onClick={() => enhanceMutation.mutate()}
                 disabled={enhanceMutation.isPending || !systemPrompt.trim()}
-                title="Rewrite this system prompt using AI"
+                title={`Rewrite this system prompt using ${providerOptions[provider].label}`}
                 className="inline-flex items-center gap-1.5 rounded-lg border border-violet-200 bg-violet-50 px-3 py-1 text-xs font-semibold text-violet-700 transition-colors hover:bg-violet-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-violet-800/50 dark:bg-violet-950/30 dark:text-violet-300 dark:hover:bg-violet-950/50"
               >
                 <Sparkles className="h-3 w-3" />

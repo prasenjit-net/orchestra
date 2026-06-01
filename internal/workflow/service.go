@@ -24,6 +24,8 @@ type Service struct {
 	dialect    Dialect
 	logger     *slog.Logger
 	cfg        config.WorkflowConfig
+	aiCfg      config.AIConfig
+	ai         *aiProviderClient
 	activities map[string]Activity
 	workerID   string
 	live       *livebus.Bus
@@ -45,7 +47,7 @@ func (s *Service) notifyWorker() {
 	}
 }
 
-func NewService(cfg config.WorkflowConfig, logger *slog.Logger, buses ...*livebus.Bus) (*Service, error) {
+func NewService(cfg config.WorkflowConfig, aiCfg config.AIConfig, logger *slog.Logger, buses ...*livebus.Bus) (*Service, error) {
 	if !cfg.Enabled {
 		return nil, nil
 	}
@@ -109,6 +111,8 @@ func NewService(cfg config.WorkflowConfig, logger *slog.Logger, buses ...*livebu
 		dialect:    dialect,
 		logger:     logger.With("component", "workflow"),
 		cfg:        cfg,
+		aiCfg:      aiCfg,
+		ai:         newAIProviderClient(aiCfg),
 		activities: make(map[string]Activity),
 		workerID:   generateID("worker"),
 		live:       live,
@@ -121,7 +125,7 @@ func NewService(cfg config.WorkflowConfig, logger *slog.Logger, buses ...*livebu
 	// Always register script activity with DB-backed lookup so saved scripts work
 	// regardless of the scriptEnabled config flag.
 	svc.activities["script"] = newScriptActivity(cfg, svc.lookupScriptSource)
-	svc.activities["agent"] = newAgentActivity(cfg, svc.lookupAgent, svc.GetAgentMCPServers)
+	svc.activities["agent"] = newAgentActivity(svc.ai, svc.lookupAgent, svc.GetAgentMCPServers)
 
 	// For PostgreSQL the schema must be created manually via `orchestra schema --create`.
 	if !dialect.IsPostgres() {

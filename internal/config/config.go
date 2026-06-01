@@ -15,6 +15,7 @@ type Config struct {
 	Server   ServerConfig   `mapstructure:"server" yaml:"server"`
 	Logging  LoggingConfig  `mapstructure:"logging" yaml:"logging"`
 	UI       UIConfig       `mapstructure:"ui" yaml:"ui"`
+	AI       AIConfig       `mapstructure:"ai" yaml:"ai"`
 	Workflow WorkflowConfig `mapstructure:"workflow" yaml:"workflow"`
 	Webhook  WebhookConfig  `mapstructure:"webhook" yaml:"webhook"`
 	Node     NodeConfig     `mapstructure:"node" yaml:"node"`
@@ -24,12 +25,39 @@ type Config struct {
 	ConfigFilePath string `mapstructure:"-" yaml:"-"`
 }
 
+// AIConfig holds credentials and defaults for all AI providers.
+// Configure at least one provider to use AI-powered agents and features.
+type AIConfig struct {
+	// HTTPProxy is an optional proxy URL used for all AI provider requests.
+	// Supports credentials: http://user:pass@proxy.example.com:8080
+	// Also configurable via APP_AI_HTTP_PROXY (or the standard HTTP_PROXY env var).
+	HTTPProxy string `mapstructure:"httpProxy" yaml:"httpProxy"`
+
+	// OpenAI
+	OpenAIAPIKey  string `mapstructure:"openaiAPIKey" yaml:"openaiAPIKey"`
+	OpenAIBaseURL string `mapstructure:"openaiBaseURL" yaml:"openaiBaseURL"`
+
+	// Anthropic Claude
+	ClaudeAPIKey     string `mapstructure:"claudeAPIKey" yaml:"claudeAPIKey"`
+	ClaudeBaseURL    string `mapstructure:"claudeBaseURL" yaml:"claudeBaseURL"`
+	ClaudeAPIVersion string `mapstructure:"claudeAPIVersion" yaml:"claudeAPIVersion"`
+
+	// GitHub Copilot
+	CopilotOAuthToken          string `mapstructure:"copilotOAuthToken" yaml:"copilotOAuthToken"`
+	CopilotBaseURL             string `mapstructure:"copilotBaseURL" yaml:"copilotBaseURL"`
+	CopilotTokenURL            string `mapstructure:"copilotTokenURL" yaml:"copilotTokenURL"`
+	CopilotEditorVersion       string `mapstructure:"copilotEditorVersion" yaml:"copilotEditorVersion"`
+	CopilotEditorPluginVersion string `mapstructure:"copilotEditorPluginVersion" yaml:"copilotEditorPluginVersion"`
+	CopilotIntegrationID       string `mapstructure:"copilotIntegrationID" yaml:"copilotIntegrationID"`
+	CopilotOpenAIIntent        string `mapstructure:"copilotOpenAIIntent" yaml:"copilotOpenAIIntent"`
+}
+
 type NodeConfig struct {
-	ID                 string          `mapstructure:"id" yaml:"id"`
-	Controller         bool            `mapstructure:"controller" yaml:"controller"`
-	Worker             bool            `mapstructure:"worker" yaml:"worker"`
-	MaxConcurrentTasks int             `mapstructure:"maxConcurrentTasks" yaml:"maxConcurrentTasks"`
-	HealthAddr         string          `mapstructure:"healthAddr" yaml:"healthAddr"`
+	ID                 string           `mapstructure:"id" yaml:"id"`
+	Controller         bool             `mapstructure:"controller" yaml:"controller"`
+	Worker             bool             `mapstructure:"worker" yaml:"worker"`
+	MaxConcurrentTasks int              `mapstructure:"maxConcurrentTasks" yaml:"maxConcurrentTasks"`
+	HealthAddr         string           `mapstructure:"healthAddr" yaml:"healthAddr"`
 	Health             NodeHealthConfig `mapstructure:"health" yaml:"health"`
 }
 
@@ -80,7 +108,6 @@ type WorkflowConfig struct {
 	ScriptMaxSourceBytes    int           `mapstructure:"scriptMaxSourceBytes" yaml:"scriptMaxSourceBytes"`
 	ScriptMaxOutputBytes    int           `mapstructure:"scriptMaxOutputBytes" yaml:"scriptMaxOutputBytes"`
 	ScriptMaxExecutionSteps uint64        `mapstructure:"scriptMaxExecutionSteps" yaml:"scriptMaxExecutionSteps"`
-	OpenAIAPIKey            string        `mapstructure:"openaiAPIKey" yaml:"openaiAPIKey"`
 }
 
 func Default() Config {
@@ -105,6 +132,13 @@ func Default() Config {
 		},
 		UI: UIConfig{
 			DevProxyURL: "http://localhost:5173",
+		},
+		AI: AIConfig{
+			ClaudeAPIVersion:           "2023-06-01",
+			CopilotEditorVersion:       "vscode/1.96.0",
+			CopilotEditorPluginVersion: "copilot/1.155.0",
+			CopilotIntegrationID:       "vscode-chat",
+			CopilotOpenAIIntent:        "conversation-panel",
 		},
 		Workflow: WorkflowConfig{
 			Enabled:                 true,
@@ -172,6 +206,11 @@ func SetDefaults(v *viper.Viper) {
 	v.SetDefault("workflow.scriptMaxSourceBytes", defaults.Workflow.ScriptMaxSourceBytes)
 	v.SetDefault("workflow.scriptMaxOutputBytes", defaults.Workflow.ScriptMaxOutputBytes)
 	v.SetDefault("workflow.scriptMaxExecutionSteps", defaults.Workflow.ScriptMaxExecutionSteps)
+	v.SetDefault("ai.claudeAPIVersion", defaults.AI.ClaudeAPIVersion)
+	v.SetDefault("ai.copilotEditorVersion", defaults.AI.CopilotEditorVersion)
+	v.SetDefault("ai.copilotEditorPluginVersion", defaults.AI.CopilotEditorPluginVersion)
+	v.SetDefault("ai.copilotIntegrationID", defaults.AI.CopilotIntegrationID)
+	v.SetDefault("ai.copilotOpenAIIntent", defaults.AI.CopilotOpenAIIntent)
 	v.SetDefault("webhook.enabled", defaults.Webhook.Enabled)
 	v.SetDefault("webhook.callbackAllowlist", defaults.Webhook.CallbackAllowlist)
 	v.SetDefault("node.id", defaults.Node.ID)
@@ -181,6 +220,28 @@ func SetDefaults(v *viper.Viper) {
 	v.SetDefault("node.healthAddr", defaults.Node.HealthAddr)
 	v.SetDefault("node.health.heartbeatInterval", defaults.Node.Health.HeartbeatInterval)
 	v.SetDefault("node.health.offlineThreshold", defaults.Node.Health.OfflineThreshold)
+
+	// Bind user-friendly env var names for fields where Viper's automatic
+	// camelCase→env mapping produces hard-to-type names.  Each BindEnv call
+	// below also keeps the auto-mapped name working, so users can use either.
+	_ = v.BindEnv("workflow.databaseURL", "APP_WORKFLOW_DATABASE_URL", "APP_WORKFLOW_DATABASEURL")
+	_ = v.BindEnv("ai.httpProxy", "APP_AI_HTTP_PROXY")
+	_ = v.BindEnv("ai.openaiAPIKey", "APP_AI_OPENAI_API_KEY")
+	_ = v.BindEnv("ai.openaiBaseURL", "APP_AI_OPENAI_BASE_URL")
+	_ = v.BindEnv("ai.claudeAPIKey", "APP_AI_CLAUDE_API_KEY")
+	_ = v.BindEnv("ai.claudeBaseURL", "APP_AI_CLAUDE_BASE_URL")
+	_ = v.BindEnv("ai.claudeAPIVersion", "APP_AI_CLAUDE_API_VERSION")
+	_ = v.BindEnv("ai.copilotOAuthToken", "APP_AI_COPILOT_OAUTH_TOKEN")
+	_ = v.BindEnv("ai.copilotBaseURL", "APP_AI_COPILOT_BASE_URL")
+	_ = v.BindEnv("ai.copilotTokenURL", "APP_AI_COPILOT_TOKEN_URL")
+	_ = v.BindEnv("ai.copilotEditorVersion", "APP_AI_COPILOT_EDITOR_VERSION")
+	_ = v.BindEnv("ai.copilotEditorPluginVersion", "APP_AI_COPILOT_EDITOR_PLUGIN_VERSION")
+	_ = v.BindEnv("ai.copilotIntegrationID", "APP_AI_COPILOT_INTEGRATION_ID")
+	_ = v.BindEnv("ai.copilotOpenAIIntent", "APP_AI_COPILOT_OPENAI_INTENT")
+	// Legacy workflow.* bindings kept for backwards compatibility.
+	_ = v.BindEnv("ai.openaiAPIKey", "APP_WORKFLOW_OPENAI_API_KEY")
+	_ = v.BindEnv("ai.claudeAPIKey", "APP_WORKFLOW_CLAUDE_API_KEY")
+	_ = v.BindEnv("ai.copilotOAuthToken", "APP_WORKFLOW_COPILOT_OAUTH_TOKEN")
 }
 
 func Load(v *viper.Viper) (Config, error) {
@@ -250,6 +311,36 @@ format = "text"
 [ui]
 devProxyURL = "http://localhost:5173"
 
+# ---------------------------------------------------------------------------
+# AI providers — configure at least one to use AI agents and prompt features.
+# When an agent has no explicit provider set, Orchestra auto-selects the first
+# configured provider in preference order: openai → copilot → claude.
+# ---------------------------------------------------------------------------
+[ai]
+
+# Optional HTTP proxy for all AI provider requests.
+# Supports credentials: http://user:pass@proxy.example.com:8080
+# httpProxy = ""                              # env: APP_AI_HTTP_PROXY
+
+# --- OpenAI ---
+# openaiAPIKey  = ""                          # env: APP_AI_OPENAI_API_KEY
+# openaiBaseURL = ""                          # env: APP_AI_OPENAI_BASE_URL  (optional: Azure OpenAI / proxy)
+
+# --- Anthropic Claude ---
+# claudeAPIKey     = ""                       # env: APP_AI_CLAUDE_API_KEY
+# claudeBaseURL    = ""                       # env: APP_AI_CLAUDE_BASE_URL  (optional: proxy)
+# claudeAPIVersion = "2023-06-01"             # env: APP_AI_CLAUDE_API_VERSION
+
+# --- GitHub Copilot ---
+# copilotOAuthToken = ""                      # env: APP_AI_COPILOT_OAUTH_TOKEN  (GitHub OAuth token: gho_...)
+# copilotBaseURL    = ""                      # env: APP_AI_COPILOT_BASE_URL      (optional: override completions URL)
+# copilotTokenURL   = ""                      # env: APP_AI_COPILOT_TOKEN_URL     (optional: override token exchange URL)
+# The fields below have sensible defaults; only override if needed.
+# copilotEditorVersion       = "vscode/1.96.0"     # env: APP_AI_COPILOT_EDITOR_VERSION
+# copilotEditorPluginVersion = "copilot/1.155.0"   # env: APP_AI_COPILOT_EDITOR_PLUGIN_VERSION
+# copilotIntegrationID       = "vscode-chat"        # env: APP_AI_COPILOT_INTEGRATION_ID
+# copilotOpenAIIntent        = "conversation-panel" # env: APP_AI_COPILOT_OPENAI_INTENT
+
 [workflow]
 enabled                 = true
 databasePath            = "data/workflows.db"
@@ -260,8 +351,6 @@ scriptTimeout           = "250ms"
 scriptMaxSourceBytes    = 16384
 scriptMaxOutputBytes    = 262144
 scriptMaxExecutionSteps = 25000
-# openaiAPIKey = ""   # set via APP_WORKFLOW_OPENAI_API_KEY env var or here
-                   # required for the "Enhance with AI" feature in the agent editor
 
 [webhook]
 enabled = true
@@ -289,5 +378,8 @@ APP_WORKFLOW_SCRIPT_TIMEOUT=250ms
 APP_WORKFLOW_SCRIPT_MAX_SOURCE_BYTES=16384
 APP_WORKFLOW_SCRIPT_MAX_OUTPUT_BYTES=262144
 APP_WORKFLOW_SCRIPT_MAX_EXECUTION_STEPS=25000
-APP_WORKFLOW_OPENAI_API_KEY=
+APP_AI_OPENAI_API_KEY=
+APP_AI_CLAUDE_API_KEY=
+APP_AI_COPILOT_OAUTH_TOKEN=
+APP_WORKFLOW_DATABASE_URL=
 `
