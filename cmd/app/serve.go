@@ -64,7 +64,7 @@ func runServe(cmd *cobra.Command, args []string) error {
 	live := livebus.New()
 	defer live.Close()
 
-	workflowService, err := workflow.NewService(cfg.Workflow, logger, live)
+	workflowService, err := workflow.NewService(cfg.Workflow, cfg.AI, logger, live)
 	if err != nil {
 		return fmt.Errorf("create workflow service: %w", err)
 	}

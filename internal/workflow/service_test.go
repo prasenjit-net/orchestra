@@ -20,7 +20,7 @@ import (
 func TestWorkflowCompletesBuiltInActivities(t *testing.T) {
 	cfg := config.Default()
 	cfg.Workflow.DatabasePath = filepath.Join(t.TempDir(), "workflows.db")
-	service, err := NewService(cfg.Workflow, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	service, err := NewService(cfg.Workflow, cfg.AI, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatalf("NewService returned error: %v", err)
 	}
@@ -85,7 +85,7 @@ func TestWorkflowCompletesBuiltInActivities(t *testing.T) {
 func TestWorkflowBranchesUsingTransitionConditions(t *testing.T) {
 	cfg := config.Default()
 	cfg.Workflow.DatabasePath = filepath.Join(t.TempDir(), "workflows.db")
-	service, err := NewService(cfg.Workflow, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	service, err := NewService(cfg.Workflow, cfg.AI, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatalf("NewService returned error: %v", err)
 	}
@@ -188,7 +188,7 @@ func TestWorkflowBranchesUsingTransitionConditions(t *testing.T) {
 func TestWorkflowFailsAfterFailActivity(t *testing.T) {
 	cfg := config.Default()
 	cfg.Workflow.DatabasePath = filepath.Join(t.TempDir(), "workflows.db")
-	service, err := NewService(cfg.Workflow, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	service, err := NewService(cfg.Workflow, cfg.AI, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatalf("NewService returned error: %v", err)
 	}
@@ -240,7 +240,7 @@ func TestWorkflowFailsAfterFailActivity(t *testing.T) {
 func TestDefinitionRejectsUnknownTransitionTarget(t *testing.T) {
 	cfg := config.Default()
 	cfg.Workflow.DatabasePath = filepath.Join(t.TempDir(), "workflows.db")
-	service, err := NewService(cfg.Workflow, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	service, err := NewService(cfg.Workflow, cfg.AI, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatalf("NewService returned error: %v", err)
 	}
@@ -297,7 +297,7 @@ func TestAgentProviderMigrationAndDefaults(t *testing.T) {
 
 	cfg := config.Default()
 	cfg.Workflow.DatabasePath = dbPath
-	service, err := NewService(cfg.Workflow, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	service, err := NewService(cfg.Workflow, cfg.AI, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatalf("NewService returned error: %v", err)
 	}
@@ -329,7 +329,7 @@ func TestAgentProviderMigrationAndDefaults(t *testing.T) {
 func TestPauseAndResumeTask(t *testing.T) {
 	cfg := config.Default()
 	cfg.Workflow.DatabasePath = filepath.Join(t.TempDir(), "workflows.db")
-	service, err := NewService(cfg.Workflow, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	service, err := NewService(cfg.Workflow, cfg.AI, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatalf("NewService returned error: %v", err)
 	}
@@ -387,7 +387,7 @@ func TestPauseAndResumeTask(t *testing.T) {
 func TestRetryFailedTask(t *testing.T) {
 	cfg := config.Default()
 	cfg.Workflow.DatabasePath = filepath.Join(t.TempDir(), "workflows.db")
-	service, err := NewService(cfg.Workflow, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	service, err := NewService(cfg.Workflow, cfg.AI, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatalf("NewService returned error: %v", err)
 	}
@@ -442,7 +442,7 @@ func TestRetryFailedTask(t *testing.T) {
 func TestDelayActivityWaitsDurably(t *testing.T) {
 	cfg := config.Default()
 	cfg.Workflow.DatabasePath = filepath.Join(t.TempDir(), "workflows.db")
-	service, err := NewService(cfg.Workflow, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	service, err := NewService(cfg.Workflow, cfg.AI, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatalf("NewService returned error: %v", err)
 	}
@@ -565,7 +565,7 @@ func TestHTTPRequestActivitySucceeds(t *testing.T) {
 
 	cfg := config.Default()
 	cfg.Workflow.DatabasePath = filepath.Join(t.TempDir(), "workflows.db")
-	service, err := NewService(cfg.Workflow, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	service, err := NewService(cfg.Workflow, cfg.AI, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatalf("NewService returned error: %v", err)
 	}
@@ -638,7 +638,7 @@ func TestHTTPRequestActivityFailsOnUnexpectedStatus(t *testing.T) {
 
 	cfg := config.Default()
 	cfg.Workflow.DatabasePath = filepath.Join(t.TempDir(), "workflows.db")
-	service, err := NewService(cfg.Workflow, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	service, err := NewService(cfg.Workflow, cfg.AI, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatalf("NewService returned error: %v", err)
 	}
@@ -686,7 +686,7 @@ func TestScriptActivityExecutesStarlark(t *testing.T) {
 	cfg := config.Default()
 	cfg.Workflow.DatabasePath = filepath.Join(t.TempDir(), "workflows.db")
 	cfg.Workflow.ScriptEnabled = true
-	service, err := NewService(cfg.Workflow, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	service, err := NewService(cfg.Workflow, cfg.AI, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatalf("NewService returned error: %v", err)
 	}
@@ -754,7 +754,7 @@ func TestScriptActivityHonorsExecutionStepLimit(t *testing.T) {
 	cfg.Workflow.DatabasePath = filepath.Join(t.TempDir(), "workflows.db")
 	cfg.Workflow.ScriptEnabled = true
 	cfg.Workflow.ScriptMaxExecutionSteps = 100
-	service, err := NewService(cfg.Workflow, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	service, err := NewService(cfg.Workflow, cfg.AI, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatalf("NewService returned error: %v", err)
 	}
@@ -804,7 +804,7 @@ func TestScriptActivityHonorsExecutionStepLimit(t *testing.T) {
 func TestDefinitionVersioningPublishesNewActiveVersion(t *testing.T) {
 	cfg := config.Default()
 	cfg.Workflow.DatabasePath = filepath.Join(t.TempDir(), "workflows.db")
-	service, err := NewService(cfg.Workflow, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	service, err := NewService(cfg.Workflow, cfg.AI, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatalf("NewService returned error: %v", err)
 	}
@@ -883,7 +883,7 @@ func TestDefinitionVersioningPublishesNewActiveVersion(t *testing.T) {
 func TestDefinitionPersistsStepLayout(t *testing.T) {
 	cfg := config.Default()
 	cfg.Workflow.DatabasePath = filepath.Join(t.TempDir(), "workflows.db")
-	service, err := NewService(cfg.Workflow, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	service, err := NewService(cfg.Workflow, cfg.AI, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatalf("NewService returned error: %v", err)
 	}
@@ -923,7 +923,7 @@ func TestDefinitionPersistsStepLayout(t *testing.T) {
 func TestWorkflowCarriesContextBetweenSteps(t *testing.T) {
 	cfg := config.Default()
 	cfg.Workflow.DatabasePath = filepath.Join(t.TempDir(), "workflows.db")
-	service, err := NewService(cfg.Workflow, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	service, err := NewService(cfg.Workflow, cfg.AI, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatalf("NewService returned error: %v", err)
 	}
@@ -983,7 +983,7 @@ func TestWorkflowCarriesContextBetweenSteps(t *testing.T) {
 func TestWorkflowSignalUpdatesContext(t *testing.T) {
 	cfg := config.Default()
 	cfg.Workflow.DatabasePath = filepath.Join(t.TempDir(), "workflows.db")
-	service, err := NewService(cfg.Workflow, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	service, err := NewService(cfg.Workflow, cfg.AI, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatalf("NewService returned error: %v", err)
 	}
@@ -1036,7 +1036,7 @@ func TestWorkflowSignalUpdatesContext(t *testing.T) {
 func TestSetContextActivityUpdatesWorkflowContext(t *testing.T) {
 	cfg := config.Default()
 	cfg.Workflow.DatabasePath = filepath.Join(t.TempDir(), "workflows.db")
-	service, err := NewService(cfg.Workflow, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	service, err := NewService(cfg.Workflow, cfg.AI, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatalf("NewService returned error: %v", err)
 	}
@@ -1089,7 +1089,7 @@ func TestSetContextActivityUpdatesWorkflowContext(t *testing.T) {
 func TestWaitSignalActivityCompletesAfterSignal(t *testing.T) {
 	cfg := config.Default()
 	cfg.Workflow.DatabasePath = filepath.Join(t.TempDir(), "workflows.db")
-	service, err := NewService(cfg.Workflow, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	service, err := NewService(cfg.Workflow, cfg.AI, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatalf("NewService returned error: %v", err)
 	}
@@ -1165,7 +1165,7 @@ func TestWaitSignalActivityCompletesAfterSignal(t *testing.T) {
 func TestDataActivitiesTransformRenderBase64HashAndPatch(t *testing.T) {
 	cfg := config.Default()
 	cfg.Workflow.DatabasePath = filepath.Join(t.TempDir(), "workflows.db")
-	service, err := NewService(cfg.Workflow, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	service, err := NewService(cfg.Workflow, cfg.AI, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatalf("NewService returned error: %v", err)
 	}
@@ -1220,7 +1220,7 @@ func TestDataActivitiesTransformRenderBase64HashAndPatch(t *testing.T) {
 func TestCancelWorkflowCancelsOpenTasks(t *testing.T) {
 	cfg := config.Default()
 	cfg.Workflow.DatabasePath = filepath.Join(t.TempDir(), "workflows.db")
-	service, err := NewService(cfg.Workflow, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	service, err := NewService(cfg.Workflow, cfg.AI, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatalf("NewService returned error: %v", err)
 	}
@@ -1265,7 +1265,7 @@ func TestCancelWorkflowCancelsOpenTasks(t *testing.T) {
 func TestLiveEventsEmitOnWorkflowStart(t *testing.T) {
 	cfg := config.Default()
 	cfg.Workflow.DatabasePath = filepath.Join(t.TempDir(), "workflows.db")
-	service, err := NewService(cfg.Workflow, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	service, err := NewService(cfg.Workflow, cfg.AI, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatalf("NewService returned error: %v", err)
 	}

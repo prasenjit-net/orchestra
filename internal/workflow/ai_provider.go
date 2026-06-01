@@ -80,7 +80,7 @@ type aiChatResponse struct {
 }
 
 type aiProviderClient struct {
-	cfg        config.WorkflowConfig
+	cfg        config.AIConfig
 	httpClient *http.Client
 
 	mu                 sync.Mutex
@@ -88,7 +88,7 @@ type aiProviderClient struct {
 	copilotTokenExpiry time.Time
 }
 
-func newAIProviderClient(cfg config.WorkflowConfig) *aiProviderClient {
+func newAIProviderClient(cfg config.AIConfig) *aiProviderClient {
 	return &aiProviderClient{
 		cfg:        cfg,
 		httpClient: &http.Client{Timeout: defaultAIRequestTimeout},
@@ -118,7 +118,7 @@ func normalizeAIProvider(provider string) (string, error) {
 // preference order: openai → copilot → claude.  If no provider has credentials
 // configured an error is returned so callers get a clear diagnostic instead of
 // a silent fallback to a provider that will also fail.
-func resolveAIProvider(cfg config.WorkflowConfig, requested string) (string, error) {
+func resolveAIProvider(cfg config.AIConfig, requested string) (string, error) {
 	p := strings.TrimSpace(strings.ToLower(requested))
 	if p != "" {
 		switch p {
@@ -138,7 +138,7 @@ func resolveAIProvider(cfg config.WorkflowConfig, requested string) (string, err
 	if strings.TrimSpace(cfg.ClaudeAPIKey) != "" {
 		return aiProviderClaude, nil
 	}
-	return "", fmt.Errorf("no AI provider configured; set workflow.openaiAPIKey, workflow.claudeAPIKey, or workflow.copilotOAuthToken")
+	return "", fmt.Errorf("no AI provider configured; set ai.openaiAPIKey, ai.claudeAPIKey, or ai.copilotOAuthToken")
 }
 
 func defaultAIModel(provider string) string {
@@ -182,17 +182,17 @@ func (c *aiProviderClient) Complete(ctx context.Context, req aiChatRequest) (aiC
 	switch provider {
 	case aiProviderOpenAI:
 		if strings.TrimSpace(c.cfg.OpenAIAPIKey) == "" {
-			return aiChatResponse{}, fmt.Errorf("OpenAI API key not configured (set workflow.openaiAPIKey or APP_WORKFLOW_OPENAI_API_KEY)")
+			return aiChatResponse{}, fmt.Errorf("OpenAI API key not configured (set ai.openaiAPIKey or APP_AI_OPENAI_API_KEY)")
 		}
 		return c.callOpenAICompatible(ctx, c.openAIEndpoint(), "Bearer "+c.cfg.OpenAIAPIKey, nil, req)
 	case aiProviderClaude:
 		if strings.TrimSpace(c.cfg.ClaudeAPIKey) == "" {
-			return aiChatResponse{}, fmt.Errorf("Claude API key not configured (set workflow.claudeAPIKey or APP_WORKFLOW_CLAUDE_API_KEY)")
+			return aiChatResponse{}, fmt.Errorf("Claude API key not configured (set ai.claudeAPIKey or APP_AI_CLAUDE_API_KEY)")
 		}
 		return c.callClaude(ctx, req)
 	case aiProviderCopilot:
 		if strings.TrimSpace(c.cfg.CopilotOAuthToken) == "" {
-			return aiChatResponse{}, fmt.Errorf("GitHub Copilot OAuth token not configured (set workflow.copilotOAuthToken or APP_WORKFLOW_COPILOT_OAUTH_TOKEN)")
+			return aiChatResponse{}, fmt.Errorf("GitHub Copilot OAuth token not configured (set ai.copilotOAuthToken or APP_AI_COPILOT_OAUTH_TOKEN)")
 		}
 		token, err := c.copilotToken(ctx)
 		if err != nil {

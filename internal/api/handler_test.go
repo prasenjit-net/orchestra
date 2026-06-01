@@ -37,7 +37,7 @@ func TestHealthEndpoint(t *testing.T) {
 func TestWorkflowActivitiesEndpoint(t *testing.T) {
 	cfg := config.Default()
 	cfg.Workflow.DatabasePath = filepath.Join(t.TempDir(), "workflows.db")
-	service, err := workflow.NewService(cfg.Workflow, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	service, err := workflow.NewService(cfg.Workflow, cfg.AI, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatalf("NewService returned error: %v", err)
 	}
@@ -61,7 +61,7 @@ func TestWorkflowActivitiesEndpointIncludesScriptWhenEnabled(t *testing.T) {
 	cfg := config.Default()
 	cfg.Workflow.DatabasePath = filepath.Join(t.TempDir(), "workflows.db")
 	cfg.Workflow.ScriptEnabled = true
-	service, err := workflow.NewService(cfg.Workflow, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	service, err := workflow.NewService(cfg.Workflow, cfg.AI, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatalf("NewService returned error: %v", err)
 	}
@@ -84,7 +84,7 @@ func TestWorkflowActivitiesEndpointIncludesScriptWhenEnabled(t *testing.T) {
 func TestCreateWorkflowDefinitionEndpoint(t *testing.T) {
 	cfg := config.Default()
 	cfg.Workflow.DatabasePath = filepath.Join(t.TempDir(), "workflows.db")
-	service, err := workflow.NewService(cfg.Workflow, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	service, err := workflow.NewService(cfg.Workflow, cfg.AI, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatalf("NewService returned error: %v", err)
 	}
@@ -126,7 +126,7 @@ func TestCreateWorkflowDefinitionEndpoint(t *testing.T) {
 func TestListWorkflowDefinitionsEndpoint(t *testing.T) {
 	cfg := config.Default()
 	cfg.Workflow.DatabasePath = filepath.Join(t.TempDir(), "workflows.db")
-	service, err := workflow.NewService(cfg.Workflow, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	service, err := workflow.NewService(cfg.Workflow, cfg.AI, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatalf("NewService returned error: %v", err)
 	}
@@ -162,7 +162,7 @@ func TestListWorkflowDefinitionsEndpoint(t *testing.T) {
 func TestRetryWorkflowTaskEndpoint(t *testing.T) {
 	cfg := config.Default()
 	cfg.Workflow.DatabasePath = filepath.Join(t.TempDir(), "workflows.db")
-	service, err := workflow.NewService(cfg.Workflow, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	service, err := workflow.NewService(cfg.Workflow, cfg.AI, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatalf("NewService returned error: %v", err)
 	}
@@ -217,7 +217,7 @@ func TestRetryWorkflowTaskEndpoint(t *testing.T) {
 func TestWorkflowOperationsEndpoint(t *testing.T) {
 	cfg := config.Default()
 	cfg.Workflow.DatabasePath = filepath.Join(t.TempDir(), "workflows.db")
-	service, err := workflow.NewService(cfg.Workflow, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	service, err := workflow.NewService(cfg.Workflow, cfg.AI, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatalf("NewService returned error: %v", err)
 	}

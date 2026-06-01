@@ -19,18 +19,46 @@ format = "text"
 [ui]
 devProxyURL = "http://localhost:5173"
 
+# ---------------------------------------------------------------------------
+# AI providers — configure at least one to use AI-powered agents and the
+# "Enhance with AI" feature in the agent editor.
+#
+# When an agent has no explicit provider set, Orchestra auto-selects the first
+# configured provider in preference order: openai → copilot → claude.
+# ---------------------------------------------------------------------------
+[ai]
+
+# --- OpenAI ---
+# openaiAPIKey = ""    # set via APP_AI_OPENAI_API_KEY env var or here
+# openaiBaseURL = ""   # optional: override for proxies / Azure OpenAI
+
+# --- Anthropic Claude ---
+# claudeAPIKey = ""    # set via APP_AI_CLAUDE_API_KEY env var or here
+# claudeBaseURL = ""   # optional: override for proxies
+
+# --- GitHub Copilot ---
+# copilotOAuthToken = ""  # GitHub OAuth token (gho_...) — or APP_AI_COPILOT_OAUTH_TOKEN
+# copilotBaseURL = ""     # optional: override completions base URL
+# copilotTokenURL = ""    # optional: override token exchange URL
+# The fields below have sensible defaults; only override if needed.
+# copilotEditorVersion = "vscode/1.96.0"
+# copilotEditorPluginVersion = "copilot/1.155.0"
+# copilotIntegrationID = "vscode-chat"
+# copilotOpenAIIntent = "conversation-panel"
+
 [workflow]
 enabled                 = true
 # databaseDriver = "sqlite"      # "sqlite" (default) | "postgres"
 databasePath            = "data/workflows.db"    # used when databaseDriver = "sqlite"
 # databaseURL = "postgres://user:pass@localhost:5432/orchestra?sslmode=disable"
 #                                # used when databaseDriver = "postgres"
-#                                # also settable via APP_WORKFLOW_DATABASEURL env var
+#                                # also settable via APP_WORKFLOW_DATABASE_URL env var
 #
 # For PostgreSQL, tables are NOT created automatically.
 # Run `orchestra schema --driver postgres --create` once after provisioning the database,
 # or pipe the DDL to psql:
 #   orchestra schema --driver postgres | psql "$DATABASE_URL"
+# The --create flag is idempotent (ADD COLUMN IF NOT EXISTS) and safe to re-run.
 pollInterval            = "1s"
 leaseDuration           = "30s"
 scriptEnabled           = false
@@ -38,14 +66,6 @@ scriptTimeout           = "250ms"
 scriptMaxSourceBytes    = 16384
 scriptMaxOutputBytes    = 262144
 scriptMaxExecutionSteps = 25000
-# openaiAPIKey = ""   # set via APP_WORKFLOW_OPENAI_API_KEY env var or here
-# claudeAPIKey = ""   # set via APP_WORKFLOW_CLAUDE_API_KEY env var or here
-# copilotOAuthToken = ""   # set via APP_WORKFLOW_COPILOT_OAUTH_TOKEN env var or here
-# copilotEditorVersion = "vscode/1.96.0"
-# copilotEditorPluginVersion = "copilot/1.155.0"
-# copilotIntegrationID = "vscode-chat"
-# copilotOpenAIIntent = "conversation-panel"
-                      # required for provider-backed agents and prompt enhancement
 
 [webhook]
 enabled = true

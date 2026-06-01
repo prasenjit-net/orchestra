@@ -24,6 +24,7 @@ type Service struct {
 	dialect    Dialect
 	logger     *slog.Logger
 	cfg        config.WorkflowConfig
+	aiCfg      config.AIConfig
 	ai         *aiProviderClient
 	activities map[string]Activity
 	workerID   string
@@ -46,7 +47,7 @@ func (s *Service) notifyWorker() {
 	}
 }
 
-func NewService(cfg config.WorkflowConfig, logger *slog.Logger, buses ...*livebus.Bus) (*Service, error) {
+func NewService(cfg config.WorkflowConfig, aiCfg config.AIConfig, logger *slog.Logger, buses ...*livebus.Bus) (*Service, error) {
 	if !cfg.Enabled {
 		return nil, nil
 	}
@@ -110,7 +111,8 @@ func NewService(cfg config.WorkflowConfig, logger *slog.Logger, buses ...*livebu
 		dialect:    dialect,
 		logger:     logger.With("component", "workflow"),
 		cfg:        cfg,
-		ai:         newAIProviderClient(cfg),
+		aiCfg:      aiCfg,
+		ai:         newAIProviderClient(aiCfg),
 		activities: make(map[string]Activity),
 		workerID:   generateID("worker"),
 		live:       live,

@@ -66,7 +66,7 @@ func TestCopilotTokenCaching(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := newAIProviderClient(config.WorkflowConfig{
+	client := newAIProviderClient(config.AIConfig{
 		CopilotOAuthToken: "gho_test",
 		CopilotBaseURL:    server.URL,
 		CopilotTokenURL:   server.URL + "/copilot_internal/v2/token",
@@ -112,9 +112,9 @@ func TestEnhancePromptUsesSelectedProvider(t *testing.T) {
 
 	cfg := config.Default()
 	cfg.Workflow.DatabasePath = filepath.Join(t.TempDir(), "workflows.db")
-	cfg.Workflow.ClaudeAPIKey = "test"
-	cfg.Workflow.ClaudeBaseURL = server.URL
-	service, err := NewService(cfg.Workflow, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	cfg.AI.ClaudeAPIKey = "test"
+	cfg.AI.ClaudeBaseURL = server.URL
+	service, err := NewService(cfg.Workflow, cfg.AI, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatalf("NewService returned error: %v", err)
 	}
@@ -132,62 +132,62 @@ func TestEnhancePromptUsesSelectedProvider(t *testing.T) {
 func TestResolveAIProvider(t *testing.T) {
 tests := []struct {
 name      string
-cfg       config.WorkflowConfig
+cfg       config.AIConfig
 requested string
 want      string
 wantErr   bool
 }{
 {
 name:      "explicit openai",
-cfg:       config.WorkflowConfig{OpenAIAPIKey: "sk-test"},
+cfg:       config.AIConfig{OpenAIAPIKey: "sk-test"},
 requested: "openai",
 want:      aiProviderOpenAI,
 },
 {
 name:      "explicit claude",
-cfg:       config.WorkflowConfig{ClaudeAPIKey: "key"},
+cfg:       config.AIConfig{ClaudeAPIKey: "key"},
 requested: "claude",
 want:      aiProviderClaude,
 },
 {
 name:      "explicit copilot",
-cfg:       config.WorkflowConfig{CopilotOAuthToken: "gho_test"},
+cfg:       config.AIConfig{CopilotOAuthToken: "gho_test"},
 requested: "copilot",
 want:      aiProviderCopilot,
 },
 {
 name:      "explicit unknown",
-cfg:       config.WorkflowConfig{OpenAIAPIKey: "sk-test"},
+cfg:       config.AIConfig{OpenAIAPIKey: "sk-test"},
 requested: "anthropic",
 wantErr:   true,
 },
 {
 name:      "auto-select openai when all configured",
-cfg:       config.WorkflowConfig{OpenAIAPIKey: "sk", ClaudeAPIKey: "claude", CopilotOAuthToken: "gho"},
+cfg:       config.AIConfig{OpenAIAPIKey: "sk", ClaudeAPIKey: "claude", CopilotOAuthToken: "gho"},
 requested: "",
 want:      aiProviderOpenAI,
 },
 {
 name:      "auto-select copilot when openai missing",
-cfg:       config.WorkflowConfig{CopilotOAuthToken: "gho", ClaudeAPIKey: "claude"},
+cfg:       config.AIConfig{CopilotOAuthToken: "gho", ClaudeAPIKey: "claude"},
 requested: "",
 want:      aiProviderCopilot,
 },
 {
 name:      "auto-select claude when only claude configured",
-cfg:       config.WorkflowConfig{ClaudeAPIKey: "claude"},
+cfg:       config.AIConfig{ClaudeAPIKey: "claude"},
 requested: "",
 want:      aiProviderClaude,
 },
 {
 name:      "no provider configured returns error",
-cfg:       config.WorkflowConfig{},
+cfg:       config.AIConfig{},
 requested: "",
 wantErr:   true,
 },
 {
 name:      "case-insensitive explicit",
-cfg:       config.WorkflowConfig{ClaudeAPIKey: "key"},
+cfg:       config.AIConfig{ClaudeAPIKey: "key"},
 requested: "Claude",
 want:      aiProviderClaude,
 },
