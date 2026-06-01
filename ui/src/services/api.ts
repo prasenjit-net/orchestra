@@ -73,12 +73,12 @@ export const clusterApi = {
 }
 
 export const aiApi = {
-  enhancePrompt: async (prompt: string) =>
+  enhancePrompt: async (prompt: string, provider: string, model: string) =>
     handleResponse<{ prompt: string }>(
       await fetch(buildApiUrl('/ai/enhance-prompt'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prompt }),
+        body: JSON.stringify({ prompt, provider, model }),
       }),
     ),
 }

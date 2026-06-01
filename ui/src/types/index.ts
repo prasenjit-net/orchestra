@@ -253,10 +253,13 @@ export interface ScriptsResponse {
   scripts: Script[]
 }
 
+export type AIProvider = 'openai' | 'claude' | 'copilot'
+
 export interface Agent {
   id: string
   name: string
   description: string
+  provider: AIProvider
   model: string
   systemPrompt: string
   maxTokens?: number
@@ -269,6 +272,7 @@ export interface Agent {
 export interface CreateAgentInput {
   name: string
   description: string
+  provider: AIProvider
   model: string
   systemPrompt: string
   maxTokens?: number

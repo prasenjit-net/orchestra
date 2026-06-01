@@ -25,11 +25,11 @@ type Config struct {
 }
 
 type NodeConfig struct {
-	ID                 string          `mapstructure:"id" yaml:"id"`
-	Controller         bool            `mapstructure:"controller" yaml:"controller"`
-	Worker             bool            `mapstructure:"worker" yaml:"worker"`
-	MaxConcurrentTasks int             `mapstructure:"maxConcurrentTasks" yaml:"maxConcurrentTasks"`
-	HealthAddr         string          `mapstructure:"healthAddr" yaml:"healthAddr"`
+	ID                 string           `mapstructure:"id" yaml:"id"`
+	Controller         bool             `mapstructure:"controller" yaml:"controller"`
+	Worker             bool             `mapstructure:"worker" yaml:"worker"`
+	MaxConcurrentTasks int              `mapstructure:"maxConcurrentTasks" yaml:"maxConcurrentTasks"`
+	HealthAddr         string           `mapstructure:"healthAddr" yaml:"healthAddr"`
 	Health             NodeHealthConfig `mapstructure:"health" yaml:"health"`
 }
 
@@ -69,18 +69,29 @@ type UIConfig struct {
 }
 
 type WorkflowConfig struct {
-	Enabled                 bool          `mapstructure:"enabled" yaml:"enabled"`
-	DatabaseDriver          string        `mapstructure:"databaseDriver" yaml:"databaseDriver"`
-	DatabasePath            string        `mapstructure:"databasePath" yaml:"databasePath"`
-	DatabaseURL             string        `mapstructure:"databaseURL" yaml:"databaseURL"`
-	PollInterval            time.Duration `mapstructure:"pollInterval" yaml:"pollInterval"`
-	LeaseDuration           time.Duration `mapstructure:"leaseDuration" yaml:"leaseDuration"`
-	ScriptEnabled           bool          `mapstructure:"scriptEnabled" yaml:"scriptEnabled"`
-	ScriptTimeout           time.Duration `mapstructure:"scriptTimeout" yaml:"scriptTimeout"`
-	ScriptMaxSourceBytes    int           `mapstructure:"scriptMaxSourceBytes" yaml:"scriptMaxSourceBytes"`
-	ScriptMaxOutputBytes    int           `mapstructure:"scriptMaxOutputBytes" yaml:"scriptMaxOutputBytes"`
-	ScriptMaxExecutionSteps uint64        `mapstructure:"scriptMaxExecutionSteps" yaml:"scriptMaxExecutionSteps"`
-	OpenAIAPIKey            string        `mapstructure:"openaiAPIKey" yaml:"openaiAPIKey"`
+	Enabled                    bool          `mapstructure:"enabled" yaml:"enabled"`
+	DatabaseDriver             string        `mapstructure:"databaseDriver" yaml:"databaseDriver"`
+	DatabasePath               string        `mapstructure:"databasePath" yaml:"databasePath"`
+	DatabaseURL                string        `mapstructure:"databaseURL" yaml:"databaseURL"`
+	PollInterval               time.Duration `mapstructure:"pollInterval" yaml:"pollInterval"`
+	LeaseDuration              time.Duration `mapstructure:"leaseDuration" yaml:"leaseDuration"`
+	ScriptEnabled              bool          `mapstructure:"scriptEnabled" yaml:"scriptEnabled"`
+	ScriptTimeout              time.Duration `mapstructure:"scriptTimeout" yaml:"scriptTimeout"`
+	ScriptMaxSourceBytes       int           `mapstructure:"scriptMaxSourceBytes" yaml:"scriptMaxSourceBytes"`
+	ScriptMaxOutputBytes       int           `mapstructure:"scriptMaxOutputBytes" yaml:"scriptMaxOutputBytes"`
+	ScriptMaxExecutionSteps    uint64        `mapstructure:"scriptMaxExecutionSteps" yaml:"scriptMaxExecutionSteps"`
+	OpenAIAPIKey               string        `mapstructure:"openaiAPIKey" yaml:"openaiAPIKey"`
+	OpenAIBaseURL              string        `mapstructure:"openaiBaseURL" yaml:"openaiBaseURL"`
+	ClaudeAPIKey               string        `mapstructure:"claudeAPIKey" yaml:"claudeAPIKey"`
+	ClaudeBaseURL              string        `mapstructure:"claudeBaseURL" yaml:"claudeBaseURL"`
+	ClaudeAPIVersion           string        `mapstructure:"claudeAPIVersion" yaml:"claudeAPIVersion"`
+	CopilotOAuthToken          string        `mapstructure:"copilotOAuthToken" yaml:"copilotOAuthToken"`
+	CopilotBaseURL             string        `mapstructure:"copilotBaseURL" yaml:"copilotBaseURL"`
+	CopilotTokenURL            string        `mapstructure:"copilotTokenURL" yaml:"copilotTokenURL"`
+	CopilotEditorVersion       string        `mapstructure:"copilotEditorVersion" yaml:"copilotEditorVersion"`
+	CopilotEditorPluginVersion string        `mapstructure:"copilotEditorPluginVersion" yaml:"copilotEditorPluginVersion"`
+	CopilotIntegrationID       string        `mapstructure:"copilotIntegrationID" yaml:"copilotIntegrationID"`
+	CopilotOpenAIIntent        string        `mapstructure:"copilotOpenAIIntent" yaml:"copilotOpenAIIntent"`
 }
 
 func Default() Config {
@@ -107,17 +118,22 @@ func Default() Config {
 			DevProxyURL: "http://localhost:5173",
 		},
 		Workflow: WorkflowConfig{
-			Enabled:                 true,
-			DatabaseDriver:          "sqlite",
-			DatabasePath:            "data/workflows.db",
-			DatabaseURL:             "",
-			PollInterval:            1 * time.Second,
-			LeaseDuration:           30 * time.Second,
-			ScriptEnabled:           false,
-			ScriptTimeout:           250 * time.Millisecond,
-			ScriptMaxSourceBytes:    16 * 1024,
-			ScriptMaxOutputBytes:    256 * 1024,
-			ScriptMaxExecutionSteps: 25_000,
+			Enabled:                    true,
+			DatabaseDriver:             "sqlite",
+			DatabasePath:               "data/workflows.db",
+			DatabaseURL:                "",
+			PollInterval:               1 * time.Second,
+			LeaseDuration:              30 * time.Second,
+			ScriptEnabled:              false,
+			ScriptTimeout:              250 * time.Millisecond,
+			ScriptMaxSourceBytes:       16 * 1024,
+			ScriptMaxOutputBytes:       256 * 1024,
+			ScriptMaxExecutionSteps:    25_000,
+			ClaudeAPIVersion:           "2023-06-01",
+			CopilotEditorVersion:       "vscode/1.96.0",
+			CopilotEditorPluginVersion: "copilot/1.155.0",
+			CopilotIntegrationID:       "vscode-chat",
+			CopilotOpenAIIntent:        "conversation-panel",
 		},
 		Webhook: WebhookConfig{
 			Enabled:           true,
@@ -172,6 +188,11 @@ func SetDefaults(v *viper.Viper) {
 	v.SetDefault("workflow.scriptMaxSourceBytes", defaults.Workflow.ScriptMaxSourceBytes)
 	v.SetDefault("workflow.scriptMaxOutputBytes", defaults.Workflow.ScriptMaxOutputBytes)
 	v.SetDefault("workflow.scriptMaxExecutionSteps", defaults.Workflow.ScriptMaxExecutionSteps)
+	v.SetDefault("workflow.claudeAPIVersion", defaults.Workflow.ClaudeAPIVersion)
+	v.SetDefault("workflow.copilotEditorVersion", defaults.Workflow.CopilotEditorVersion)
+	v.SetDefault("workflow.copilotEditorPluginVersion", defaults.Workflow.CopilotEditorPluginVersion)
+	v.SetDefault("workflow.copilotIntegrationID", defaults.Workflow.CopilotIntegrationID)
+	v.SetDefault("workflow.copilotOpenAIIntent", defaults.Workflow.CopilotOpenAIIntent)
 	v.SetDefault("webhook.enabled", defaults.Webhook.Enabled)
 	v.SetDefault("webhook.callbackAllowlist", defaults.Webhook.CallbackAllowlist)
 	v.SetDefault("node.id", defaults.Node.ID)
@@ -181,6 +202,23 @@ func SetDefaults(v *viper.Viper) {
 	v.SetDefault("node.healthAddr", defaults.Node.HealthAddr)
 	v.SetDefault("node.health.heartbeatInterval", defaults.Node.Health.HeartbeatInterval)
 	v.SetDefault("node.health.offlineThreshold", defaults.Node.Health.OfflineThreshold)
+
+	// Bind user-friendly env var names for fields where Viper's automatic
+	// camelCase→env mapping produces hard-to-type names.  Each BindEnv call
+	// below also keeps the auto-mapped name working, so users can use either.
+	_ = v.BindEnv("workflow.databaseURL", "APP_WORKFLOW_DATABASE_URL", "APP_WORKFLOW_DATABASEURL")
+	_ = v.BindEnv("workflow.openaiAPIKey", "APP_WORKFLOW_OPENAI_API_KEY")
+	_ = v.BindEnv("workflow.openaiBaseURL", "APP_WORKFLOW_OPENAI_BASE_URL")
+	_ = v.BindEnv("workflow.claudeAPIKey", "APP_WORKFLOW_CLAUDE_API_KEY")
+	_ = v.BindEnv("workflow.claudeBaseURL", "APP_WORKFLOW_CLAUDE_BASE_URL")
+	_ = v.BindEnv("workflow.claudeAPIVersion", "APP_WORKFLOW_CLAUDE_API_VERSION")
+	_ = v.BindEnv("workflow.copilotOAuthToken", "APP_WORKFLOW_COPILOT_OAUTH_TOKEN")
+	_ = v.BindEnv("workflow.copilotBaseURL", "APP_WORKFLOW_COPILOT_BASE_URL")
+	_ = v.BindEnv("workflow.copilotTokenURL", "APP_WORKFLOW_COPILOT_TOKEN_URL")
+	_ = v.BindEnv("workflow.copilotEditorVersion", "APP_WORKFLOW_COPILOT_EDITOR_VERSION")
+	_ = v.BindEnv("workflow.copilotEditorPluginVersion", "APP_WORKFLOW_COPILOT_EDITOR_PLUGIN_VERSION")
+	_ = v.BindEnv("workflow.copilotIntegrationID", "APP_WORKFLOW_COPILOT_INTEGRATION_ID")
+	_ = v.BindEnv("workflow.copilotOpenAIIntent", "APP_WORKFLOW_COPILOT_OPENAI_INTENT")
 }
 
 func Load(v *viper.Viper) (Config, error) {
@@ -261,7 +299,13 @@ scriptMaxSourceBytes    = 16384
 scriptMaxOutputBytes    = 262144
 scriptMaxExecutionSteps = 25000
 # openaiAPIKey = ""   # set via APP_WORKFLOW_OPENAI_API_KEY env var or here
-                   # required for the "Enhance with AI" feature in the agent editor
+# claudeAPIKey = ""   # set via APP_WORKFLOW_CLAUDE_API_KEY env var or here
+# copilotOAuthToken = "" # set via APP_WORKFLOW_COPILOT_OAUTH_TOKEN env var or here
+# copilotEditorVersion = "vscode/1.96.0"
+# copilotEditorPluginVersion = "copilot/1.155.0"
+# copilotIntegrationID = "vscode-chat"
+# copilotOpenAIIntent = "conversation-panel"
+                   # required for AI agents and the "Enhance with AI" feature in the agent editor
 
 [webhook]
 enabled = true
@@ -290,4 +334,7 @@ APP_WORKFLOW_SCRIPT_MAX_SOURCE_BYTES=16384
 APP_WORKFLOW_SCRIPT_MAX_OUTPUT_BYTES=262144
 APP_WORKFLOW_SCRIPT_MAX_EXECUTION_STEPS=25000
 APP_WORKFLOW_OPENAI_API_KEY=
+APP_WORKFLOW_CLAUDE_API_KEY=
+APP_WORKFLOW_COPILOT_OAUTH_TOKEN=
+APP_WORKFLOW_DATABASE_URL=
 `

@@ -5,25 +5,22 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"strings"
 	"text/template"
 	"time"
-
-	"github.com/prasenjit-net/orchestra/internal/config"
 )
 
 type agentActivity struct {
-	cfg         config.WorkflowConfig
+	ai          *aiProviderClient
 	agentLookup func(ctx context.Context, id string) (Agent, error)
 	mcpLookup   func(ctx context.Context, agentID string) ([]MCPServer, error)
 	httpClient  *http.Client
 }
 
-func newAgentActivity(cfg config.WorkflowConfig, agentLookup func(ctx context.Context, id string) (Agent, error), mcpLookup func(ctx context.Context, agentID string) ([]MCPServer, error)) *agentActivity {
+func newAgentActivity(ai *aiProviderClient, agentLookup func(ctx context.Context, id string) (Agent, error), mcpLookup func(ctx context.Context, agentID string) ([]MCPServer, error)) *agentActivity {
 	return &agentActivity{
-		cfg:         cfg,
+		ai:          ai,
 		agentLookup: agentLookup,
 		mcpLookup:   mcpLookup,
 		httpClient:  &http.Client{Timeout: 120 * time.Second},
@@ -34,10 +31,10 @@ func (a *agentActivity) Descriptor() ActivityDescriptor {
 	return ActivityDescriptor{
 		Name:        "agent",
 		DisplayName: "AI Agent",
-		Description: "Invoke a saved AI agent via OpenAI chat completions.",
+		Description: "Invoke a saved AI agent via OpenAI, Claude, or GitHub Copilot.",
 		Category:    "ai",
 		Status:      "beta",
-		Tags:        []string{"ai", "llm", "openai"},
+		Tags:        []string{"ai", "llm", "openai", "claude", "copilot"},
 		ExampleInput: map[string]any{
 			"agentId": "agt_abc123",
 			"prompt":  "Summarize this: {{.input}}",
@@ -61,55 +58,6 @@ type agentActivityInput struct {
 	Data     any                    `json:"data,omitempty"`
 }
 
-// --- OpenAI types ---
-
-type openAIRequest struct {
-	Model       string      `json:"model"`
-	Messages    []openAIMsg `json:"messages"`
-	MaxTokens   int         `json:"max_tokens,omitempty"`
-	Temperature float64     `json:"temperature,omitempty"`
-	Tools       []any       `json:"tools,omitempty"`
-	ToolChoice  string      `json:"tool_choice,omitempty"`
-}
-
-type openAIMsg struct {
-	Role       string          `json:"role"`
-	Content    string          `json:"content,omitempty"`
-	ToolCallID string          `json:"tool_call_id,omitempty"`
-	ToolCalls  json.RawMessage `json:"tool_calls,omitempty"`
-	Name       string          `json:"name,omitempty"`
-}
-
-type openAIToolCall struct {
-	ID       string `json:"id"`
-	Type     string `json:"type"`
-	Function struct {
-		Name      string `json:"name"`
-		Arguments string `json:"arguments"`
-	} `json:"function"`
-}
-
-type openAIResponse struct {
-	ID      string `json:"id"`
-	Choices []struct {
-		Message struct {
-			Role      string           `json:"role"`
-			Content   string           `json:"content"`
-			ToolCalls []openAIToolCall  `json:"tool_calls,omitempty"`
-		} `json:"message"`
-		FinishReason string `json:"finish_reason"`
-	} `json:"choices"`
-	Usage struct {
-		PromptTokens     int `json:"prompt_tokens"`
-		CompletionTokens int `json:"completion_tokens"`
-		TotalTokens      int `json:"total_tokens"`
-	} `json:"usage"`
-	Error *struct {
-		Message string `json:"message"`
-		Type    string `json:"type"`
-	} `json:"error,omitempty"`
-}
-
 func (a *agentActivity) Execute(ctx context.Context, req ActivityExecutionRequest) (ActivityResult, error) {
 	var input agentActivityInput
 	if err := json.Unmarshal(req.Step.Input, &input); err != nil {
@@ -120,11 +68,6 @@ func (a *agentActivity) Execute(ctx context.Context, req ActivityExecutionReques
 	}
 	if input.Prompt == "" {
 		return ActivityResult{}, fmt.Errorf("prompt is required")
-	}
-
-	apiKey := a.cfg.OpenAIAPIKey
-	if apiKey == "" {
-		return ActivityResult{}, fmt.Errorf("OpenAI API key not configured (set workflow.openaiAPIKey or APP_WORKFLOW_OPENAI_API_KEY)")
 	}
 
 	agent, err := a.agentLookup(ctx, input.AgentID)
@@ -140,7 +83,7 @@ func (a *agentActivity) Execute(ctx context.Context, req ActivityExecutionReques
 	// Connect to each enabled MCP server using stored (pre-explored) tools.
 	// toolOwner maps toolName → session so we can route tool calls at runtime.
 	toolOwner := map[string]*mcpSession{}
-	var mcpTools []any
+	var mcpTools []aiToolDefinition
 	if a.mcpLookup != nil {
 		mcpServers, err := a.mcpLookup(ctx, input.AgentID)
 		if err != nil {
@@ -158,13 +101,10 @@ func (a *agentActivity) Execute(ctx context.Context, req ActivityExecutionReques
 			defer sess.Close()
 			for _, t := range srv.Tools {
 				toolOwner[t.Name] = sess
-				mcpTools = append(mcpTools, map[string]any{
-					"type": "function",
-					"function": map[string]any{
-						"name":        t.Name,
-						"description": t.Description,
-						"parameters":  t.InputSchema,
-					},
+				mcpTools = append(mcpTools, aiToolDefinition{
+					Name:        t.Name,
+					Description: t.Description,
+					Parameters:  t.InputSchema,
 				})
 			}
 		}
@@ -173,83 +113,71 @@ func (a *agentActivity) Execute(ctx context.Context, req ActivityExecutionReques
 	allTools := mcpTools
 
 	// Build initial messages.
-	messages := []openAIMsg{}
-	if agent.SystemPrompt != "" {
-		messages = append(messages, openAIMsg{Role: "system", Content: agent.SystemPrompt})
-	}
+	messages := []aiMessage{}
 	for _, m := range input.Messages {
-		messages = append(messages, openAIMsg{Role: m.Role, Content: m.Content})
+		messages = append(messages, aiMessage{Role: m.Role, Content: m.Content})
 	}
-	messages = append(messages, openAIMsg{Role: "user", Content: resolvedPrompt})
+	messages = append(messages, aiMessage{Role: "user", Content: resolvedPrompt})
 
 	// Agentic loop.
-	var lastResponse openAIResponse
+	var lastResponse aiChatResponse
 	for {
-		oaiReq := openAIRequest{
-			Model:       agent.Model,
-			Messages:    messages,
-			MaxTokens:   agent.MaxTokens,
-			Temperature: agent.Temperature,
-		}
-		if len(allTools) > 0 {
-			oaiReq.Tools = allTools
-			oaiReq.ToolChoice = "auto"
-		}
-
-		resp, err := a.callOpenAI(ctx, apiKey, oaiReq)
+		resp, err := a.ai.Complete(ctx, aiChatRequest{
+			Provider:     agent.Provider,
+			Model:        agent.Model,
+			SystemPrompt: agent.SystemPrompt,
+			Messages:     messages,
+			MaxTokens:    agent.MaxTokens,
+			Temperature:  agent.Temperature,
+			Tools:        allTools,
+		})
 		if err != nil {
 			return ActivityResult{}, err
 		}
 		lastResponse = resp
 
-		if len(resp.Choices) == 0 {
-			return ActivityResult{}, fmt.Errorf("openai returned no choices")
-		}
-		choice := resp.Choices[0]
-
-		if choice.FinishReason == "stop" || len(choice.Message.ToolCalls) == 0 {
+		if len(resp.ToolCalls) == 0 {
 			break
 		}
 
-		// Append the assistant turn with its tool_calls.
-		toolCallsJSON, _ := json.Marshal(choice.Message.ToolCalls)
-		messages = append(messages, openAIMsg{
+		messages = append(messages, aiMessage{
 			Role:      "assistant",
-			Content:   choice.Message.Content,
-			ToolCalls: toolCallsJSON,
+			Content:   resp.Content,
+			ToolCalls: resp.ToolCalls,
 		})
 
 		// Execute each tool call.
-		for _, tc := range choice.Message.ToolCalls {
+		for _, tc := range resp.ToolCalls {
 			var args map[string]any
-			if err := json.Unmarshal([]byte(tc.Function.Arguments), &args); err != nil {
-				args = map[string]any{"raw": tc.Function.Arguments}
+			if err := json.Unmarshal([]byte(tc.Arguments), &args); err != nil {
+				args = map[string]any{"raw": tc.Arguments}
 			}
 
 			var toolResult string
-			if sess, ok := toolOwner[tc.Function.Name]; ok {
-				toolResult, err = sess.CallTool(ctx, tc.Function.Name, args)
+			if sess, ok := toolOwner[tc.Name]; ok {
+				toolResult, err = sess.CallTool(ctx, tc.Name, args)
 				if err != nil {
 					toolResult = fmt.Sprintf("error: %s", err.Error())
 				}
 			} else {
-				toolResult = fmt.Sprintf("unknown tool: %s", tc.Function.Name)
+				toolResult = fmt.Sprintf("unknown tool: %s", tc.Name)
 			}
 
-			messages = append(messages, openAIMsg{
+			messages = append(messages, aiMessage{
 				Role:       "tool",
 				ToolCallID: tc.ID,
-				Name:       tc.Function.Name,
+				Name:       tc.Name,
 				Content:    toolResult,
 			})
 		}
 	}
 
-	choice := lastResponse.Choices[0]
 	result := map[string]any{
-		"content":      choice.Message.Content,
-		"role":         choice.Message.Role,
-		"finishReason": choice.FinishReason,
+		"provider":     agent.Provider,
+		"model":        agent.Model,
+		"content":      lastResponse.Content,
+		"role":         lastResponse.Role,
+		"finishReason": lastResponse.FinishReason,
 		"usage": map[string]int{
 			"promptTokens":     lastResponse.Usage.PromptTokens,
 			"completionTokens": lastResponse.Usage.CompletionTokens,
@@ -262,40 +190,6 @@ func (a *agentActivity) Execute(ctx context.Context, req ActivityExecutionReques
 		return ActivityResult{}, fmt.Errorf("encode agent result: %w", err)
 	}
 	return ActivityResult{Output: out}, nil
-}
-
-func (a *agentActivity) callOpenAI(ctx context.Context, apiKey string, oaiReq openAIRequest) (openAIResponse, error) {
-	body, err := json.Marshal(oaiReq)
-	if err != nil {
-		return openAIResponse{}, fmt.Errorf("encode openai request: %w", err)
-	}
-
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://api.openai.com/v1/chat/completions", bytes.NewReader(body))
-	if err != nil {
-		return openAIResponse{}, fmt.Errorf("build openai request: %w", err)
-	}
-	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("Authorization", "Bearer "+apiKey)
-
-	resp, err := a.httpClient.Do(httpReq)
-	if err != nil {
-		return openAIResponse{}, fmt.Errorf("call openai: %w", err)
-	}
-	defer resp.Body.Close()
-
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return openAIResponse{}, fmt.Errorf("read openai response: %w", err)
-	}
-
-	var oaiResp openAIResponse
-	if err := json.Unmarshal(respBody, &oaiResp); err != nil {
-		return openAIResponse{}, fmt.Errorf("decode openai response: %w", err)
-	}
-	if oaiResp.Error != nil {
-		return openAIResponse{}, fmt.Errorf("openai error (%s): %s", oaiResp.Error.Type, oaiResp.Error.Message)
-	}
-	return oaiResp, nil
 }
 
 func resolveTemplate(tmpl string, workflowCtx json.RawMessage) (string, error) {

@@ -146,6 +146,7 @@ var sqliteDDL = []string{
 	id TEXT PRIMARY KEY,
 	name TEXT NOT NULL,
 	description TEXT NOT NULL DEFAULT '',
+	provider TEXT NOT NULL DEFAULT 'openai',
 	model TEXT NOT NULL DEFAULT 'gpt-4o',
 	system_prompt TEXT NOT NULL DEFAULT '',
 	max_tokens INTEGER NOT NULL DEFAULT 0,
@@ -183,6 +184,43 @@ var sqliteDDL = []string{
 	last_seen_at TEXT NOT NULL,
 	registered_at TEXT NOT NULL
 )`,
+}
+
+// Migrations returns idempotent ALTER TABLE statements that upgrade an existing
+// database to the current schema.  For PostgreSQL these use IF NOT EXISTS so
+// they are safe to run against both fresh and pre-existing databases.
+// For SQLite the equivalent logic lives in the ensure*Columns helpers called by
+// initSchema, so this method returns nil for SQLite.
+func (d Dialect) Migrations() []string {
+	if d != DialectPostgres {
+		return nil
+	}
+	return postgresMigrations
+}
+
+// postgresMigrations lists every column that was added to the Postgres schema
+// after the initial release.  Each statement uses IF NOT EXISTS so it is safe
+// to run against a database that is already up-to-date.
+var postgresMigrations = []string{
+	// workflow_tasks: state_json and executed_by added in cluster-mode release
+	`ALTER TABLE workflow_tasks ADD COLUMN IF NOT EXISTS state_json TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE workflow_tasks ADD COLUMN IF NOT EXISTS executed_by TEXT NOT NULL DEFAULT ''`,
+	// workflow_definition_versions: status, updated_at, published_at added later
+	`ALTER TABLE workflow_definition_versions ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'published'`,
+	`ALTER TABLE workflow_definition_versions ADD COLUMN IF NOT EXISTS updated_at TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE workflow_definition_versions ADD COLUMN IF NOT EXISTS published_at TEXT`,
+	// backfill updated_at / published_at for rows created before these columns existed
+	`UPDATE workflow_definition_versions SET updated_at = created_at WHERE updated_at = ''`,
+	`UPDATE workflow_definition_versions SET published_at = created_at WHERE status = 'published' AND published_at IS NULL`,
+	// workflow_instances: callback and trigger columns added later
+	`ALTER TABLE workflow_instances ADD COLUMN IF NOT EXISTS callback_url TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE workflow_instances ADD COLUMN IF NOT EXISTS trigger_source TEXT NOT NULL DEFAULT 'ui'`,
+	`ALTER TABLE workflow_instances ADD COLUMN IF NOT EXISTS callback_status TEXT NOT NULL DEFAULT ''`,
+	// mcp_servers: tools_json and explored_at added during MCP exploration feature
+	`ALTER TABLE mcp_servers ADD COLUMN IF NOT EXISTS tools_json TEXT NOT NULL DEFAULT '[]'`,
+	`ALTER TABLE mcp_servers ADD COLUMN IF NOT EXISTS explored_at TEXT`,
+	// agents: provider added for multi-provider AI support
+	`ALTER TABLE agents ADD COLUMN IF NOT EXISTS provider TEXT NOT NULL DEFAULT 'openai'`,
 }
 
 // postgresDDL is the full up-to-date schema for PostgreSQL.
@@ -284,6 +322,7 @@ var postgresDDL = []string{
 	id TEXT PRIMARY KEY,
 	name TEXT NOT NULL,
 	description TEXT NOT NULL DEFAULT '',
+	provider TEXT NOT NULL DEFAULT 'openai',
 	model TEXT NOT NULL DEFAULT 'gpt-4o',
 	system_prompt TEXT NOT NULL DEFAULT '',
 	max_tokens INTEGER NOT NULL DEFAULT 0,

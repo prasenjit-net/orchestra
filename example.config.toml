@@ -39,7 +39,13 @@ scriptMaxSourceBytes    = 16384
 scriptMaxOutputBytes    = 262144
 scriptMaxExecutionSteps = 25000
 # openaiAPIKey = ""   # set via APP_WORKFLOW_OPENAI_API_KEY env var or here
-                      # required for the "Enhance with AI" feature in the agent editor
+# claudeAPIKey = ""   # set via APP_WORKFLOW_CLAUDE_API_KEY env var or here
+# copilotOAuthToken = ""   # set via APP_WORKFLOW_COPILOT_OAUTH_TOKEN env var or here
+# copilotEditorVersion = "vscode/1.96.0"
+# copilotEditorPluginVersion = "copilot/1.155.0"
+# copilotIntegrationID = "vscode-chat"
+# copilotOpenAIIntent = "conversation-panel"
+                      # required for provider-backed agents and prompt enhancement
 
 [webhook]
 enabled = true
