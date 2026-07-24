@@ -168,6 +168,14 @@ var sqliteDDL = []string{
 	created_at TEXT NOT NULL,
 	updated_at TEXT NOT NULL
 )`,
+	`CREATE TABLE IF NOT EXISTS json_schemas (
+	id TEXT PRIMARY KEY,
+	name TEXT NOT NULL,
+	description TEXT NOT NULL DEFAULT '',
+	schema_json TEXT NOT NULL DEFAULT '{}',
+	created_at TEXT NOT NULL,
+	updated_at TEXT NOT NULL
+)`,
 	`CREATE TABLE IF NOT EXISTS agent_mcp_servers (
 	agent_id TEXT NOT NULL,
 	server_id TEXT NOT NULL,
@@ -221,6 +229,14 @@ var postgresMigrations = []string{
 	`ALTER TABLE mcp_servers ADD COLUMN IF NOT EXISTS explored_at TEXT`,
 	// agents: provider added for multi-provider AI support
 	`ALTER TABLE agents ADD COLUMN IF NOT EXISTS provider TEXT NOT NULL DEFAULT 'openai'`,
+	`CREATE TABLE IF NOT EXISTS json_schemas (
+	id TEXT PRIMARY KEY,
+	name TEXT NOT NULL,
+	description TEXT NOT NULL DEFAULT '',
+	schema_json TEXT NOT NULL DEFAULT '{}',
+	created_at TEXT NOT NULL,
+	updated_at TEXT NOT NULL
+)`,
 }
 
 // postgresDDL is the full up-to-date schema for PostgreSQL.
@@ -341,6 +357,14 @@ var postgresDDL = []string{
 	enabled INTEGER NOT NULL DEFAULT 1,
 	tools_json TEXT NOT NULL DEFAULT '[]',
 	explored_at TEXT,
+	created_at TEXT NOT NULL,
+	updated_at TEXT NOT NULL
+)`,
+	`CREATE TABLE IF NOT EXISTS json_schemas (
+	id TEXT PRIMARY KEY,
+	name TEXT NOT NULL,
+	description TEXT NOT NULL DEFAULT '',
+	schema_json TEXT NOT NULL DEFAULT '{}',
 	created_at TEXT NOT NULL,
 	updated_at TEXT NOT NULL
 )`,

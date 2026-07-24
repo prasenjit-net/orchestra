@@ -52,6 +52,9 @@ func (s *Service) StartWorkflowWithInput(ctx context.Context, in StartWorkflowIn
 	if err != nil {
 		return WorkflowInstance{}, err
 	}
+	if err := s.validateStartInputTx(ctx, tx, details.Document, in.Input); err != nil {
+		return WorkflowInstance{}, err
+	}
 
 	now := time.Now().UTC()
 	instance := WorkflowInstance{

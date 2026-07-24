@@ -87,7 +87,7 @@ function AssistantBubble({ content, activeScript, onApply }: { content: string; 
 
 const GREETING = `Hi! I can help you write a Starlark script for your workflow step.
 
-Tell me what the script should do — for example, what data it should read from the workflow context and what it should output — and I'll write it for you.
+Tell me what the script should do — for example, what mapped input data it should read and what it should output — and I'll write it for you.
 
 You can also paste a partial script and ask me to improve or extend it.`
 

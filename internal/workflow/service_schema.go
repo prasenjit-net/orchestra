@@ -119,6 +119,14 @@ func (s *Service) initSchema(ctx context.Context) error {
 			created_at  TEXT NOT NULL,
 			updated_at  TEXT NOT NULL
 		)`,
+		`CREATE TABLE IF NOT EXISTS json_schemas (
+			id TEXT PRIMARY KEY,
+			name TEXT NOT NULL,
+			description TEXT NOT NULL DEFAULT '',
+			schema_json TEXT NOT NULL DEFAULT '{}',
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL
+		)`,
 		`CREATE TABLE IF NOT EXISTS agent_mcp_servers (
 			agent_id  TEXT NOT NULL,
 			server_id TEXT NOT NULL,

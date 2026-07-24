@@ -106,6 +106,9 @@ export interface WorkflowStepDefinition {
 export interface WorkflowDefinitionDocument {
   name: string
   description: string
+  startSchemaId?: string
+  endSchemaId?: string
+  endOutput?: unknown
   steps: WorkflowStepDefinition[]
 }
 
@@ -253,6 +256,25 @@ export interface ScriptsResponse {
   scripts: Script[]
 }
 
+export interface JSONSchemaDocument {
+  id: string
+  name: string
+  description: string
+  schema: Record<string, unknown>
+  createdAt: string
+  updatedAt: string
+}
+
+export interface CreateJSONSchemaInput {
+  name: string
+  description: string
+  schema: Record<string, unknown>
+}
+
+export interface JSONSchemasResponse {
+  schemas: JSONSchemaDocument[]
+}
+
 export type AIProvider = 'openai' | 'claude' | 'copilot'
 
 export interface Agent {
@@ -328,15 +350,16 @@ export interface DefinitionExport {
 export interface ImportBundle {
   version: number
   exportedAt: string
-  bundleType: 'workflow' | 'agent' | 'script' | 'connector'
+  bundleType: 'workflow' | 'agent' | 'script' | 'connector' | 'json-schema'
   definition?: DefinitionExport
   scripts?: Script[]
   agents?: Agent[]
   connectors?: MCPServer[]
+  jsonSchemas?: JSONSchemaDocument[]
 }
 
 export interface ImportItem {
-  type: 'definition' | 'script' | 'agent' | 'connector'
+  type: 'definition' | 'script' | 'agent' | 'connector' | 'json-schema'
   id: string
   name: string
 }

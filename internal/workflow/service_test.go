@@ -82,6 +82,31 @@ func TestWorkflowCompletesBuiltInActivities(t *testing.T) {
 	}
 }
 
+func TestCreateDefinitionRejectsNonIDStepNames(t *testing.T) {
+	cfg := config.Default()
+	cfg.Workflow.DatabasePath = filepath.Join(t.TempDir(), "workflows.db")
+	service, err := NewService(cfg.Workflow, cfg.AI, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatalf("NewService returned error: %v", err)
+	}
+	defer service.Close()
+
+	for _, stepName := range []string{"Send Email", "send.email", "Send_Email"} {
+		_, err := service.CreateDefinition(context.Background(), CreateDefinitionInput{
+			Name: "Invalid step name",
+			Steps: []StepDefinition{
+				{Name: stepName, Activity: "noop", Input: []byte(`{}`)},
+			},
+		})
+		if err == nil {
+			t.Fatalf("expected step name %q to be rejected", stepName)
+		}
+		if !strings.Contains(err.Error(), "must use only lowercase letters") {
+			t.Fatalf("expected step name format error, got %v", err)
+		}
+	}
+}
+
 func TestWorkflowBranchesUsingTransitionConditions(t *testing.T) {
 	cfg := config.Default()
 	cfg.Workflow.DatabasePath = filepath.Join(t.TempDir(), "workflows.db")
@@ -182,6 +207,112 @@ func TestWorkflowBranchesUsingTransitionConditions(t *testing.T) {
 	}
 	if !foundTransition {
 		t.Fatal("expected TransitionSelected event to be recorded")
+	}
+}
+
+func TestWorkflowDefaultTransitionCanEndWorkflow(t *testing.T) {
+	cfg := config.Default()
+	cfg.Workflow.DatabasePath = filepath.Join(t.TempDir(), "workflows.db")
+	service, err := NewService(cfg.Workflow, cfg.AI, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatalf("NewService returned error: %v", err)
+	}
+	defer service.Close()
+
+	definition, err := service.CreateDefinition(context.Background(), CreateDefinitionInput{
+		Name: "Default terminal transition",
+		Steps: []StepDefinition{
+			{
+				Name:     "decision",
+				Activity: "noop",
+				Input:    []byte(`{"approved":false}`),
+				Transitions: []StepTransition{
+					{
+						To: "approved",
+						Condition: &TransitionCondition{
+							Path:     "steps.decision.approved",
+							Operator: "eq",
+							Value:    []byte(`true`),
+						},
+					},
+					{To: terminalTransitionTarget, Label: "default-end"},
+				},
+			},
+			{Name: "approved", Activity: "noop", Input: []byte(`{"status":"approved"}`)},
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateDefinition returned error: %v", err)
+	}
+
+	instance, err := service.StartWorkflow(context.Background(), definition.ID)
+	if err != nil {
+		t.Fatalf("StartWorkflow returned error: %v", err)
+	}
+	if _, err := service.RunOnce(context.Background()); err != nil {
+		t.Fatalf("RunOnce returned error: %v", err)
+	}
+	instance, err = service.GetWorkflow(context.Background(), instance.ID)
+	if err != nil {
+		t.Fatalf("GetWorkflow returned error: %v", err)
+	}
+	if instance.Status != StatusCompleted {
+		t.Fatalf("expected completed workflow, got %s", instance.Status)
+	}
+
+	var contextPayload map[string]any
+	if err := json.Unmarshal(instance.Context, &contextPayload); err != nil {
+		t.Fatalf("Unmarshal workflow context returned error: %v", err)
+	}
+	steps, _ := contextPayload["steps"].(map[string]any)
+	if _, executedApproved := steps["approved"]; executedApproved {
+		t.Fatalf("expected approved step to be skipped, got context %#v", steps["approved"])
+	}
+}
+
+func TestDefinitionRejectsMultiTransitionWithoutDefault(t *testing.T) {
+	cfg := config.Default()
+	cfg.Workflow.DatabasePath = filepath.Join(t.TempDir(), "workflows.db")
+	service, err := NewService(cfg.Workflow, cfg.AI, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatalf("NewService returned error: %v", err)
+	}
+	defer service.Close()
+
+	_, err = service.CreateDefinition(context.Background(), CreateDefinitionInput{
+		Name: "Missing default branch",
+		Steps: []StepDefinition{
+			{
+				Name:     "decision",
+				Activity: "noop",
+				Transitions: []StepTransition{
+					{
+						To: "approved",
+						Condition: &TransitionCondition{
+							Path:     "steps.decision.approved",
+							Operator: "eq",
+							Value:    []byte(`true`),
+						},
+					},
+					{
+						To: "rejected",
+						Condition: &TransitionCondition{
+							Path:     "steps.decision.approved",
+							Operator: "eq",
+							Value:    []byte(`false`),
+						},
+					},
+				},
+			},
+			{Name: "approved", Activity: "noop"},
+			{Name: "rejected", Activity: "noop"},
+		},
+	})
+	if err == nil {
+		t.Fatal("expected CreateDefinition to reject multiple transitions without a default")
+	}
+	if !strings.Contains(err.Error(), "requires exactly one default transition") {
+		t.Fatalf("expected default transition error, got %v", err)
 	}
 }
 
@@ -706,9 +837,9 @@ func TestScriptActivityExecutesStarlark(t *testing.T) {
 				Activity: "script",
 				Input: []byte(`{
 					"language":"starlark",
-					"script":"result = {\"message\": strings.upper(input[\"name\"]), \"original\": workflow.step_output(\"seed\")[\"message\"], \"count\": workflow.step_output(\"seed\")[\"count\"]}",
+					"script":"result = {\"message\": strings.upper(input[\"name\"]), \"original\": input[\"seed\"][\"message\"], \"count\": input[\"seed\"][\"count\"]}",
 					"exports":["result"],
-					"data":{"name":"{{steps.seed.message}}"}
+					"data":{"name":"{{steps.seed.message}}","seed":"{{steps.seed}}"}
 				}`),
 			},
 		},
@@ -745,7 +876,59 @@ func TestScriptActivityExecutesStarlark(t *testing.T) {
 		t.Fatalf("expected upper-cased result, got %#v", result["message"])
 	}
 	if result["original"] != "orchestra" {
-		t.Fatalf("expected original value from workflow.step_output, got %#v", result["original"])
+		t.Fatalf("expected original value from mapped script input, got %#v", result["original"])
+	}
+}
+
+func TestScriptActivityCannotAccessWorkflowContext(t *testing.T) {
+	cfg := config.Default()
+	cfg.Workflow.DatabasePath = filepath.Join(t.TempDir(), "workflows.db")
+	cfg.Workflow.ScriptEnabled = true
+	service, err := NewService(cfg.Workflow, cfg.AI, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatalf("NewService returned error: %v", err)
+	}
+	defer service.Close()
+
+	definition, err := service.CreateDefinition(context.Background(), CreateDefinitionInput{
+		Name: "Script isolation workflow",
+		Steps: []StepDefinition{
+			{Name: "seed", Activity: "noop", Input: []byte(`{"secret":"do-not-leak"}`)},
+			{
+				Name:     "script-step",
+				Activity: "script",
+				Input: []byte(`{
+					"language":"starlark",
+					"script":"result = ctx[\"steps\"][\"seed\"]",
+					"exports":["result"],
+					"data":{}
+				}`),
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateDefinition returned error: %v", err)
+	}
+
+	instance, err := service.StartWorkflow(context.Background(), definition.ID)
+	if err != nil {
+		t.Fatalf("StartWorkflow returned error: %v", err)
+	}
+	if _, err := service.RunOnce(context.Background()); err != nil {
+		t.Fatalf("RunOnce seed returned error: %v", err)
+	}
+	if _, err := service.RunOnce(context.Background()); err != nil {
+		t.Fatalf("RunOnce script returned error: %v", err)
+	}
+	instance, err = service.GetWorkflow(context.Background(), instance.ID)
+	if err != nil {
+		t.Fatalf("GetWorkflow returned error: %v", err)
+	}
+	if instance.Status != StatusFailed {
+		t.Fatalf("expected failed workflow when script accesses ctx, got %s", instance.Status)
+	}
+	if !strings.Contains(instance.LastError, "undefined: ctx") {
+		t.Fatalf("expected undefined ctx error, got %q", instance.LastError)
 	}
 }
 

@@ -717,6 +717,80 @@ func (h *Handler) DeleteScript(w http.ResponseWriter, r *http.Request, scriptID 
 	w.WriteHeader(http.StatusNoContent)
 }
 
+func (h *Handler) ListJSONSchemas(w http.ResponseWriter, r *http.Request) {
+	if h.workflow == nil {
+		writeError(w, http.StatusServiceUnavailable, "workflow service unavailable")
+		return
+	}
+	schemas, err := h.workflow.ListJSONSchemas(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	respondJSON(w, http.StatusOK, workflow.JSONSchemasResponse{Schemas: schemas})
+}
+
+func (h *Handler) CreateJSONSchema(w http.ResponseWriter, r *http.Request) {
+	if h.workflow == nil {
+		writeError(w, http.StatusServiceUnavailable, "workflow service unavailable")
+		return
+	}
+	var input workflow.CreateJSONSchemaInput
+	if err := decodeJSON(r, &input); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	schema, err := h.workflow.CreateJSONSchema(r.Context(), input)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	respondJSON(w, http.StatusCreated, schema)
+}
+
+func (h *Handler) GetJSONSchema(w http.ResponseWriter, r *http.Request, schemaID string) {
+	if h.workflow == nil {
+		writeError(w, http.StatusServiceUnavailable, "workflow service unavailable")
+		return
+	}
+	schema, err := h.workflow.GetJSONSchema(r.Context(), schemaID)
+	if err != nil {
+		writeWorkflowError(w, err)
+		return
+	}
+	respondJSON(w, http.StatusOK, schema)
+}
+
+func (h *Handler) UpdateJSONSchema(w http.ResponseWriter, r *http.Request, schemaID string) {
+	if h.workflow == nil {
+		writeError(w, http.StatusServiceUnavailable, "workflow service unavailable")
+		return
+	}
+	var input workflow.CreateJSONSchemaInput
+	if err := decodeJSON(r, &input); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	schema, err := h.workflow.UpdateJSONSchema(r.Context(), schemaID, input)
+	if err != nil {
+		writeWorkflowError(w, err)
+		return
+	}
+	respondJSON(w, http.StatusOK, schema)
+}
+
+func (h *Handler) DeleteJSONSchema(w http.ResponseWriter, r *http.Request, schemaID string) {
+	if h.workflow == nil {
+		writeError(w, http.StatusServiceUnavailable, "workflow service unavailable")
+		return
+	}
+	if err := h.workflow.DeleteJSONSchema(r.Context(), schemaID); err != nil {
+		writeWorkflowError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func (h *Handler) ListAgents(w http.ResponseWriter, r *http.Request) {
 	if h.workflow == nil {
 		writeError(w, http.StatusServiceUnavailable, "workflow service unavailable")

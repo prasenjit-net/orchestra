@@ -37,6 +37,8 @@ type StepTransition struct {
 	Condition *TransitionCondition `json:"condition,omitempty"`
 }
 
+const terminalTransitionTarget = "__end__"
+
 type StepDefinition struct {
 	Name        string           `json:"name"`
 	Activity    string           `json:"activity"`
@@ -47,15 +49,21 @@ type StepDefinition struct {
 }
 
 type DefinitionDocument struct {
-	Name        string           `json:"name"`
-	Description string           `json:"description"`
-	Steps       []StepDefinition `json:"steps"`
+	Name          string           `json:"name"`
+	Description   string           `json:"description"`
+	StartSchemaID string           `json:"startSchemaId,omitempty"`
+	EndSchemaID   string           `json:"endSchemaId,omitempty"`
+	EndOutput     json.RawMessage  `json:"endOutput,omitempty"`
+	Steps         []StepDefinition `json:"steps"`
 }
 
 type CreateDefinitionInput struct {
-	Name        string           `json:"name"`
-	Description string           `json:"description"`
-	Steps       []StepDefinition `json:"steps"`
+	Name          string           `json:"name"`
+	Description   string           `json:"description"`
+	StartSchemaID string           `json:"startSchemaId,omitempty"`
+	EndSchemaID   string           `json:"endSchemaId,omitempty"`
+	EndOutput     json.RawMessage  `json:"endOutput,omitempty"`
+	Steps         []StepDefinition `json:"steps"`
 }
 
 type DefinitionVersionSummary struct {

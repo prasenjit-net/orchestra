@@ -340,9 +340,12 @@ func (s *Service) GetDefinitionVersion(ctx context.Context, definitionID string,
 
 func (s *Service) normalizeDefinition(input CreateDefinitionInput) (DefinitionDocument, error) {
 	document := DefinitionDocument{
-		Name:        strings.TrimSpace(input.Name),
-		Description: strings.TrimSpace(input.Description),
-		Steps:       make([]StepDefinition, 0, len(input.Steps)),
+		Name:          strings.TrimSpace(input.Name),
+		Description:   strings.TrimSpace(input.Description),
+		StartSchemaID: strings.TrimSpace(input.StartSchemaID),
+		EndSchemaID:   strings.TrimSpace(input.EndSchemaID),
+		EndOutput:     input.EndOutput,
+		Steps:         make([]StepDefinition, 0, len(input.Steps)),
 	}
 
 	if document.Name == "" {
@@ -350,6 +353,9 @@ func (s *Service) normalizeDefinition(input CreateDefinitionInput) (DefinitionDo
 	}
 	if len(input.Steps) == 0 {
 		return DefinitionDocument{}, fmt.Errorf("workflow definition requires at least one step")
+	}
+	if len(document.EndOutput) > 0 && !json.Valid(document.EndOutput) {
+		return DefinitionDocument{}, fmt.Errorf("workflow end output mapping must be valid JSON")
 	}
 
 	seenNames := make(map[string]struct{}, len(input.Steps))
@@ -366,6 +372,9 @@ func (s *Service) normalizeDefinition(input CreateDefinitionInput) (DefinitionDo
 		}
 		if normalized.Name == "" {
 			return DefinitionDocument{}, fmt.Errorf("step %d requires a name", i)
+		}
+		if !isValidStepName(normalized.Name) {
+			return DefinitionDocument{}, fmt.Errorf("step name %q must use only lowercase letters, numbers, \"_\" or \"-\"", normalized.Name)
 		}
 		if normalized.Activity == "" {
 			return DefinitionDocument{}, fmt.Errorf("step %q requires an activity", normalized.Name)
@@ -419,8 +428,10 @@ func (s *Service) normalizeDefinition(input CreateDefinitionInput) (DefinitionDo
 	for _, step := range document.Steps {
 		defaultTransitions := 0
 		for _, transition := range step.Transitions {
-			if _, ok := stepNames[transition.To]; !ok {
-				return DefinitionDocument{}, fmt.Errorf("step %q references unknown transition target %q", step.Name, transition.To)
+			if transition.To != terminalTransitionTarget {
+				if _, ok := stepNames[transition.To]; !ok {
+					return DefinitionDocument{}, fmt.Errorf("step %q references unknown transition target %q", step.Name, transition.To)
+				}
 			}
 			if transition.Condition == nil {
 				defaultTransitions++
@@ -431,9 +442,25 @@ func (s *Service) normalizeDefinition(input CreateDefinitionInput) (DefinitionDo
 		if defaultTransitions > 1 {
 			return DefinitionDocument{}, fmt.Errorf("step %q can only have one default transition", step.Name)
 		}
+		if len(step.Transitions) > 1 && defaultTransitions != 1 {
+			return DefinitionDocument{}, fmt.Errorf("step %q with multiple transitions requires exactly one default transition", step.Name)
+		}
 	}
 
 	return document, nil
+}
+
+func isValidStepName(name string) bool {
+	for _, char := range name {
+		switch {
+		case char >= 'a' && char <= 'z':
+		case char >= '0' && char <= '9':
+		case char == '_' || char == '-':
+		default:
+			return false
+		}
+	}
+	return name != ""
 }
 
 func (s *Service) listDefinitionVersions(ctx context.Context, definitionID string) ([]DefinitionVersionSummary, error) {

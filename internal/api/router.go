@@ -47,6 +47,21 @@ func NewRouter(cfg config.Config, logger *slog.Logger, build version.Info, live 
 			})
 			r.Get("/export", h.ExportScript)
 		})
+		r.Get("/json-schemas", h.ListJSONSchemas)
+		r.Post("/json-schemas", h.CreateJSONSchema)
+		r.Get("/json-schemas/export", h.ExportJSONSchemas)
+		r.Route("/json-schemas/{schemaID}", func(r chi.Router) {
+			r.Get("/", func(w http.ResponseWriter, r *http.Request) {
+				h.GetJSONSchema(w, r, chi.URLParam(r, "schemaID"))
+			})
+			r.Put("/", func(w http.ResponseWriter, r *http.Request) {
+				h.UpdateJSONSchema(w, r, chi.URLParam(r, "schemaID"))
+			})
+			r.Delete("/", func(w http.ResponseWriter, r *http.Request) {
+				h.DeleteJSONSchema(w, r, chi.URLParam(r, "schemaID"))
+			})
+			r.Get("/export", h.ExportJSONSchema)
+		})
 		r.Get("/agents", h.ListAgents)
 		r.Post("/agents", h.CreateAgent)
 		r.Route("/agents/{agentID}", func(r chi.Router) {

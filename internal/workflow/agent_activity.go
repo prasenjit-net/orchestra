@@ -37,7 +37,8 @@ func (a *agentActivity) Descriptor() ActivityDescriptor {
 		Tags:        []string{"ai", "llm", "openai", "claude", "copilot"},
 		ExampleInput: map[string]any{
 			"agentId": "agt_abc123",
-			"prompt":  "Summarize this: {{.input}}",
+			"prompt":  "Summarize this: {{.data.text}}",
+			"data":    map[string]any{"text": "mapped input goes here"},
 		},
 		ExampleOutput: map[string]any{
 			"content": "",
@@ -75,7 +76,7 @@ func (a *agentActivity) Execute(ctx context.Context, req ActivityExecutionReques
 		return ActivityResult{}, fmt.Errorf("lookup agent %q: %w", input.AgentID, err)
 	}
 
-	resolvedPrompt, err := resolveTemplate(input.Prompt, req.WorkflowContext)
+	resolvedPrompt, err := resolveTemplate(input.Prompt, req.Step.Input)
 	if err != nil {
 		return ActivityResult{}, fmt.Errorf("resolve prompt template: %w", err)
 	}

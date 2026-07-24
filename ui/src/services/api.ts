@@ -6,8 +6,11 @@ import type {
   CreateAgentInput,
   CreateMCPServerInput,
   CreateScriptInput,
+  CreateJSONSchemaInput,
   ImportAnalysis,
   ImportBundle,
+  JSONSchemaDocument,
+  JSONSchemasResponse,
   MCPServer,
   MCPServersResponse,
   ExampleResponse,
@@ -132,6 +135,38 @@ export const scriptsApi = {
     ),
   delete: async (id: string) => {
     const response = await fetch(buildApiUrl(`/scripts/${id}`), { method: 'DELETE' })
+    if (!response.ok) {
+      let message = `HTTP ${response.status}`
+      try {
+        const payload = await response.json()
+        if (payload?.error) message = payload.error
+      } catch { /* ignore */ }
+      throw new Error(message)
+    }
+  },
+}
+
+export const jsonSchemasApi = {
+  list: async () => handleResponse<JSONSchemasResponse>(await fetch(buildApiUrl('/json-schemas'))),
+  create: async (input: CreateJSONSchemaInput) =>
+    handleResponse<JSONSchemaDocument>(
+      await fetch(buildApiUrl('/json-schemas'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(input),
+      }),
+    ),
+  get: async (id: string) => handleResponse<JSONSchemaDocument>(await fetch(buildApiUrl(`/json-schemas/${id}`))),
+  update: async (id: string, input: CreateJSONSchemaInput) =>
+    handleResponse<JSONSchemaDocument>(
+      await fetch(buildApiUrl(`/json-schemas/${id}`), {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(input),
+      }),
+    ),
+  delete: async (id: string) => {
+    const response = await fetch(buildApiUrl(`/json-schemas/${id}`), { method: 'DELETE' })
     if (!response.ok) {
       let message = `HTTP ${response.status}`
       try {
@@ -327,6 +362,10 @@ export const importExportApi = {
     handleResponse<ImportBundle>(await fetch(buildApiUrl(`/agents/${id}/export`))),
   exportScript: async (id: string) =>
     handleResponse<ImportBundle>(await fetch(buildApiUrl(`/scripts/${id}/export`))),
+  exportJSONSchemas: async () =>
+    handleResponse<ImportBundle>(await fetch(buildApiUrl('/json-schemas/export'))),
+  exportJSONSchema: async (id: string) =>
+    handleResponse<ImportBundle>(await fetch(buildApiUrl(`/json-schemas/${id}/export`))),
   exportConnector: async (id: string) =>
     handleResponse<ImportBundle>(await fetch(buildApiUrl(`/mcp-servers/${id}/export`))),
   analyze: async (bundle: ImportBundle) =>
