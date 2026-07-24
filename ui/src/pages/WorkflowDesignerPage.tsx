@@ -82,7 +82,7 @@ const terminalTransitionTarget = '__end__'
 const stepNamePattern = /^[a-z0-9_-]+$/
 
 function makeID(prefix: string) {
-  return `${prefix}-${Math.random().toString(36).slice(2, 10)}`
+  return `${prefix}-${crypto.randomUUID()}`
 }
 
 function toStepID(value: string) {
@@ -95,7 +95,7 @@ function toStepID(value: string) {
 }
 
 function makeStepName(seed: string) {
-  return `${toStepID(seed) || 'step'}-${Math.random().toString(36).slice(2, 6)}`
+  return `${toStepID(seed) || 'step'}-${crypto.randomUUID().slice(0, 4)}`
 }
 
 function validateStepName(name: string) {
@@ -284,14 +284,14 @@ function formatStringListValue(value: unknown) {
   return value.map((item) => String(item)).join(', ')
 }
 
-function collectContextReferences(nodes: Node[], edges: Edge[], currentNodeID: string, inputFields: MappingField[]): ContextReference[] {
+function orderedPrecedingNodes(nodes: Node[], edges: Edge[], currentNodeID: string): ActivityFlowNode[] {
   const nodeMap = new Map(nodes.map((node) => [node.id, node]))
   const outgoing = new Map<string, string[]>()
   for (const edge of edges) {
     outgoing.set(edge.source, [...(outgoing.get(edge.source) ?? []), edge.target])
   }
 
-  const orderedPreviousNodes: ActivityFlowNode[] = []
+  const orderedNodes: ActivityFlowNode[] = []
   const visited = new Set<string>()
   let currentID = startNodeID
   while (!visited.has(currentID) && currentID !== currentNodeID) {
@@ -306,15 +306,27 @@ function collectContextReferences(nodes: Node[], edges: Edge[], currentNodeID: s
     }
     const nextNode = nodeMap.get(nextID)
     if (nextNode?.type === 'activity') {
-      orderedPreviousNodes.push(nextNode as ActivityFlowNode)
+      orderedNodes.push(nextNode as ActivityFlowNode)
     }
     currentID = nextID
   }
+  return orderedNodes
+}
+
+function describeInputField(field: MappingField) {
+  const details = ['Start input']
+  if (field.type) details.push(field.type)
+  if (field.required) details.push('required')
+  return `${details.join(' · ')}.`
+}
+
+function collectContextReferences(nodes: Node[], edges: Edge[], currentNodeID: string, inputFields: MappingField[]): ContextReference[] {
+  const orderedPreviousNodes = orderedPrecedingNodes(nodes, edges, currentNodeID)
 
   const references: ContextReference[] = inputFields.map((field) => ({
     label: field.path,
     template: `{{${field.path}}}`,
-    description: `Start input${field.type ? ` · ${field.type}` : ''}${field.required ? ' · required' : ''}.`,
+    description: describeInputField(field),
   }))
 
   for (const previousNode of orderedPreviousNodes) {
@@ -642,12 +654,12 @@ function ScriptActivityFields({
   payload,
   setField,
   onUpdate,
-}: {
+}: Readonly<{
   node: ActivityFlowNode
   payload: unknown
   setField: (key: string, value: string, options?: { removeWhenBlank?: boolean }) => void
   onUpdate: (updater: (data: ActivityNodeData) => ActivityNodeData) => void
-}) {
+}>) {
   const [savedMode, setSavedMode] = useState(() => Boolean(findInputRowValue(node.data.inputRows, 'scriptId')))
   const [showAssist, setShowAssist] = useState(false)
 
@@ -1906,6 +1918,51 @@ function buildGraphFromDefinition(definition: WorkflowDefinitionDocument, activi
   return { nodes, edges }
 }
 
+function indexOutgoingEdges(edges: Edge[]) {
+  const outgoingEdges = new Map<string, Edge[]>()
+  for (const edge of edges) {
+    outgoingEdges.set(edge.source, [...(outgoingEdges.get(edge.source) ?? []), edge])
+  }
+  return outgoingEdges
+}
+
+function discoverOrderedStepIDs(nodeMap: Map<string, Node>, outgoingEdges: Map<string, Edge[]>, firstNodeID: string) {
+  const orderedStepIds: string[] = []
+  const visited = new Set<string>()
+  const bfsQueue: string[] = [firstNodeID]
+
+  while (bfsQueue.length > 0) {
+    const currentID = bfsQueue.shift()!
+    if (visited.has(currentID) || currentID === endNodeID) continue
+    visited.add(currentID)
+
+    const node = nodeMap.get(currentID)
+    if (!node || node.type !== 'activity') continue
+    orderedStepIds.push(currentID)
+
+    for (const edge of outgoingEdges.get(currentID) ?? []) {
+      if (!visited.has(edge.target)) bfsQueue.push(edge.target)
+    }
+  }
+  return orderedStepIds
+}
+
+function buildStepNameMap(orderedStepIds: string[], nodeMap: Map<string, Node>) {
+  const stepNameByNodeId = new Map<string, string>()
+  const seenStepNames = new Set<string>()
+  for (const nodeId of orderedStepIds) {
+    const node = nodeMap.get(nodeId) as ActivityFlowNode
+    const stepName = node.data.label.trim()
+    validateStepName(stepName)
+    if (seenStepNames.has(stepName)) {
+      throw new Error(`Step name "${stepName}" must be unique.`)
+    }
+    seenStepNames.add(stepName)
+    stepNameByNodeId.set(nodeId, stepName)
+  }
+  return stepNameByNodeId
+}
+
 function compileDocument(
   name: string,
   description: string,
@@ -1923,54 +1980,20 @@ function compileDocument(
   }
 
   const nodeMap = new Map(nodes.map((node) => [node.id, node]))
-  const outgoingEdges = new Map<string, Edge[]>()
-  for (const edge of edges) {
-    outgoingEdges.set(edge.source, [...(outgoingEdges.get(edge.source) ?? []), edge])
-  }
+  const outgoingEdges = indexOutgoingEdges(edges)
 
   const startTargets = outgoingEdges.get(startNodeID) ?? []
   if (startTargets.length !== 1) {
     throw new Error('The start node must connect to exactly one step.')
   }
 
-  // BFS from start to discover step order
-  const orderedStepIds: string[] = []
-  const visited = new Set<string>()
-  const bfsQueue: string[] = [startTargets[0].target]
-
-  while (bfsQueue.length > 0) {
-    const currentID = bfsQueue.shift()!
-    if (visited.has(currentID) || currentID === endNodeID) continue
-    visited.add(currentID)
-
-    const node = nodeMap.get(currentID)
-    if (!node || node.type !== 'activity') continue
-
-    orderedStepIds.push(currentID)
-    for (const edge of outgoingEdges.get(currentID) ?? []) {
-      if (!visited.has(edge.target)) {
-        bfsQueue.push(edge.target)
-      }
-    }
-  }
+  const orderedStepIds = discoverOrderedStepIDs(nodeMap, outgoingEdges, startTargets[0].target)
 
   if (orderedStepIds.length !== activityNodes.length) {
     throw new Error('All activity nodes must be reachable from Start.')
   }
 
-  // Build name→index map for transition validation
-  const stepNameByNodeId = new Map<string, string>()
-  const seenStepNames = new Set<string>()
-  for (const nodeId of orderedStepIds) {
-    const node = nodeMap.get(nodeId) as ActivityFlowNode
-    const stepName = node.data.label.trim()
-    validateStepName(stepName)
-    if (seenStepNames.has(stepName)) {
-      throw new Error(`Step name "${stepName}" must be unique.`)
-    }
-    seenStepNames.add(stepName)
-    stepNameByNodeId.set(nodeId, stepName)
-  }
+  const stepNameByNodeId = buildStepNameMap(orderedStepIds, nodeMap)
 
   const steps = orderedStepIds.map((nodeId, index) => {
     const node = nodeMap.get(nodeId) as ActivityFlowNode
@@ -2154,7 +2177,7 @@ function WorkflowDesignerCanvas() {
     setWorkflowDescription(definitionQuery.data.document.description)
     setStartSchemaId(definitionQuery.data.document.startSchemaId ?? '')
     setEndSchemaId(definitionQuery.data.document.endSchemaId ?? '')
-    setEndOutputRows(rowsFromInput(definitionQuery.data.document.endOutput ?? {}, undefined))
+    setEndOutputRows(rowsFromInput(definitionQuery.data.document.endOutput ?? {}))
   }, [definitionId, definitionQuery.data, activitiesByName, setEdges, setNodes])
 
   const selectedNode = nodes.find((node) => node.selected && node.type === 'activity') as ActivityFlowNode | undefined
@@ -2333,8 +2356,8 @@ function WorkflowDesignerCanvas() {
 
   const removeNodeByID = useCallback(
     (nodeID: string) => {
-      const targetNode = nodes.find((node) => node.id === nodeID && node.type === 'activity')
-      if (!targetNode) {
+      const hasTargetNode = nodes.some((node) => node.id === nodeID && node.type === 'activity')
+      if (!hasTargetNode) {
         return
       }
 
@@ -2474,6 +2497,12 @@ function WorkflowDesignerCanvas() {
   const loadedDefinition = definitionQuery.data
   const viewedVersion = requestedVersion ?? loadedDefinition?.activeVersion ?? null
   const viewedVersionMeta = loadedDefinition?.versions.find((version) => version.version === viewedVersion)
+  let activationTitle = 'Activate this version for new workflow runs'
+  if (viewedVersionMeta?.status === 'draft') activationTitle = 'Publish this version before activating it'
+  else if (viewedVersion === loadedDefinition?.activeVersion) activationTitle = 'This version is already active'
+
+  let activationLabel = viewedVersion ? `Activate v${viewedVersion}` : 'Activate'
+  if (activateDefinitionMutation.isPending) activationLabel = 'Activating...'
 
   if (!isDesktop) {
     return (
@@ -2573,15 +2602,11 @@ function WorkflowDesignerCanvas() {
                   }
                 }}
                 disabled={activateDefinitionMutation.isPending || !viewedVersion || viewedVersionMeta?.status !== 'published' || viewedVersion === loadedDefinition?.activeVersion}
-                title={viewedVersionMeta?.status === 'draft'
-                  ? 'Publish this version before activating it'
-                  : viewedVersion === loadedDefinition?.activeVersion
-                    ? 'This version is already active'
-                    : 'Activate this version for new workflow runs'}
+                title={activationTitle}
                 className="inline-flex items-center gap-2 rounded-lg border border-emerald-200 px-3 py-2 text-xs font-semibold text-emerald-700 transition-colors hover:bg-emerald-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-emerald-900/40 dark:text-emerald-300 dark:hover:bg-emerald-950/20"
               >
                 <Play className="h-4 w-4" />
-                {activateDefinitionMutation.isPending ? 'Activating…' : viewedVersion ? `Activate v${viewedVersion}` : 'Activate'}
+                {activationLabel}
               </button>
             ) : null}
           </div>

@@ -31,7 +31,7 @@ function flatKeys(obj: Record<string, unknown>, prefix = ''): string[] {
   })
 }
 
-export default function ContextExpressionPicker({ inputFields = [], precedingSteps, signalNames = [], onSelect }: Props) {
+export default function ContextExpressionPicker({ inputFields = [], precedingSteps, signalNames = [], onSelect }: Readonly<Props>) {
   const [open, setOpen] = useState(false)
   const [dropdownPos, setDropdownPos] = useState<{ top: number; left: number }>({ top: 0, left: 0 })
   const buttonRef = useRef<HTMLButtonElement>(null)
@@ -141,7 +141,7 @@ export default function ContextExpressionPicker({ inputFields = [], precedingSte
   )
 }
 
-function Section({ label, children }: { label: string; children: React.ReactNode }) {
+function Section({ label, children }: Readonly<{ label: string; children: React.ReactNode }>) {
   return (
     <div>
       <div className="sticky top-0 bg-gray-50 px-3 py-1 text-[10px] font-semibold uppercase tracking-wide text-gray-400 dark:bg-slate-800 dark:text-slate-500">
@@ -152,7 +152,7 @@ function Section({ label, children }: { label: string; children: React.ReactNode
   )
 }
 
-function Item({ label, detail, onPick }: { label: string; detail?: string; onPick: (v: string) => void }) {
+function Item({ label, detail, onPick }: Readonly<{ label: string; detail?: string; onPick: (v: string) => void }>) {
   return (
     <button
       type="button"

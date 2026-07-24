@@ -35,10 +35,10 @@ func (s *Service) validateStartInputTx(ctx context.Context, tx *sql.Tx, definiti
 	if strings.TrimSpace(definition.StartSchemaID) == "" {
 		return nil
 	}
-	row := tx.QueryRowContext(ctx, s.rebind(`
+	row := s.queryRowTx(ctx, tx, `
 		SELECT id, name, description, schema_json, created_at, updated_at
 		FROM json_schemas WHERE id = ?
-	`), definition.StartSchemaID)
+	`, definition.StartSchemaID)
 	schema, err := scanJSONSchema(row)
 	if err != nil {
 		return fmt.Errorf("load start schema: %w", err)
@@ -60,7 +60,15 @@ func validateJSONSchemaValue(schema map[string]any, value any, path string) erro
 	if ref, _ := schema["$ref"].(string); strings.TrimSpace(ref) != "" {
 		return nil
 	}
-	if enum, ok := schema["enum"].([]any); ok && len(enum) > 0 {
+	if err := validateEnumValue(schema["enum"], value, path); err != nil {
+		return err
+	}
+	schemaType, _ := schema["type"].(string)
+	return validateJSONSchemaType(schemaType, schema, value, path)
+}
+
+func validateEnumValue(rawEnum, value any, path string) error {
+	if enum, ok := rawEnum.([]any); ok && len(enum) > 0 {
 		matched := false
 		for _, allowed := range enum {
 			if valuesEqualJSON(allowed, value) {
@@ -72,59 +80,77 @@ func validateJSONSchemaValue(schema map[string]any, value any, path string) erro
 			return fmt.Errorf("%s must be one of the allowed enum values", path)
 		}
 	}
+	return nil
+}
 
-	schemaType, _ := schema["type"].(string)
+func validateJSONSchemaType(schemaType string, schema map[string]any, value any, path string) error {
 	switch schemaType {
 	case "", "object":
-		if schemaType == "object" || schema["properties"] != nil || schema["required"] != nil {
-			object, ok := value.(map[string]any)
-			if !ok {
-				return fmt.Errorf("%s must be an object", path)
-			}
-			if err := validateObjectSchema(schema, object, path); err != nil {
-				return err
-			}
-		}
+		return validateObjectValue(schemaType, schema, value, path)
 	case "array":
-		items, ok := value.([]any)
-		if !ok {
-			return fmt.Errorf("%s must be an array", path)
-		}
-		if err := validateArraySchema(schema, items, path); err != nil {
-			return err
-		}
+		return validateArrayValue(schema, value, path)
 	case "string":
-		text, ok := value.(string)
-		if !ok {
-			return fmt.Errorf("%s must be a string", path)
-		}
-		if err := validateStringSchema(schema, text, path); err != nil {
-			return err
-		}
+		return validateStringValue(schema, value, path)
 	case "number":
-		number, ok := numberValue(value)
-		if !ok {
-			return fmt.Errorf("%s must be a number", path)
-		}
-		if err := validateNumberSchema(schema, number, path); err != nil {
-			return err
-		}
+		return validateNumericValue(schema, value, path, false)
 	case "integer":
-		number, ok := numberValue(value)
-		if !ok || math.Trunc(number) != number {
+		return validateNumericValue(schema, value, path, true)
+	case "boolean":
+		return validateBooleanValue(value, path)
+	case "null":
+		return validateNullValue(value, path)
+	}
+	return nil
+}
+
+func validateObjectValue(schemaType string, schema map[string]any, value any, path string) error {
+	if schemaType == "" && schema["properties"] == nil && schema["required"] == nil {
+		return nil
+	}
+	object, ok := value.(map[string]any)
+	if !ok {
+		return fmt.Errorf("%s must be an object", path)
+	}
+	return validateObjectSchema(schema, object, path)
+}
+
+func validateArrayValue(schema map[string]any, value any, path string) error {
+	items, ok := value.([]any)
+	if !ok {
+		return fmt.Errorf("%s must be an array", path)
+	}
+	return validateArraySchema(schema, items, path)
+}
+
+func validateStringValue(schema map[string]any, value any, path string) error {
+	text, ok := value.(string)
+	if !ok {
+		return fmt.Errorf("%s must be a string", path)
+	}
+	return validateStringSchema(schema, text, path)
+}
+
+func validateNumericValue(schema map[string]any, value any, path string, integer bool) error {
+	number, ok := numberValue(value)
+	if !ok || integer && math.Trunc(number) != number {
+		if integer {
 			return fmt.Errorf("%s must be an integer", path)
 		}
-		if err := validateNumberSchema(schema, number, path); err != nil {
-			return err
-		}
-	case "boolean":
-		if _, ok := value.(bool); !ok {
-			return fmt.Errorf("%s must be a boolean", path)
-		}
-	case "null":
-		if value != nil {
-			return fmt.Errorf("%s must be null", path)
-		}
+		return fmt.Errorf("%s must be a number", path)
+	}
+	return validateNumberSchema(schema, number, path)
+}
+
+func validateBooleanValue(value any, path string) error {
+	if _, ok := value.(bool); !ok {
+		return fmt.Errorf("%s must be a boolean", path)
+	}
+	return nil
+}
+
+func validateNullValue(value any, path string) error {
+	if value != nil {
+		return fmt.Errorf("%s must be null", path)
 	}
 	return nil
 }

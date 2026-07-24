@@ -171,7 +171,7 @@ func resolveStepInput(raw json.RawMessage, contextRaw json.RawMessage) (json.Raw
 	return json.RawMessage(encoded), nil
 }
 
-func resolveEndOutput(raw json.RawMessage, contextRaw json.RawMessage) (json.RawMessage, error) {
+func resolveEndOutput(raw, contextRaw json.RawMessage) (json.RawMessage, error) {
 	if len(raw) == 0 {
 		return nil, nil
 	}

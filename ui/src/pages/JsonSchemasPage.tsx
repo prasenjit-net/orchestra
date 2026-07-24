@@ -58,6 +58,10 @@ export default function JsonSchemasPage() {
     }
   }
 
+  let importLabel = 'Import'
+  if (importHook.state.isAnalyzing) importLabel = 'Analyzing...'
+  else if (importHook.state.isApplying) importLabel = 'Importing...'
+
   return (
     <div className="space-y-8 p-8">
       <div className="flex items-center justify-between gap-4">
@@ -83,7 +87,7 @@ export default function JsonSchemasPage() {
             className="inline-flex items-center gap-2 rounded-lg border border-gray-200 px-4 py-2 text-sm font-semibold text-gray-700 transition-colors hover:bg-gray-50 disabled:opacity-60 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800"
           >
             <Upload className="h-4 w-4" />
-            {importHook.state.isAnalyzing ? 'Analyzing…' : importHook.state.isApplying ? 'Importing…' : 'Import'}
+            {importLabel}
           </button>
           <button
             type="button"

@@ -42,10 +42,10 @@ func (s *Service) CreateJSONSchema(ctx context.Context, input CreateJSONSchemaIn
 	now := time.Now().UTC()
 	ts := formatTime(now)
 	id := generateID("jsn")
-	if _, err := s.db.ExecContext(ctx, s.rebind(`
+	if _, err := s.execDBQuery(ctx, `
 		INSERT INTO json_schemas (id, name, description, schema_json, created_at, updated_at)
 		VALUES (?, ?, ?, ?, ?, ?)
-	`), id, name, strings.TrimSpace(input.Description), string(schema), ts, ts); err != nil {
+	`, id, name, strings.TrimSpace(input.Description), string(schema), ts, ts); err != nil {
 		return JSONSchema{}, fmt.Errorf("insert JSON schema: %w", err)
 	}
 
@@ -62,7 +62,7 @@ func (s *Service) CreateJSONSchema(ctx context.Context, input CreateJSONSchemaIn
 }
 
 func (s *Service) ListJSONSchemas(ctx context.Context) ([]JSONSchema, error) {
-	rows, err := s.db.QueryContext(ctx, `
+	rows, err := s.queryDB(ctx, `
 		SELECT id, name, description, schema_json, created_at, updated_at
 		FROM json_schemas ORDER BY updated_at DESC
 	`)
@@ -89,10 +89,10 @@ func (s *Service) ListJSONSchemas(ctx context.Context) ([]JSONSchema, error) {
 }
 
 func (s *Service) GetJSONSchema(ctx context.Context, id string) (JSONSchema, error) {
-	row := s.db.QueryRowContext(ctx, s.rebind(`
+	row := s.queryRowDB(ctx, `
 		SELECT id, name, description, schema_json, created_at, updated_at
 		FROM json_schemas WHERE id = ?
-	`), id)
+	`, id)
 	return scanJSONSchema(row)
 }
 
@@ -108,10 +108,10 @@ func (s *Service) UpdateJSONSchema(ctx context.Context, id string, input CreateJ
 
 	now := time.Now().UTC()
 	ts := formatTime(now)
-	res, err := s.db.ExecContext(ctx, s.rebind(`
+	res, err := s.execDBQuery(ctx, `
 		UPDATE json_schemas SET name = ?, description = ?, schema_json = ?, updated_at = ?
 		WHERE id = ?
-	`), name, strings.TrimSpace(input.Description), string(schema), ts, id)
+	`, name, strings.TrimSpace(input.Description), string(schema), ts, id)
 	if err != nil {
 		return JSONSchema{}, fmt.Errorf("update JSON schema: %w", err)
 	}
@@ -128,7 +128,7 @@ func (s *Service) UpdateJSONSchema(ctx context.Context, id string, input CreateJ
 }
 
 func (s *Service) DeleteJSONSchema(ctx context.Context, id string) error {
-	res, err := s.db.ExecContext(ctx, s.rebind(`DELETE FROM json_schemas WHERE id = ?`), id)
+	res, err := s.execDBQuery(ctx, `DELETE FROM json_schemas WHERE id = ?`, id)
 	if err != nil {
 		return fmt.Errorf("delete JSON schema: %w", err)
 	}

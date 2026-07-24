@@ -105,7 +105,7 @@ const knownSchemaKeywords = new Set([
 ])
 
 function makeId() {
-  return `node-${Math.random().toString(36).slice(2, 10)}`
+  return `node-${crypto.randomUUID()}`
 }
 
 function defaultNode(name: string, type: SchemaNodeType, required = false): SchemaNode {
@@ -187,46 +187,65 @@ function extraKeywordsFromSchema(schema: Record<string, unknown>) {
   return Object.keys(extra).length ? JSON.stringify(extra, null, 2) : ''
 }
 
-function fromSchema(schema: Record<string, unknown>, name = 'root', required = false): SchemaNode {
-  const type = detectType(schema)
-  const node = defaultNode(name, type, required)
-  node.title = typeof schema.title === 'string' ? schema.title : ''
-  node.description = typeof schema.description === 'string' ? schema.description : ''
-  node.format = typeof schema.format === 'string' ? schema.format : ''
-  node.enumValues = enumToText(schema.enum)
-  node.defaultValue = stringifyLoose(schema.default)
-  node.constValue = stringifyLoose(schema.const)
-  node.refEnabled = typeof schema.$ref === 'string'
-  node.ref = typeof schema.$ref === 'string' ? schema.$ref : ''
-  node.refOnly = !!node.ref && Object.keys(schema).every((key) => ['$ref', 'title', 'description', '$comment'].includes(key))
-  node.schemaId = typeof schema.$id === 'string' ? schema.$id : ''
-  node.comment = typeof schema.$comment === 'string' ? schema.$comment : ''
-  node.examples = Array.isArray(schema.examples) ? JSON.stringify(schema.examples, null, 2) : ''
-  node.extraKeywords = extraKeywordsFromSchema(schema)
-  node.pattern = typeof schema.pattern === 'string' ? schema.pattern : ''
+function schemaString(schema: Record<string, unknown>, key: string) {
+  const value = schema[key]
+  return typeof value === 'string' ? value : ''
+}
+
+function applyTextMetadata(node: SchemaNode, schema: Record<string, unknown>) {
+  node.title = schemaString(schema, 'title')
+  node.description = schemaString(schema, 'description')
+  node.format = schemaString(schema, 'format')
+  node.schemaId = schemaString(schema, '$id')
+  node.comment = schemaString(schema, '$comment')
+  node.pattern = schemaString(schema, 'pattern')
+}
+
+function applyReferenceMetadata(node: SchemaNode, schema: Record<string, unknown>) {
+  node.ref = schemaString(schema, '$ref')
+  node.refEnabled = Boolean(node.ref)
+  node.refOnly = Boolean(node.ref) && Object.keys(schema).every((key) => ['$ref', 'title', 'description', '$comment'].includes(key))
+}
+
+function applyNumericMetadata(node: SchemaNode, schema: Record<string, unknown>) {
   for (const key of numberFormats) {
     const value = schema[key]
     if (typeof value === 'number') {
       node[key as keyof Pick<SchemaNode, 'minimum' | 'maximum' | 'exclusiveMinimum' | 'exclusiveMaximum' | 'multipleOf' | 'minLength' | 'maxLength' | 'minItems' | 'maxItems' | 'minProperties' | 'maxProperties'>] = String(value)
     }
   }
+}
+
+function applyNodeStructure(node: SchemaNode, schema: Record<string, unknown>) {
+  if (node.type === 'object') {
+    const properties = asRecord(schema.properties) ?? {}
+    const requiredFields = Array.isArray(schema.required) ? schema.required.filter((item): item is string => typeof item === 'string') : []
+    node.children = Object.entries(properties)
+      .map(([propertyName, propertySchema]) => fromSchema(asRecord(propertySchema) ?? {}, propertyName, requiredFields.includes(propertyName)))
+  }
+  if (node.type === 'array') {
+    node.item = fromSchema(asRecord(schema.items) ?? { type: 'string' }, 'items')
+  }
+}
+
+function fromSchema(schema: Record<string, unknown>, name = 'root', required = false): SchemaNode {
+  const type = detectType(schema)
+  const node = defaultNode(name, type, required)
+  applyTextMetadata(node, schema)
+  applyReferenceMetadata(node, schema)
+  applyNumericMetadata(node, schema)
+  node.enumValues = enumToText(schema.enum)
+  node.defaultValue = stringifyLoose(schema.default)
+  node.constValue = stringifyLoose(schema.const)
+  node.examples = Array.isArray(schema.examples) ? JSON.stringify(schema.examples, null, 2) : ''
+  node.extraKeywords = extraKeywordsFromSchema(schema)
   node.deprecated = schema.deprecated === true
   node.readOnly = schema.readOnly === true
   node.writeOnly = schema.writeOnly === true
   node.uniqueItems = schema.uniqueItems === true
   node.additionalProperties = schema.additionalProperties !== false
 
-  if (type === 'object') {
-    const properties = asRecord(schema.properties) ?? {}
-    const requiredFields = Array.isArray(schema.required) ? schema.required.filter((item): item is string => typeof item === 'string') : []
-    node.children = Object.entries(properties)
-      .map(([propertyName, propertySchema]) => fromSchema(asRecord(propertySchema) ?? {}, propertyName, requiredFields.includes(propertyName)))
-  }
-
-  if (type === 'array') {
-    node.item = fromSchema(asRecord(schema.items) ?? { type: 'string' }, 'items')
-  }
-
+  applyNodeStructure(node, schema)
   return node
 }
 
@@ -289,25 +308,19 @@ function findSchemaByRef(schemas: JSONSchemaDocument[], ref: string) {
   return schemas.find((schema) => schemaReferenceValue(schema) === trimmed || `orchestra://json-schemas/${schema.id}` === trimmed)
 }
 
-function toSchema(node: SchemaNode, isRoot = false): Record<string, unknown> {
-  const schema: Record<string, unknown> = parseObject(node.extraKeywords) ?? {}
-  if (node.refEnabled && node.ref.trim() && node.refOnly) {
-    const refSchema: Record<string, unknown> = { $ref: node.ref.trim() }
-    if (node.title.trim()) refSchema.title = node.title.trim()
-    if (node.description.trim()) refSchema.description = node.description.trim()
-    if (node.comment.trim()) refSchema.$comment = node.comment.trim()
-    return refSchema
-  }
-  if (isRoot) {
-    schema.$schema = 'https://json-schema.org/draft/2020-12/schema'
-  }
+function addOptionalText(schema: Record<string, unknown>, key: string, value: string) {
+  if (value.trim()) schema[key] = value.trim()
+}
+
+function addCommonKeywords(schema: Record<string, unknown>, node: SchemaNode, isRoot: boolean) {
+  if (isRoot) schema.$schema = 'https://json-schema.org/draft/2020-12/schema'
   schema.type = node.type
-  if (node.refEnabled && node.ref.trim()) schema.$ref = node.ref.trim()
-  if (isRoot && node.schemaId.trim()) schema.$id = node.schemaId.trim()
-  if (node.comment.trim()) schema.$comment = node.comment.trim()
-  if (node.title.trim()) schema.title = node.title.trim()
-  if (node.description.trim()) schema.description = node.description.trim()
-  if (node.format.trim()) schema.format = node.format.trim()
+  if (node.refEnabled) addOptionalText(schema, '$ref', node.ref)
+  if (isRoot) addOptionalText(schema, '$id', node.schemaId)
+  addOptionalText(schema, '$comment', node.comment)
+  addOptionalText(schema, 'title', node.title)
+  addOptionalText(schema, 'description', node.description)
+  addOptionalText(schema, 'format', node.format)
   if (node.enumValues.trim()) schema.enum = enumFromText(node.enumValues)
   const examples = parseArray(node.examples)
   if (examples) schema.examples = examples
@@ -318,41 +331,57 @@ function toSchema(node: SchemaNode, isRoot = false): Record<string, unknown> {
   if (node.deprecated) schema.deprecated = true
   if (node.readOnly) schema.readOnly = true
   if (node.writeOnly) schema.writeOnly = true
+}
 
-  if (node.type === 'object') {
-    const properties: Record<string, unknown> = {}
-    const required = node.children.filter((child) => child.required).map((child) => child.name.trim()).filter(Boolean)
-    for (const child of node.children) {
-      const key = child.name.trim()
-      if (key) properties[key] = toSchema(child)
-    }
-    schema.properties = properties
-    if (required.length > 0) schema.required = required
-    schema.additionalProperties = node.additionalProperties
-    addNumeric(schema, 'minProperties', node.minProperties)
-    addNumeric(schema, 'maxProperties', node.maxProperties)
+function addObjectKeywords(schema: Record<string, unknown>, node: SchemaNode) {
+  const properties: Record<string, unknown> = {}
+  const required = node.children.filter((child) => child.required).map((child) => child.name.trim()).filter(Boolean)
+  for (const child of node.children) {
+    const key = child.name.trim()
+    if (key) properties[key] = toSchema(child)
   }
+  schema.properties = properties
+  if (required.length > 0) schema.required = required
+  schema.additionalProperties = node.additionalProperties
+  addNumeric(schema, 'minProperties', node.minProperties)
+  addNumeric(schema, 'maxProperties', node.maxProperties)
+}
 
-  if (node.type === 'array') {
-    schema.items = toSchema(node.item ?? defaultNode('items', 'string'))
-    addNumeric(schema, 'minItems', node.minItems)
-    addNumeric(schema, 'maxItems', node.maxItems)
-    if (node.uniqueItems) schema.uniqueItems = true
-  }
+function addArrayKeywords(schema: Record<string, unknown>, node: SchemaNode) {
+  schema.items = toSchema(node.item ?? defaultNode('items', 'string'))
+  addNumeric(schema, 'minItems', node.minItems)
+  addNumeric(schema, 'maxItems', node.maxItems)
+  if (node.uniqueItems) schema.uniqueItems = true
+}
 
-  if (node.type === 'string') {
-    if (node.pattern.trim()) schema.pattern = node.pattern.trim()
-    addNumeric(schema, 'minLength', node.minLength)
-    addNumeric(schema, 'maxLength', node.maxLength)
-  }
+function addStringKeywords(schema: Record<string, unknown>, node: SchemaNode) {
+  addOptionalText(schema, 'pattern', node.pattern)
+  addNumeric(schema, 'minLength', node.minLength)
+  addNumeric(schema, 'maxLength', node.maxLength)
+}
 
-  if (node.type === 'number' || node.type === 'integer') {
-    addNumeric(schema, 'minimum', node.minimum)
-    addNumeric(schema, 'maximum', node.maximum)
-    addNumeric(schema, 'exclusiveMinimum', node.exclusiveMinimum)
-    addNumeric(schema, 'exclusiveMaximum', node.exclusiveMaximum)
-    addNumeric(schema, 'multipleOf', node.multipleOf)
+function addNumberKeywords(schema: Record<string, unknown>, node: SchemaNode) {
+  addNumeric(schema, 'minimum', node.minimum)
+  addNumeric(schema, 'maximum', node.maximum)
+  addNumeric(schema, 'exclusiveMinimum', node.exclusiveMinimum)
+  addNumeric(schema, 'exclusiveMaximum', node.exclusiveMaximum)
+  addNumeric(schema, 'multipleOf', node.multipleOf)
+}
+
+function toSchema(node: SchemaNode, isRoot = false): Record<string, unknown> {
+  const schema: Record<string, unknown> = parseObject(node.extraKeywords) ?? {}
+  if (node.refEnabled && node.ref.trim() && node.refOnly) {
+    const refSchema: Record<string, unknown> = { $ref: node.ref.trim() }
+    if (node.title.trim()) refSchema.title = node.title.trim()
+    if (node.description.trim()) refSchema.description = node.description.trim()
+    if (node.comment.trim()) refSchema.$comment = node.comment.trim()
+    return refSchema
   }
+  addCommonKeywords(schema, node, isRoot)
+  if (node.type === 'object') addObjectKeywords(schema, node)
+  if (node.type === 'array') addArrayKeywords(schema, node)
+  if (node.type === 'string') addStringKeywords(schema, node)
+  if (node.type === 'number' || node.type === 'integer') addNumberKeywords(schema, node)
 
   return schema
 }
@@ -374,10 +403,13 @@ function findNode(root: SchemaNode, id: string): SchemaNode | undefined {
 }
 
 function removeNode(root: SchemaNode, id: string): SchemaNode {
+  let item = root.item
+  if (item?.id === id) item = undefined
+  else if (item) item = removeNode(item, id)
   return {
     ...root,
     children: root.children.filter((child) => child.id !== id).map((child) => removeNode(child, id)),
-    item: root.item?.id === id ? undefined : root.item ? removeNode(root.item, id) : undefined,
+    item,
   }
 }
 
@@ -417,18 +449,13 @@ function duplicateNode(root: SchemaNode, id: string): { root: SchemaNode; duplic
     if (result.duplicatedId) duplicatedId = result.duplicatedId
     return result.root
   })
-  return {
-    root: {
-      ...root,
-      children,
-      item: root.item ? (() => {
-        const result = duplicateNode(root.item, id)
-        if (result.duplicatedId) duplicatedId = result.duplicatedId
-        return result.root
-      })() : undefined,
-    },
-    duplicatedId,
+  let item = root.item
+  if (item) {
+    const result = duplicateNode(item, id)
+    if (result.duplicatedId) duplicatedId = result.duplicatedId
+    item = result.root
   }
+  return { root: { ...root, children, item }, duplicatedId }
 }
 
 function nodeMatchesSearch(node: SchemaNode, search: string) {
@@ -477,7 +504,40 @@ function typeBadgeColor(type: SchemaNodeType) {
   }
 }
 
-function validateNode(node: SchemaNode, path = 'root', issues: string[] = []) {
+function referenceSelectLabel(isLoading: boolean, schemaCount: number) {
+  if (isLoading) return 'Loading schemas...'
+  if (schemaCount > 0) return 'Manual reference'
+  return 'No other schemas available'
+}
+
+function schemaIssueSummary(issueCount: number) {
+  if (issueCount === 0) return 'Schema checks passed'
+  const suffix = issueCount === 1 ? '' : 's'
+  return `${issueCount} schema issue${suffix}`
+}
+
+function getReferenceWarnings(node: SchemaNode, schemas: JSONSchemaDocument[], currentSchemaId?: string) {
+  if (!node.refEnabled) return []
+  const warnings: string[] = []
+  if (!node.ref.trim()) {
+    warnings.push('Choose an existing schema or enter a manual reference.')
+  }
+  if (currentSchemaId && node.ref.includes(currentSchemaId)) {
+    warnings.push('This node appears to reference the schema currently being edited.')
+  }
+  const matched = findSchemaByRef(schemas, node.ref)
+  if (matched && !(typeof matched.schema.$id === 'string' && matched.schema.$id.trim())) {
+    warnings.push('Selected schema has no $id, so Orchestra is using a local URI fallback.')
+  }
+  return warnings
+}
+
+function ExpandIcon({ hasChildren, isExpanded }: Readonly<{ hasChildren: boolean; isExpanded: boolean }>) {
+  if (!hasChildren) return null
+  return isExpanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />
+}
+
+function validatePattern(node: SchemaNode, path: string, issues: string[]) {
   if (node.pattern.trim()) {
     try {
       new RegExp(node.pattern)
@@ -485,6 +545,9 @@ function validateNode(node: SchemaNode, path = 'root', issues: string[] = []) {
       issues.push(`${path}: pattern is not a valid regular expression`)
     }
   }
+}
+
+function validateRanges(node: SchemaNode, path: string, issues: string[]) {
   const pairs: Array<[string, string, string]> = [
     ['minimum', node.minimum, node.maximum],
     ['exclusiveMinimum', node.exclusiveMinimum, node.exclusiveMaximum],
@@ -497,6 +560,9 @@ function validateNode(node: SchemaNode, path = 'root', issues: string[] = []) {
       issues.push(`${path}: ${label} exceeds the matching maximum`)
     }
   }
+}
+
+function validateNumericKeywords(node: SchemaNode, path: string, issues: string[]) {
   for (const [key, value] of Object.entries({
     minimum: node.minimum,
     maximum: node.maximum,
@@ -517,6 +583,9 @@ function validateNode(node: SchemaNode, path = 'root', issues: string[] = []) {
   if (node.multipleOf.trim() && Number(node.multipleOf) <= 0) {
     issues.push(`${path}: multipleOf must be greater than zero`)
   }
+}
+
+function validateStructuredKeywords(node: SchemaNode, path: string, issues: string[]) {
   if (node.refEnabled && !node.ref.trim()) {
     issues.push(`${path}: $ref is enabled but empty`)
   }
@@ -529,6 +598,13 @@ function validateNode(node: SchemaNode, path = 'root', issues: string[] = []) {
   if (node.enumValues.trim() && enumFromText(node.enumValues).length === 0) {
     issues.push(`${path}: enum needs at least one value`)
   }
+}
+
+function validateNode(node: SchemaNode, path = 'root', issues: string[] = []) {
+  validatePattern(node, path, issues)
+  validateRanges(node, path, issues)
+  validateNumericKeywords(node, path, issues)
+  validateStructuredKeywords(node, path, issues)
   for (const child of node.children) {
     validateNode(child, `${path}.${child.name || '<unnamed>'}`, issues)
   }
@@ -580,7 +656,7 @@ export default function JsonSchemaEditorPage() {
   const generatedJSON = useMemo(() => JSON.stringify(generatedSchema, null, 2), [generatedSchema])
   const schemaIssues = useMemo(() => validateNode(root).slice(0, 12), [root])
   const selectedNode = findNode(root, selectedId) ?? root
-  const selectedRow = collectVisible(root, new Set(root.id ? [root.id, ...Array.from(expanded)] : []))
+  const selectedRow = collectVisible(root, new Set([root.id, ...Array.from(expanded)]))
     .find((row) => row.node.id === selectedNode.id)
   const isRootSelected = selectedNode.id === root.id
   const isArrayItem = selectedRow?.parentType === 'array' && selectedNode.name === 'items'
@@ -593,21 +669,11 @@ export default function JsonSchemaEditorPage() {
     [availableSchemas, selectedNode.ref],
   )
   const selectedReferenceSchemaId = selectedNode.refSchemaId || matchedReferenceSchema?.id || ''
-  const referenceWarnings = useMemo(() => {
-    if (!selectedNode.refEnabled) return []
-    const warnings: string[] = []
-    if (!selectedNode.ref.trim()) {
-      warnings.push('Choose an existing schema or enter a manual reference.')
-    }
-    if (schemaId && selectedNode.ref.includes(schemaId)) {
-      warnings.push('This node appears to reference the schema currently being edited.')
-    }
-    const matched = findSchemaByRef(availableSchemas, selectedNode.ref)
-    if (matched && !(typeof matched.schema.$id === 'string' && matched.schema.$id.trim())) {
-      warnings.push('Selected schema has no $id, so Orchestra is using a local URI fallback.')
-    }
-    return warnings
-  }, [availableSchemas, schemaId, selectedNode.ref, selectedNode.refEnabled])
+  const referenceOptionLabel = referenceSelectLabel(schemasQuery.isLoading, availableSchemas.length)
+  const referenceWarnings = useMemo(
+    () => getReferenceWarnings(selectedNode, availableSchemas, schemaId),
+    [availableSchemas, schemaId, selectedNode],
+  )
 
   const createMutation = useMutation({
     mutationFn: jsonSchemasApi.create,
@@ -796,12 +862,12 @@ export default function JsonSchemaEditorPage() {
       <div className="shrink-0 border-b border-gray-200 bg-gray-50 px-5 py-2.5 dark:border-slate-800 dark:bg-slate-950">
         <div className="flex flex-wrap items-center gap-4">
           <div className="flex items-center gap-2">
-            <label className="shrink-0 text-[11px] font-semibold uppercase text-gray-400 dark:text-slate-500">Name</label>
-            <input value={name} onChange={(event) => setName(event.target.value)} placeholder="customer-profile" className="rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-sm text-gray-900 outline-none transition-colors focus:border-primary-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100" />
+            <label htmlFor="schema-name" className="shrink-0 text-[11px] font-semibold uppercase text-gray-400 dark:text-slate-500">Name</label>
+            <input id="schema-name" value={name} onChange={(event) => setName(event.target.value)} placeholder="customer-profile" className="rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-sm text-gray-900 outline-none transition-colors focus:border-primary-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100" />
           </div>
           <div className="flex min-w-64 flex-1 items-center gap-2">
-            <label className="shrink-0 text-[11px] font-semibold uppercase text-gray-400 dark:text-slate-500">Description</label>
-            <input value={description} onChange={(event) => setDescription(event.target.value)} placeholder="Shape of the data this schema describes" className="w-full rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-sm text-gray-900 outline-none transition-colors focus:border-primary-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100" />
+            <label htmlFor="schema-description" className="shrink-0 text-[11px] font-semibold uppercase text-gray-400 dark:text-slate-500">Description</label>
+            <input id="schema-description" value={description} onChange={(event) => setDescription(event.target.value)} placeholder="Shape of the data this schema describes" className="w-full rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-sm text-gray-900 outline-none transition-colors focus:border-primary-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100" />
           </div>
           {!isNew && <span className="font-mono text-[11px] text-gray-400 dark:text-slate-500">id: {schemaId}</span>}
         </div>
@@ -852,21 +918,19 @@ export default function JsonSchemaEditorPage() {
               const active = node.id === selectedNode.id
               return (
                 <div key={node.id} className="mb-1">
-                  <button
-                    type="button"
-                    onClick={() => setSelectedId(node.id)}
+                  <div
                     className={clsx(
                       'flex h-10 w-full items-center gap-2 rounded-lg px-2 text-left text-sm transition-colors',
                       active ? 'bg-primary-50 text-primary-800 dark:bg-primary-900/30 dark:text-primary-100' : 'text-gray-700 hover:bg-gray-50 dark:text-slate-300 dark:hover:bg-slate-800',
                     )}
                     style={{ paddingLeft: `${8 + depth * 18}px` }}
                   >
-                    <span
-                      role="button"
-                      tabIndex={0}
+                    <button
+                      type="button"
+                      disabled={!hasChildren}
+                      title={hasChildren ? (expanded.has(node.id) ? 'Collapse node' : 'Expand node') : undefined}
                       onClick={(event) => {
                         event.stopPropagation()
-                        if (!hasChildren) return
                         setExpanded((current) => {
                           const next = new Set(current)
                           if (next.has(node.id)) next.delete(node.id)
@@ -874,19 +938,16 @@ export default function JsonSchemaEditorPage() {
                           return next
                         })
                       }}
-                      onKeyDown={(event) => {
-                        if (event.key !== 'Enter' && event.key !== ' ') return
-                        event.preventDefault()
-                        event.currentTarget.click()
-                      }}
-                      className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded text-gray-400"
+                      className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded text-gray-400 disabled:cursor-default"
                     >
-                      {hasChildren ? expanded.has(node.id) ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" /> : null}
-                    </span>
-                    <span className="min-w-0 flex-1 truncate font-medium">{path.length ? node.name : 'root'}</span>
-                    {node.required && <span className="text-[10px] font-semibold text-red-500">req</span>}
-                    <span className={clsx('shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold', typeBadgeColor(node.type))}>{node.type}</span>
-                  </button>
+                      <ExpandIcon hasChildren={hasChildren} isExpanded={expanded.has(node.id)} />
+                    </button>
+                    <button type="button" onClick={() => setSelectedId(node.id)} className="flex min-w-0 flex-1 items-center gap-2 text-left">
+                      <span className="min-w-0 flex-1 truncate font-medium">{path.length ? node.name : 'root'}</span>
+                      {node.required && <span className="text-[10px] font-semibold text-red-500">req</span>}
+                      <span className={clsx('shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold', typeBadgeColor(node.type))}>{node.type}</span>
+                    </button>
+                  </div>
                 </div>
               )
             })}
@@ -948,7 +1009,7 @@ export default function JsonSchemaEditorPage() {
                     onChange={(event) => handleReferenceToggle(event.target.checked)}
                     className="h-4 w-4 rounded accent-primary-600"
                   />
-                  Use $ref
+                  <span>Use $ref</span>
                 </label>
               </div>
 
@@ -962,7 +1023,7 @@ export default function JsonSchemaEditorPage() {
                       disabled={schemasQuery.isLoading || availableSchemas.length === 0}
                       className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm outline-none transition-colors focus:border-primary-500 disabled:bg-gray-50 disabled:text-gray-400 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100 dark:disabled:bg-slate-900"
                     >
-                      <option value="">{schemasQuery.isLoading ? 'Loading schemas...' : availableSchemas.length ? 'Manual reference' : 'No other schemas available'}</option>
+                      <option value="">{referenceOptionLabel}</option>
                       {availableSchemas.map((schema) => (
                         <option key={schema.id} value={schema.id}>
                           {schema.name}{typeof schema.schema.$id === 'string' && schema.schema.$id.trim() ? '' : ' (local URI)'}
@@ -986,7 +1047,7 @@ export default function JsonSchemaEditorPage() {
                       onChange={(event) => setSelectedNode((node) => ({ ...node, refOnly: event.target.checked }))}
                       className="h-4 w-4 rounded accent-primary-600"
                     />
-                    Reference only
+                    <span>Reference only</span>
                   </label>
                   {referenceWarnings.length > 0 && (
                     <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800 md:col-span-2 dark:border-amber-900/50 dark:bg-amber-950/20 dark:text-amber-200">
@@ -1008,19 +1069,19 @@ export default function JsonSchemaEditorPage() {
                 {!isRootSelected && !isArrayItem && (
                   <label className="flex items-center gap-2 rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-700 dark:border-slate-700 dark:text-slate-200">
                     <input type="checkbox" checked={selectedNode.required} onChange={(event) => setSelectedNode((node) => ({ ...node, required: event.target.checked }))} className="h-4 w-4 rounded accent-primary-600" />
-                    Required property
+                    <span>Required property</span>
                   </label>
                 )}
                 {selectedNode.type === 'object' && (
                   <label className="flex items-center gap-2 rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-700 dark:border-slate-700 dark:text-slate-200">
                     <input type="checkbox" checked={selectedNode.additionalProperties} onChange={(event) => setSelectedNode((node) => ({ ...node, additionalProperties: event.target.checked }))} className="h-4 w-4 rounded accent-primary-600" />
-                    Allow additional properties
+                    <span>Allow additional properties</span>
                   </label>
                 )}
                 {selectedNode.type === 'array' && (
                   <label className="flex items-center gap-2 rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-700 dark:border-slate-700 dark:text-slate-200">
                     <input type="checkbox" checked={selectedNode.uniqueItems} onChange={(event) => setSelectedNode((node) => ({ ...node, uniqueItems: event.target.checked }))} className="h-4 w-4 rounded accent-primary-600" />
-                    Unique items
+                    <span>Unique items</span>
                   </label>
                 )}
                 <label className="space-y-1.5 md:col-span-2">
@@ -1135,15 +1196,15 @@ export default function JsonSchemaEditorPage() {
                   <>
                     <label className="flex items-center gap-2 rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-700 dark:border-slate-700 dark:text-slate-200">
                       <input type="checkbox" checked={selectedNode.deprecated} onChange={(event) => setSelectedNode((node) => ({ ...node, deprecated: event.target.checked }))} className="h-4 w-4 rounded accent-primary-600" />
-                      Deprecated
+                      <span>Deprecated</span>
                     </label>
                     <label className="flex items-center gap-2 rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-700 dark:border-slate-700 dark:text-slate-200">
                       <input type="checkbox" checked={selectedNode.readOnly} onChange={(event) => setSelectedNode((node) => ({ ...node, readOnly: event.target.checked }))} className="h-4 w-4 rounded accent-primary-600" />
-                      Read only
+                      <span>Read only</span>
                     </label>
                     <label className="flex items-center gap-2 rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-700 dark:border-slate-700 dark:text-slate-200">
                       <input type="checkbox" checked={selectedNode.writeOnly} onChange={(event) => setSelectedNode((node) => ({ ...node, writeOnly: event.target.checked }))} className="h-4 w-4 rounded accent-primary-600" />
-                      Write only
+                      <span>Write only</span>
                     </label>
                   </>
                 )}
@@ -1180,7 +1241,7 @@ export default function JsonSchemaEditorPage() {
             )}>
               <div className="flex items-center gap-2 font-semibold">
                 {schemaIssues.length ? <AlertCircle className="h-4 w-4" /> : <Braces className="h-4 w-4" />}
-                {schemaIssues.length ? `${schemaIssues.length} schema issue${schemaIssues.length === 1 ? '' : 's'}` : 'Schema checks passed'}
+                {schemaIssueSummary(schemaIssues.length)}
               </div>
               {schemaIssues.length > 0 && (
                 <ul className="mt-2 space-y-1 text-xs">

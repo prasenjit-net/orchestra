@@ -144,7 +144,8 @@ export default function WorkflowVersionsPage() {
                             <Send className="h-3.5 w-3.5" />
                             Publish
                           </button>
-                        ) : !isActive ? (
+                        ) : null}
+                        {version.status === 'published' && !isActive ? (
                           <button type="button" onClick={() => { setPageError(null); setActivateTarget(version.version) }} className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-200 px-3 py-1.5 text-xs font-semibold text-emerald-700 hover:bg-emerald-50 dark:border-emerald-800/50 dark:text-emerald-300 dark:hover:bg-emerald-950/20">
                             <Play className="h-3.5 w-3.5" />
                             Activate
@@ -172,8 +173,8 @@ export default function WorkflowVersionsPage() {
       ) : null}
 
       {activateTarget !== null ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/55 p-4" role="dialog" aria-modal="true" aria-labelledby="activate-version-title">
-          <div className="w-full max-w-md rounded-lg border border-gray-200 bg-white shadow-xl dark:border-slate-700 dark:bg-slate-900">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/55 p-4">
+          <dialog open aria-modal="true" aria-labelledby="activate-version-title" className="m-0 w-full max-w-md rounded-lg border border-gray-200 bg-white p-0 shadow-xl dark:border-slate-700 dark:bg-slate-900">
             <div className="px-5 py-4">
               <h2 id="activate-version-title" className="text-base font-semibold text-gray-900 dark:text-slate-100">Activate version {activateTarget}?</h2>
               <p className="mt-2 text-sm text-gray-500 dark:text-slate-400">New runs will use version {activateTarget}. Existing runs will continue on the version they started with.</p>
@@ -186,7 +187,7 @@ export default function WorkflowVersionsPage() {
                 {activateMutation.isPending ? 'Activating…' : 'Activate'}
               </button>
             </div>
-          </div>
+          </dialog>
         </div>
       ) : null}
     </div>

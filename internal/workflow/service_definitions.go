@@ -152,11 +152,11 @@ func (s *Service) PublishDefinitionVersion(ctx context.Context, definitionID str
 	now := time.Now().UTC()
 	timestamp := formatTime(now)
 
-	if _, err := tx.ExecContext(ctx, s.rebind(`
+	if _, err := s.execTxQuery(ctx, tx, `
 		UPDATE workflow_definition_versions
 		SET status = 'published', updated_at = ?, published_at = ?
 		WHERE definition_id = ? AND version = ?
-	`), timestamp, timestamp, definitionID, version); err != nil {
+	`, timestamp, timestamp, definitionID, version); err != nil {
 		return DefinitionDetails{}, fmt.Errorf("publish definition version: %w", err)
 	}
 
@@ -164,9 +164,9 @@ func (s *Service) PublishDefinitionVersion(ctx context.Context, definitionID str
 		if err := s.activateDefinitionVersionTx(ctx, tx, definitionID, version, timestamp); err != nil {
 			return DefinitionDetails{}, err
 		}
-	} else if _, err := tx.ExecContext(ctx, s.rebind(`
+	} else if _, err := s.execTxQuery(ctx, tx, `
 		UPDATE workflow_definitions SET status = 'published', updated_at = ? WHERE id = ?
-	`), timestamp, definitionID); err != nil {
+	`, timestamp, definitionID); err != nil {
 		return DefinitionDetails{}, fmt.Errorf("update workflow definition publication time: %w", err)
 	}
 

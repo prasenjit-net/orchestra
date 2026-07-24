@@ -7,6 +7,8 @@ import (
 	"time"
 )
 
+const jsonSchemaBundleType = "json-schema"
+
 // ─── Bundle types ─────────────────────────────────────────────────────────────
 
 type ImportBundle struct {
@@ -176,7 +178,7 @@ func (s *Service) ExportJSONSchema(ctx context.Context, schemaID string) (Import
 	return ImportBundle{
 		Version:     1,
 		ExportedAt:  formatTime(time.Now().UTC()),
-		BundleType:  "json-schema",
+		BundleType:  jsonSchemaBundleType,
 		JSONSchemas: []JSONSchema{schema},
 	}, nil
 }
@@ -189,7 +191,7 @@ func (s *Service) ExportJSONSchemas(ctx context.Context) (ImportBundle, error) {
 	return ImportBundle{
 		Version:     1,
 		ExportedAt:  formatTime(time.Now().UTC()),
-		BundleType:  "json-schema",
+		BundleType:  jsonSchemaBundleType,
 		JSONSchemas: schemas,
 	}, nil
 }
@@ -229,7 +231,7 @@ func (s *Service) AnalyzeImport(ctx context.Context, bundle ImportBundle) (Impor
 		}
 	}
 	for _, schema := range bundle.JSONSchemas {
-		if err := classify(schema.ID, schema.Name, "json-schema"); err != nil {
+		if err := classify(schema.ID, schema.Name, jsonSchemaBundleType); err != nil {
 			return ImportAnalysis{}, err
 		}
 	}
@@ -259,7 +261,7 @@ func (s *Service) entityExists(ctx context.Context, kind, id string) (bool, erro
 		table = "mcp_servers"
 	case "definition":
 		table = "workflow_definitions"
-	case "json-schema":
+	case jsonSchemaBundleType:
 		table = "json_schemas"
 	default:
 		return false, fmt.Errorf("unknown entity kind %q", kind)
@@ -451,13 +453,13 @@ func (s *Service) upsertJSONSchema(ctx context.Context, schema JSONSchema, now t
 		return err
 	}
 	ts := formatTime(now)
-	if _, err := s.db.ExecContext(ctx, s.rebind(`
+	if _, err := s.execDBQuery(ctx, `
 		INSERT INTO json_schemas (id, name, description, schema_json, created_at, updated_at)
 		VALUES (?, ?, ?, ?, ?, ?)
 		ON CONFLICT (id) DO UPDATE SET
 			name = EXCLUDED.name, description = EXCLUDED.description,
 			schema_json = EXCLUDED.schema_json, updated_at = EXCLUDED.updated_at
-	`), schema.ID, schema.Name, schema.Description, string(normalized), ts, ts); err != nil {
+	`, schema.ID, schema.Name, schema.Description, string(normalized), ts, ts); err != nil {
 		return err
 	}
 	return nil

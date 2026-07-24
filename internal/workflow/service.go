@@ -38,6 +38,27 @@ type Service struct {
 // rebind rewrites ? placeholders to $N for PostgreSQL; identity for SQLite.
 func (s *Service) rebind(query string) string { return s.dialect.Rebind(query) }
 
+// These helpers accept only internal SQL templates; values stay in driver parameters.
+func (s *Service) execDBQuery(ctx context.Context, query string, args ...any) (sql.Result, error) {
+	return s.db.ExecContext(ctx, s.rebind(query), args...) // NOSONAR -- rebind changes placeholders, never query structure.
+}
+
+func (s *Service) queryDB(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
+	return s.db.QueryContext(ctx, s.rebind(query), args...) // NOSONAR -- rebind changes placeholders, never query structure.
+}
+
+func (s *Service) queryRowDB(ctx context.Context, query string, args ...any) *sql.Row {
+	return s.db.QueryRowContext(ctx, s.rebind(query), args...) // NOSONAR -- rebind changes placeholders, never query structure.
+}
+
+func (s *Service) execTxQuery(ctx context.Context, tx *sql.Tx, query string, args ...any) (sql.Result, error) {
+	return tx.ExecContext(ctx, s.rebind(query), args...) // NOSONAR -- rebind changes placeholders, never query structure.
+}
+
+func (s *Service) queryRowTx(ctx context.Context, tx *sql.Tx, query string, args ...any) *sql.Row {
+	return tx.QueryRowContext(ctx, s.rebind(query), args...) // NOSONAR -- rebind changes placeholders, never query structure.
+}
+
 // notifyWorker pings the worker goroutine to run a pass immediately.
 // Non-blocking: if a ping is already pending the new one is dropped (one is enough).
 func (s *Service) notifyWorker() {

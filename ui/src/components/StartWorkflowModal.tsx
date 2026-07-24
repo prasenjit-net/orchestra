@@ -21,7 +21,7 @@ export default function StartWorkflowModal({
   onStart,
   isPending,
   error,
-}: StartWorkflowModalProps) {
+}: Readonly<StartWorkflowModalProps>) {
   const [inputText, setInputText] = useState('{}')
   const [callbackUrl, setCallbackUrl] = useState('')
   const [version, setVersion] = useState(initialVersion ?? activeVersion)
@@ -63,8 +63,9 @@ export default function StartWorkflowModal({
         {/* Body */}
         <div className="space-y-4 px-6 py-5">
           <div>
-            <label className="mb-1.5 block text-sm font-medium text-gray-700 dark:text-slate-300">Workflow version</label>
+            <label htmlFor="workflow-start-version" className="mb-1.5 block text-sm font-medium text-gray-700 dark:text-slate-300">Workflow version</label>
             <select
+              id="workflow-start-version"
               value={version}
               onChange={(event) => setVersion(Number(event.target.value))}
               className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
@@ -78,10 +79,11 @@ export default function StartWorkflowModal({
           </div>
 
           <div>
-            <label className="mb-1.5 block text-sm font-medium text-gray-700 dark:text-slate-300">
+            <label htmlFor="workflow-start-input" className="mb-1.5 block text-sm font-medium text-gray-700 dark:text-slate-300">
               Input JSON
             </label>
             <textarea
+              id="workflow-start-input"
               value={inputText}
               onChange={(e) => {
                 setInputText(e.target.value)
@@ -98,10 +100,11 @@ export default function StartWorkflowModal({
           </div>
 
           <div>
-            <label className="mb-1.5 block text-sm font-medium text-gray-700 dark:text-slate-300">
+            <label htmlFor="workflow-callback-url" className="mb-1.5 block text-sm font-medium text-gray-700 dark:text-slate-300">
               Callback URL <span className="font-normal text-gray-400 dark:text-slate-500">(optional)</span>
             </label>
             <input
+              id="workflow-callback-url"
               type="url"
               value={callbackUrl}
               onChange={(e) => setCallbackUrl(e.target.value)}
