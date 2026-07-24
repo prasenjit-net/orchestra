@@ -916,6 +916,8 @@ export default function JsonSchemaEditorPage() {
             ) : visibleRows.map(({ node, depth, path }) => {
               const hasChildren = node.children.length > 0 || !!node.item
               const active = node.id === selectedNode.id
+              let expandTitle: string | undefined
+              if (hasChildren) expandTitle = expanded.has(node.id) ? 'Collapse node' : 'Expand node'
               return (
                 <div key={node.id} className="mb-1">
                   <div
@@ -928,7 +930,7 @@ export default function JsonSchemaEditorPage() {
                     <button
                       type="button"
                       disabled={!hasChildren}
-                      title={hasChildren ? (expanded.has(node.id) ? 'Collapse node' : 'Expand node') : undefined}
+                      title={expandTitle}
                       onClick={(event) => {
                         event.stopPropagation()
                         setExpanded((current) => {
