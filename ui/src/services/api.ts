@@ -6,8 +6,11 @@ import type {
   CreateAgentInput,
   CreateMCPServerInput,
   CreateScriptInput,
+  CreateJSONSchemaInput,
   ImportAnalysis,
   ImportBundle,
+  JSONSchemaDocument,
+  JSONSchemasResponse,
   MCPServer,
   MCPServersResponse,
   ExampleResponse,
@@ -143,6 +146,38 @@ export const scriptsApi = {
   },
 }
 
+export const jsonSchemasApi = {
+  list: async () => handleResponse<JSONSchemasResponse>(await fetch(buildApiUrl('/json-schemas'))),
+  create: async (input: CreateJSONSchemaInput) =>
+    handleResponse<JSONSchemaDocument>(
+      await fetch(buildApiUrl('/json-schemas'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(input),
+      }),
+    ),
+  get: async (id: string) => handleResponse<JSONSchemaDocument>(await fetch(buildApiUrl(`/json-schemas/${id}`))),
+  update: async (id: string, input: CreateJSONSchemaInput) =>
+    handleResponse<JSONSchemaDocument>(
+      await fetch(buildApiUrl(`/json-schemas/${id}`), {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(input),
+      }),
+    ),
+  delete: async (id: string) => {
+    const response = await fetch(buildApiUrl(`/json-schemas/${id}`), { method: 'DELETE' })
+    if (!response.ok) {
+      let message = `HTTP ${response.status}`
+      try {
+        const payload = await response.json()
+        if (payload?.error) message = payload.error
+      } catch { /* ignore */ }
+      throw new Error(message)
+    }
+  },
+}
+
 export const agentsApi = {
   list: async () => handleResponse<AgentsResponse>(await fetch(buildApiUrl('/agents'))),
   create: async (input: CreateAgentInput) =>
@@ -241,21 +276,31 @@ export const workflowApi = {
     ),
   getDefinition: async (definitionId: string) =>
     handleResponse<WorkflowDefinitionDetails>(await fetch(buildApiUrl(`/workflow-definitions/${definitionId}`))),
-  createDefinitionVersion: async (definitionId: string, payload: WorkflowDefinitionDocument) =>
+  getDefinitionVersion: async (definitionId: string, version: number) =>
+    handleResponse<WorkflowDefinitionDetails>(await fetch(buildApiUrl(`/workflow-definitions/${definitionId}/versions/${version}`))),
+  createDefinitionVersion: async (definitionId: string, payload: WorkflowDefinitionDocument, basedOnVersion: number) =>
     handleResponse<WorkflowDefinitionDetails>(
       await fetch(buildApiUrl(`/workflow-definitions/${definitionId}/versions`), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
+        body: JSON.stringify({ ...payload, basedOnVersion }),
       }),
     ),
-  publishDefinitionVersion: async (definitionId: string, version: number) =>
+  publishDefinitionVersion: async (definitionId: string, version: number, activate = false) =>
     handleResponse<WorkflowDefinitionDetails>(
       await fetch(buildApiUrl(`/workflow-definitions/${definitionId}/versions/${version}/publish`), {
         method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ activate }),
       }),
     ),
-  startWorkflow: async (definitionId: string, body?: { input?: Record<string, unknown>; callbackUrl?: string }) =>
+  activateDefinitionVersion: async (definitionId: string, version: number) =>
+    handleResponse<WorkflowDefinitionDetails>(
+      await fetch(buildApiUrl(`/workflow-definitions/${definitionId}/versions/${version}/activate`), {
+        method: 'POST',
+      }),
+    ),
+  startWorkflow: async (definitionId: string, body?: { input?: Record<string, unknown>; callbackUrl?: string; version?: number }) =>
     handleResponse<WorkflowInstance>(
       await fetch(buildApiUrl(`/workflow-definitions/${definitionId}/start`), {
         method: 'POST',
@@ -327,6 +372,10 @@ export const importExportApi = {
     handleResponse<ImportBundle>(await fetch(buildApiUrl(`/agents/${id}/export`))),
   exportScript: async (id: string) =>
     handleResponse<ImportBundle>(await fetch(buildApiUrl(`/scripts/${id}/export`))),
+  exportJSONSchemas: async () =>
+    handleResponse<ImportBundle>(await fetch(buildApiUrl('/json-schemas/export'))),
+  exportJSONSchema: async (id: string) =>
+    handleResponse<ImportBundle>(await fetch(buildApiUrl(`/json-schemas/${id}/export`))),
   exportConnector: async (id: string) =>
     handleResponse<ImportBundle>(await fetch(buildApiUrl(`/mcp-servers/${id}/export`))),
   analyze: async (bundle: ImportBundle) =>

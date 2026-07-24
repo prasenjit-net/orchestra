@@ -277,3 +277,73 @@ func TestWorkflowOperationsEndpoint(t *testing.T) {
 		t.Fatalf("expected workflow id %s, got %s", instance.ID, payload.Events[0].WorkflowID)
 	}
 }
+
+func TestWorkflowVersionReadPublishAndActivateEndpoints(t *testing.T) {
+	cfg := config.Default()
+	cfg.Workflow.DatabasePath = filepath.Join(t.TempDir(), "workflows.db")
+	service, err := workflow.NewService(cfg.Workflow, cfg.AI, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatalf("NewService returned error: %v", err)
+	}
+	defer service.Close()
+
+	definition, err := service.CreateDefinition(context.Background(), workflow.CreateDefinitionInput{
+		Name:  "API version workflow",
+		Steps: []workflow.StepDefinition{{Name: "version_1", Activity: "noop"}},
+	})
+	if err != nil {
+		t.Fatalf("CreateDefinition returned error: %v", err)
+	}
+	if _, err := service.CreateDefinitionVersion(context.Background(), definition.ID, workflow.CreateDefinitionInput{
+		Name:           "API version workflow v2",
+		BasedOnVersion: 1,
+		Steps:          []workflow.StepDefinition{{Name: "version_2", Activity: "noop"}},
+	}); err != nil {
+		t.Fatalf("CreateDefinitionVersion returned error: %v", err)
+	}
+
+	router := NewRouter(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), version.Current(), livebus.New(), service, nil, false)
+	basePath := "/workflow-definitions/" + definition.ID + "/versions/2"
+
+	getReq := httptest.NewRequest(http.MethodGet, basePath, nil)
+	getRes := httptest.NewRecorder()
+	router.ServeHTTP(getRes, getReq)
+	if getRes.Code != http.StatusOK || !strings.Contains(getRes.Body.String(), `"basedOnVersion":1`) {
+		t.Fatalf("expected readable version ancestry, got status=%d body=%s", getRes.Code, getRes.Body.String())
+	}
+
+	publishReq := httptest.NewRequest(http.MethodPost, basePath+"/publish", strings.NewReader(`{"activate":false}`))
+	publishReq.Header.Set("Content-Type", "application/json")
+	publishRes := httptest.NewRecorder()
+	router.ServeHTTP(publishRes, publishReq)
+	if publishRes.Code != http.StatusOK || !strings.Contains(publishRes.Body.String(), `"activeVersion":1`) {
+		t.Fatalf("expected publish to leave v1 active, got status=%d body=%s", publishRes.Code, publishRes.Body.String())
+	}
+
+	startReq := httptest.NewRequest(http.MethodPost, "/workflow-definitions/"+definition.ID+"/start", strings.NewReader(`{"version":2,"input":{}}`))
+	startReq.Header.Set("Content-Type", "application/json")
+	startRes := httptest.NewRecorder()
+	router.ServeHTTP(startRes, startReq)
+	if startRes.Code != http.StatusCreated || !strings.Contains(startRes.Body.String(), `"definitionVersion":2`) {
+		t.Fatalf("expected UI start to pin inactive published v2, got status=%d body=%s", startRes.Code, startRes.Body.String())
+	}
+
+	extRouter, err := NewExtRouter(cfg, service)
+	if err != nil {
+		t.Fatalf("NewExtRouter returned error: %v", err)
+	}
+	webhookReq := httptest.NewRequest(http.MethodPost, "/webhook/"+definition.ID+"/start?version=2", strings.NewReader(`{}`))
+	webhookReq.Header.Set("Content-Type", "application/json")
+	webhookRes := httptest.NewRecorder()
+	extRouter.ServeHTTP(webhookRes, webhookReq)
+	if webhookRes.Code != http.StatusCreated || !strings.Contains(webhookRes.Body.String(), `"definitionVersion":2`) {
+		t.Fatalf("expected webhook start to pin inactive published v2, got status=%d body=%s", webhookRes.Code, webhookRes.Body.String())
+	}
+
+	activateReq := httptest.NewRequest(http.MethodPost, basePath+"/activate", nil)
+	activateRes := httptest.NewRecorder()
+	router.ServeHTTP(activateRes, activateReq)
+	if activateRes.Code != http.StatusOK || !strings.Contains(activateRes.Body.String(), `"activeVersion":2`) {
+		t.Fatalf("expected explicit activation of v2, got status=%d body=%s", activateRes.Code, activateRes.Body.String())
+	}
+}

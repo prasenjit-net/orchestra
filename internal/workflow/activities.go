@@ -23,10 +23,10 @@ type ActivityExecutionRequest struct {
 	WorkflowID        string
 	DefinitionID      string
 	DefinitionVersion int
-	WorkflowContext   json.RawMessage
 	Step              StepDefinition
 	Task              WorkflowTask
 	Now               time.Time
+	SignalSnapshot    *ActivitySignalSnapshot
 }
 
 type ActivityResult struct {
@@ -43,13 +43,19 @@ type ActivitySignalWait struct {
 	TimeoutAt  *time.Time
 }
 
+type ActivitySignalSnapshot struct {
+	SignalName  string
+	Count       int
+	LastPayload any
+	ReceivedAt  string
+}
+
 func builtInActivities(cfg config.WorkflowConfig, logger *slog.Logger) []Activity {
 	activities := []Activity{
 		noopActivity{},
 		transformActivity{},
 		delayActivity{},
 		waitSignalActivity{},
-		branchActivity{},
 		httpActivity{},
 		webhookActivity{},
 		emailActivity{},

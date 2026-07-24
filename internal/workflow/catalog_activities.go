@@ -131,7 +131,7 @@ func (branchActivity) Execute(_ context.Context, req ActivityExecutionRequest) (
 	if err := json.Unmarshal(req.Step.Input, &input); err != nil {
 		return ActivityResult{}, fmt.Errorf("decode branch activity input: %w", err)
 	}
-	contextPayload := decodeJSONObject(req.WorkflowContext)
+	contextPayload := decodeJSONObject(req.Step.Input)
 	for _, candidate := range input.Cases {
 		condition := TransitionCondition{
 			Path:     strings.TrimSpace(candidate.Path),
@@ -372,13 +372,13 @@ func (templateRenderActivity) Descriptor() ActivityDescriptor {
 	return ActivityDescriptor{
 		Name:        "template-render",
 		DisplayName: "Template render",
-		Description: "Renders a string template against workflow context plus step-local data.",
+		Description: "Renders a string template against mapped step-local data.",
 		Category:    "data",
 		Status:      "stable",
 		Tags:        []string{"template", "string", "render"},
 		ExampleInput: map[string]any{
-			"template": "Hello {{steps.fetch.name}} from {{data.source}}",
-			"data":     map[string]any{"source": "workflow"},
+			"template": "Hello {{data.name}} from {{data.source}}",
+			"data":     map[string]any{"name": "Ada", "source": "mapped input"},
 		},
 	}
 }
@@ -391,9 +391,7 @@ func (templateRenderActivity) Execute(_ context.Context, req ActivityExecutionRe
 	if strings.TrimSpace(input.Template) == "" {
 		return ActivityResult{}, fmt.Errorf("template-render activity requires a template")
 	}
-	contextPayload := decodeJSONObject(req.WorkflowContext)
-	contextPayload["data"] = input.Data
-	rendered := resolveTemplateValue(input.Template, contextPayload)
+	rendered := resolveTemplateValue(input.Template, map[string]any{"data": input.Data})
 	return marshalActivityResult(map[string]any{
 		"rendered": stringifyTemplateValue(rendered),
 	})
@@ -615,7 +613,12 @@ func executeSignalWait(req ActivityExecutionRequest, cfg waitSignalConfig) (Acti
 	if err != nil {
 		return ActivityResult{}, err
 	}
-	currentCount, payload, receivedAt := lookupSignalSnapshot(req.WorkflowContext, signalName)
+	currentCount, payload, receivedAt := 0, any(nil), ""
+	if req.SignalSnapshot != nil && req.SignalSnapshot.SignalName == signalName {
+		currentCount = req.SignalSnapshot.Count
+		payload = req.SignalSnapshot.LastPayload
+		receivedAt = req.SignalSnapshot.ReceivedAt
+	}
 	if !initialized {
 		state = waitSignalState{
 			StartedAt:     formatTime(req.Now),
@@ -725,6 +728,42 @@ func decodeWaitSignalState(raw json.RawMessage) (waitSignalState, bool, error) {
 		return waitSignalState{}, false, fmt.Errorf("decode wait-signal activity state: %w", err)
 	}
 	return state, true, nil
+}
+
+func signalSnapshotForStep(step StepDefinition, contextRaw json.RawMessage) *ActivitySignalSnapshot {
+	signalName := signalNameForStep(step)
+	if signalName == "" {
+		return nil
+	}
+	count, payload, receivedAt := lookupSignalSnapshot(contextRaw, signalName)
+	return &ActivitySignalSnapshot{
+		SignalName:  signalName,
+		Count:       count,
+		LastPayload: payload,
+		ReceivedAt:  receivedAt,
+	}
+}
+
+func signalNameForStep(step StepDefinition) string {
+	var input waitSignalInput
+	if len(step.Input) > 0 {
+		_ = json.Unmarshal(step.Input, &input)
+	}
+	if signalName := strings.TrimSpace(input.Signal); signalName != "" {
+		return signalName
+	}
+	switch step.Activity {
+	case "approval":
+		return "approval"
+	case "manual-task":
+		return "manual-complete"
+	case "human-wait":
+		return "resume"
+	case "wait-signal":
+		return "signal"
+	default:
+		return ""
+	}
 }
 
 func lookupSignalSnapshot(contextRaw json.RawMessage, signalName string) (int, any, string) {

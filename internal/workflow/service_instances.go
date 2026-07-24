@@ -52,16 +52,34 @@ func (s *Service) StartWorkflowWithInput(ctx context.Context, in StartWorkflowIn
 	if err != nil {
 		return WorkflowInstance{}, err
 	}
+	definitionVersion := details.ActiveVersion
+	if in.DefinitionVersion > 0 && in.DefinitionVersion != details.ActiveVersion {
+		versionMeta, err := s.getDefinitionVersionMetaTx(ctx, tx, in.DefinitionID, in.DefinitionVersion)
+		if err != nil {
+			return WorkflowInstance{}, err
+		}
+		if versionMeta.Status != "published" {
+			return WorkflowInstance{}, fmt.Errorf("%w: version %d", ErrVersionNotPublished, in.DefinitionVersion)
+		}
+		details.Document, err = s.getDefinitionVersionDocumentTx(ctx, tx, in.DefinitionID, in.DefinitionVersion)
+		if err != nil {
+			return WorkflowInstance{}, err
+		}
+		definitionVersion = in.DefinitionVersion
+	}
+	if err := s.validateStartInputTx(ctx, tx, details.Document, in.Input); err != nil {
+		return WorkflowInstance{}, err
+	}
 
 	now := time.Now().UTC()
 	instance := WorkflowInstance{
 		ID:                generateID("wf"),
 		DefinitionID:      details.ID,
-		DefinitionVersion: details.ActiveVersion,
+		DefinitionVersion: definitionVersion,
 		Status:            StatusRunning,
 		CurrentStepIndex:  -1,
 		LastEventSequence: 0,
-		Context:           buildInitialContext(details.ID, details.ActiveVersion, in.Input),
+		Context:           buildInitialContext(details.ID, definitionVersion, in.Input),
 		CallbackURL:       in.CallbackURL,
 		TriggerSource:     in.TriggerSource,
 		CreatedAt:         now,

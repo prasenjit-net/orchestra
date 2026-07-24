@@ -12,18 +12,9 @@ import type { CreateScriptInput } from '../types'
 
 const BUILTINS: { name: string; members: { sig: string; desc: string }[] }[] = [
   {
-    name: 'ctx — workflow context',
-    members: [
-      { sig: 'ctx["input"]', desc: 'Dict of workflow start input fields' },
-      { sig: 'ctx["steps"]["name"]', desc: 'Output dict of a completed step' },
-      { sig: 'ctx["signals"]["name"]', desc: 'Last received signal payload dict' },
-      { sig: 'ctx["workflow"]', desc: 'Workflow metadata (id, definition_id, …)' },
-    ],
-  },
-  {
     name: 'input',
     members: [
-      { sig: 'input', desc: 'The step\'s static data field configured in the workflow definition' },
+      { sig: 'input', desc: 'The step\'s mapped data field from the workflow definition' },
     ],
   },
   {
@@ -33,8 +24,6 @@ const BUILTINS: { name: string; members: { sig: string; desc: string }[] }[] = [
       { sig: 'workflow.definition_id', desc: 'Definition ID' },
       { sig: 'workflow.definition_version', desc: 'Version number (int)' },
       { sig: 'workflow.step_name', desc: 'Current step name' },
-      { sig: 'workflow.step_output("name")', desc: 'Output dict of a past step' },
-      { sig: 'workflow.signal("name")', desc: 'Last signal payload dict' },
       { sig: 'workflow.fail("message")', desc: 'Fail the step with an error' },
     ],
   },

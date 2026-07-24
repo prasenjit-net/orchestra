@@ -37,6 +37,8 @@ type StepTransition struct {
 	Condition *TransitionCondition `json:"condition,omitempty"`
 }
 
+const terminalTransitionTarget = "__end__"
+
 type StepDefinition struct {
 	Name        string           `json:"name"`
 	Activity    string           `json:"activity"`
@@ -47,35 +49,44 @@ type StepDefinition struct {
 }
 
 type DefinitionDocument struct {
-	Name        string           `json:"name"`
-	Description string           `json:"description"`
-	Steps       []StepDefinition `json:"steps"`
+	Name          string           `json:"name"`
+	Description   string           `json:"description"`
+	StartSchemaID string           `json:"startSchemaId,omitempty"`
+	EndSchemaID   string           `json:"endSchemaId,omitempty"`
+	EndOutput     json.RawMessage  `json:"endOutput,omitempty"`
+	Steps         []StepDefinition `json:"steps"`
 }
 
 type CreateDefinitionInput struct {
-	Name        string           `json:"name"`
-	Description string           `json:"description"`
-	Steps       []StepDefinition `json:"steps"`
+	Name           string           `json:"name"`
+	Description    string           `json:"description"`
+	BasedOnVersion int              `json:"basedOnVersion,omitempty"`
+	StartSchemaID  string           `json:"startSchemaId,omitempty"`
+	EndSchemaID    string           `json:"endSchemaId,omitempty"`
+	EndOutput      json.RawMessage  `json:"endOutput,omitempty"`
+	Steps          []StepDefinition `json:"steps"`
 }
 
 type DefinitionVersionSummary struct {
-	Version     int        `json:"version"`
-	Status      string     `json:"status"`
-	CreatedAt   time.Time  `json:"createdAt"`
-	UpdatedAt   time.Time  `json:"updatedAt"`
-	PublishedAt *time.Time `json:"publishedAt,omitempty"`
+	Version        int        `json:"version"`
+	Status         string     `json:"status"`
+	BasedOnVersion int        `json:"basedOnVersion,omitempty"`
+	CreatedAt      time.Time  `json:"createdAt"`
+	UpdatedAt      time.Time  `json:"updatedAt"`
+	PublishedAt    *time.Time `json:"publishedAt,omitempty"`
 }
 
 type DefinitionSummary struct {
-	ID            string    `json:"id"`
-	Name          string    `json:"name"`
-	Description   string    `json:"description"`
-	Status        string    `json:"status"`
-	ActiveVersion int       `json:"activeVersion"`
-	LatestVersion int       `json:"latestVersion"`
-	DraftVersion  int       `json:"draftVersion,omitempty"`
-	CreatedAt     time.Time `json:"createdAt"`
-	UpdatedAt     time.Time `json:"updatedAt"`
+	ID                 string    `json:"id"`
+	Name               string    `json:"name"`
+	Description        string    `json:"description"`
+	Status             string    `json:"status"`
+	ActiveVersion      int       `json:"activeVersion"`
+	LatestVersion      int       `json:"latestVersion"`
+	LatestDraftVersion int       `json:"latestDraftVersion,omitempty"`
+	DraftCount         int       `json:"draftCount"`
+	CreatedAt          time.Time `json:"createdAt"`
+	UpdatedAt          time.Time `json:"updatedAt"`
 }
 
 type DefinitionDetails struct {
@@ -148,10 +159,11 @@ type SignalWorkflowInput struct {
 }
 
 type StartWorkflowInput struct {
-	DefinitionID  string
-	Input         map[string]any
-	CallbackURL   string
-	TriggerSource string
+	DefinitionID      string
+	DefinitionVersion int
+	Input             map[string]any
+	CallbackURL       string
+	TriggerSource     string
 }
 
 type ActivityDescriptor struct {

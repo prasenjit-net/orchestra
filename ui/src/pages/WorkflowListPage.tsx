@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Check, Copy, Download, GitBranch, PencilRuler, Play, Plus, Upload, Wand2 } from 'lucide-react'
+import { Check, Copy, Download, GitBranch, History, PencilRuler, Play, Plus, Upload } from 'lucide-react'
 import { Link, useNavigate } from 'react-router-dom'
 import ImportModal from '../components/ImportModal'
 import SectionHeader from '../components/SectionHeader'
@@ -54,11 +54,18 @@ export default function WorkflowListPage() {
     queryFn: workflowApi.listDefinitions,
   })
 
+  const startDefinitionQuery = useQuery({
+    queryKey: ['workflow-definition', startTarget?.id],
+    queryFn: () => workflowApi.getDefinition(startTarget?.id as string),
+    enabled: Boolean(startTarget),
+  })
+
   const startWorkflowMutation = useMutation({
-    mutationFn: ({ definitionId, input, callbackUrl }: { definitionId: string; input: Record<string, unknown>; callbackUrl: string }) =>
+    mutationFn: ({ definitionId, input, callbackUrl, version }: { definitionId: string; input: Record<string, unknown>; callbackUrl: string; version: number }) =>
       workflowApi.startWorkflow(definitionId, {
         input: Object.keys(input).length > 0 ? input : undefined,
         callbackUrl: callbackUrl || undefined,
+        version,
       }),
     onSuccess: (instance) => {
       setStartTarget(null)
@@ -74,20 +81,6 @@ export default function WorkflowListPage() {
     },
   })
 
-  const publishDraftMutation = useMutation({
-    mutationFn: ({ definitionId, version }: { definitionId: string; version: number }) =>
-      workflowApi.publishDefinitionVersion(definitionId, version),
-    onSuccess: (definition) => {
-      setPageError(null)
-      setNotice(`Published ${definition.name} v${definition.activeVersion}.`)
-      void queryClient.invalidateQueries({ queryKey: ['workflow-definitions'] })
-    },
-    onError: (error: Error) => {
-      setNotice(null)
-      setPageError(error.message)
-    },
-  })
-
   if (definitionsQuery.isLoading) {
     return <div className="p-8 text-sm text-gray-500 dark:text-slate-400">Loading workflows…</div>
   }
@@ -98,7 +91,7 @@ export default function WorkflowListPage() {
 
   const definitions = definitionsQuery.data?.definitions ?? []
   const published = definitions.filter((d) => d.status === 'published').length
-  const drafts = definitions.filter((d) => Boolean(d.draftVersion)).length
+  const drafts = definitions.reduce((total, definition) => total + definition.draftCount, 0)
 
   return (
     <div className="space-y-8 p-8">
@@ -158,8 +151,8 @@ export default function WorkflowListPage() {
         <StatCard
           label="Pending drafts"
           value={String(drafts)}
-          description="Definitions with an unpublished draft version."
-          icon={Wand2}
+          description="Unpublished workflow version snapshots."
+          icon={History}
           tone="bg-amber-50 text-amber-600 dark:bg-amber-900/20 dark:text-amber-300"
         />
       </div>
@@ -210,9 +203,9 @@ export default function WorkflowListPage() {
                       <span className={`inline-flex rounded-full px-2.5 py-0.5 text-[11px] font-semibold uppercase tracking-wide ${statusClasses(definition.status)}`}>
                         {definition.status}
                       </span>
-                      {definition.draftVersion ? (
+                      {definition.draftCount > 0 ? (
                         <span className="inline-flex rounded-full bg-amber-100 px-2.5 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-amber-700 dark:bg-amber-900/30 dark:text-amber-300">
-                          Draft v{definition.draftVersion}
+                          {definition.draftCount} {definition.draftCount === 1 ? 'draft' : 'drafts'}
                         </span>
                       ) : null}
                     </div>
@@ -248,28 +241,25 @@ export default function WorkflowListPage() {
                   </button>
                   <button
                     type="button"
+                    onClick={() => navigate(`/workflows/${definition.id}/versions`)}
+                    className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 px-3 py-1.5 text-sm font-semibold text-gray-700 transition-colors hover:bg-gray-50 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800"
+                  >
+                    <History className="h-3.5 w-3.5" />
+                    Versions
+                  </button>
+                  <button
+                    type="button"
                     onClick={() => {
                       setStartError(null)
                       setStartTarget(definition)
                     }}
-                    disabled={definition.status !== 'published'}
-                    title={definition.status !== 'published' ? 'Publish a version first' : undefined}
+                    disabled={definition.activeVersion <= 0}
+                    title={definition.activeVersion <= 0 ? 'Activate a version first' : undefined}
                     className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 px-3 py-1.5 text-sm font-semibold text-gray-700 transition-colors hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800"
                   >
                     <Play className="h-3.5 w-3.5" />
                     Start run
                   </button>
-                  {definition.draftVersion ? (
-                    <button
-                      type="button"
-                      onClick={() => publishDraftMutation.mutate({ definitionId: definition.id, version: definition.draftVersion as number })}
-                      disabled={publishDraftMutation.isPending}
-                      className="inline-flex items-center gap-1.5 rounded-lg border border-amber-200 px-3 py-1.5 text-sm font-semibold text-amber-700 transition-colors hover:bg-amber-50 disabled:cursor-not-allowed disabled:opacity-60 dark:border-amber-800/50 dark:text-amber-300 dark:hover:bg-amber-950/20"
-                    >
-                      <Wand2 className="h-3.5 w-3.5" />
-                      Publish draft
-                    </button>
-                  ) : null}
                   <button
                     type="button"
                     title="Export workflow"
@@ -297,14 +287,19 @@ export default function WorkflowListPage() {
       {startTarget && (
         <StartWorkflowModal
           definitionName={startTarget.name}
+          activeVersion={startTarget.activeVersion}
+          publishedVersions={(startDefinitionQuery.data?.versions ?? [])
+            .filter((version) => version.status === 'published')
+            .map((version) => version.version)
+            .concat(startDefinitionQuery.data ? [] : [startTarget.activeVersion])}
           isPending={startWorkflowMutation.isPending}
           error={startError}
           onClose={() => {
             setStartTarget(null)
             setStartError(null)
           }}
-          onStart={(input, callbackUrl) => {
-            startWorkflowMutation.mutate({ definitionId: startTarget.id, input, callbackUrl })
+          onStart={(input, callbackUrl, version) => {
+            startWorkflowMutation.mutate({ definitionId: startTarget.id, input, callbackUrl, version })
           }}
         />
       )}

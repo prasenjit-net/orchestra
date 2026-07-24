@@ -153,15 +153,16 @@ func (s *Service) RunOnce(ctx context.Context) (bool, error) {
 		return true, s.failTaskNow(ctx, task, err)
 	}
 	step.Input = resolvedInput
+	signalSnapshot := signalSnapshotForStep(step, instance.Context)
 
 	output, execErr := activity.Execute(ctx, ActivityExecutionRequest{
 		WorkflowID:        task.WorkflowID,
 		DefinitionID:      details.ID,
 		DefinitionVersion: details.ActiveVersion,
-		WorkflowContext:   instance.Context,
 		Step:              step,
 		Task:              task,
 		Now:               time.Now().UTC(),
+		SignalSnapshot:    signalSnapshot,
 	})
 
 	if execErr != nil {
@@ -385,8 +386,17 @@ func (s *Service) completeTask(ctx context.Context, task WorkflowTask, definitio
 	instance.LastError = ""
 
 	if nextStepIndex < 0 {
+		if len(definition.Document.EndOutput) > 0 {
+			mappedOutput, err := resolveEndOutput(definition.Document.EndOutput, updatedContext)
+			if err != nil {
+				return err
+			}
+			output = mappedOutput
+			instance.LastOutput = mappedOutput
+		}
 		sequence, err = appendEventTx(ctx, tx, s.rebind, instance.ID, sequence, "WorkflowCompleted", map[string]any{
 			"completedAt": formatTime(now),
+			"output":      decodePayloadForEvent(output),
 		})
 		if err != nil {
 			return err
@@ -396,7 +406,7 @@ func (s *Service) completeTask(ctx context.Context, task WorkflowTask, definitio
 		instance.CurrentStepName = ""
 		instance.CurrentActivity = ""
 		instance.LastEventSequence = sequence
-		if err := s.updateInstanceTx(ctx, tx, instance, snapshotFromInstance(instance), nil); err != nil {
+		if err := s.updateInstanceTx(ctx, tx, instance, snapshotFromInstance(instance), output); err != nil {
 			return err
 		}
 	} else {

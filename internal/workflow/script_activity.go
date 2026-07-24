@@ -15,8 +15,6 @@ import (
 	"github.com/prasenjit-net/orchestra/internal/config"
 )
 
-const scriptThreadLocalKey = "workflow-script-runtime"
-
 // scriptFileOptions enables the full Starlark feature set needed for
 // workflow scripts: top-level if/for/while, global reassignment, and set literals.
 var scriptFileOptions = &syntax.FileOptions{
@@ -37,10 +35,6 @@ type scriptActivityInput struct {
 	TimeoutMs int      `json:"timeoutMs"`
 	Exports   []string `json:"exports"`
 	Data      any      `json:"data"`
-}
-
-type scriptRuntimeContext struct {
-	context map[string]any
 }
 
 func newScriptActivity(cfg config.WorkflowConfig, lookup func(context.Context, string) (string, error)) Activity {
@@ -157,10 +151,7 @@ func (a scriptActivity) executeStarlark(ctx context.Context, req ActivityExecuti
 		}
 	}()
 
-	workflowContext := decodeJSONObject(req.WorkflowContext)
-	thread.SetLocal(scriptThreadLocalKey, &scriptRuntimeContext{context: workflowContext})
-
-	predeclared, err := buildScriptPredeclared(req, workflowContext, input.Data)
+	predeclared, err := buildScriptPredeclared(req, input.Data)
 	if err != nil {
 		return nil, err
 	}
@@ -197,13 +188,7 @@ func (a scriptActivity) executeStarlark(ctx context.Context, req ActivityExecuti
 	return result, nil
 }
 
-func buildScriptPredeclared(req ActivityExecutionRequest, workflowContext map[string]any, data any) (starlark.StringDict, error) {
-	ctxValue, err := goToStarlarkValue(workflowContext)
-	if err != nil {
-		return nil, fmt.Errorf("convert workflow context for script: %w", err)
-	}
-	ctxValue.Freeze()
-
+func buildScriptPredeclared(req ActivityExecutionRequest, data any) (starlark.StringDict, error) {
 	inputValue, err := goToStarlarkValue(data)
 	if err != nil {
 		return nil, fmt.Errorf("convert script data input: %w", err)
@@ -226,7 +211,6 @@ func buildScriptPredeclared(req ActivityExecutionRequest, workflowContext map[st
 		"collections": newCollectionsModule(),
 		"workflow":    newWorkflowModule(req),
 		"asserts":     newAssertsModule(),
-		"ctx":         ctxValue,
 		"input":       inputValue,
 		"step":        stepValue,
 	}
@@ -266,8 +250,6 @@ func newWorkflowModule(req ActivityExecutionRequest) *starlarkstruct.Module {
 			"definition_version": starlark.MakeInt(req.DefinitionVersion),
 			"step_name":          starlark.String(req.Step.Name),
 			"activity_name":      starlark.String(req.Step.Activity),
-			"step_output":        starlark.NewBuiltin("workflow.step_output", starlarkWorkflowStepOutput),
-			"signal":             starlark.NewBuiltin("workflow.signal", starlarkWorkflowSignal),
 			"fail":               starlark.NewBuiltin("workflow.fail", starlarkWorkflowFail),
 		},
 	}
@@ -386,40 +368,6 @@ func starlarkFlatten(_ *starlark.Thread, b *starlark.Builtin, args starlark.Tupl
 		}
 	}
 	return starlark.NewList(values), nil
-}
-
-func starlarkWorkflowStepOutput(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
-	var name string
-	if err := starlark.UnpackArgs(b.Name(), args, kwargs, "name", &name); err != nil {
-		return nil, err
-	}
-
-	runtimeCtx, _ := thread.Local(scriptThreadLocalKey).(*scriptRuntimeContext)
-	if runtimeCtx == nil {
-		return starlark.None, nil
-	}
-	value, ok := lookupPathValue(runtimeCtx.context, "steps."+name)
-	if !ok {
-		return starlark.None, nil
-	}
-	return goToStarlarkValue(value)
-}
-
-func starlarkWorkflowSignal(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
-	var name string
-	if err := starlark.UnpackArgs(b.Name(), args, kwargs, "name", &name); err != nil {
-		return nil, err
-	}
-
-	runtimeCtx, _ := thread.Local(scriptThreadLocalKey).(*scriptRuntimeContext)
-	if runtimeCtx == nil {
-		return starlark.None, nil
-	}
-	value, ok := lookupPathValue(runtimeCtx.context, "signals."+name)
-	if !ok {
-		return starlark.None, nil
-	}
-	return goToStarlarkValue(value)
 }
 
 func starlarkWorkflowFail(_ *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {

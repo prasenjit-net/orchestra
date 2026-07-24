@@ -47,6 +47,21 @@ func NewRouter(cfg config.Config, logger *slog.Logger, build version.Info, live 
 			})
 			r.Get("/export", h.ExportScript)
 		})
+		r.Get("/json-schemas", h.ListJSONSchemas)
+		r.Post("/json-schemas", h.CreateJSONSchema)
+		r.Get("/json-schemas/export", h.ExportJSONSchemas)
+		r.Route("/json-schemas/{schemaID}", func(r chi.Router) {
+			r.Get("/", func(w http.ResponseWriter, r *http.Request) {
+				h.GetJSONSchema(w, r, chi.URLParam(r, "schemaID"))
+			})
+			r.Put("/", func(w http.ResponseWriter, r *http.Request) {
+				h.UpdateJSONSchema(w, r, chi.URLParam(r, "schemaID"))
+			})
+			r.Delete("/", func(w http.ResponseWriter, r *http.Request) {
+				h.DeleteJSONSchema(w, r, chi.URLParam(r, "schemaID"))
+			})
+			r.Get("/export", h.ExportJSONSchema)
+		})
 		r.Get("/agents", h.ListAgents)
 		r.Post("/agents", h.CreateAgent)
 		r.Route("/agents/{agentID}", func(r chi.Router) {
@@ -145,6 +160,14 @@ func NewRouter(cfg config.Config, logger *slog.Logger, build version.Info, live 
 			r.Post("/start", func(w http.ResponseWriter, r *http.Request) {
 				h.StartWorkflow(w, r, chi.URLParam(r, "definitionID"))
 			})
+			r.Get("/versions/{version}", func(w http.ResponseWriter, r *http.Request) {
+				version, err := parseVersion(chi.URLParam(r, "version"))
+				if err != nil {
+					writeError(w, http.StatusBadRequest, err.Error())
+					return
+				}
+				h.GetWorkflowDefinitionVersion(w, r, chi.URLParam(r, "definitionID"), version)
+			})
 			r.Post("/versions/{version}/publish", func(w http.ResponseWriter, r *http.Request) {
 				version, err := parseVersion(chi.URLParam(r, "version"))
 				if err != nil {
@@ -152,6 +175,14 @@ func NewRouter(cfg config.Config, logger *slog.Logger, build version.Info, live 
 					return
 				}
 				h.PublishWorkflowDefinitionVersion(w, r, chi.URLParam(r, "definitionID"), version)
+			})
+			r.Post("/versions/{version}/activate", func(w http.ResponseWriter, r *http.Request) {
+				version, err := parseVersion(chi.URLParam(r, "version"))
+				if err != nil {
+					writeError(w, http.StatusBadRequest, err.Error())
+					return
+				}
+				h.ActivateWorkflowDefinitionVersion(w, r, chi.URLParam(r, "definitionID"), version)
 			})
 			r.Get("/export", h.ExportWorkflowDefinition)
 		})
@@ -182,6 +213,9 @@ func NewRouter(cfg config.Config, logger *slog.Logger, build version.Info, live 
 				"/api/workflows/activities",
 				"/api/workflow-definitions",
 				"/api/workflow-definitions/{definitionID}/versions",
+				"/api/workflow-definitions/{definitionID}/versions/{version}",
+				"/api/workflow-definitions/{definitionID}/versions/{version}/publish",
+				"/api/workflow-definitions/{definitionID}/versions/{version}/activate",
 				"/api/workflows",
 				"/api/workflows/events",
 				"/api/workflows/tasks",

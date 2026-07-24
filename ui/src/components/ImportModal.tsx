@@ -7,6 +7,7 @@ const typeLabel: Record<ImportItem['type'], string> = {
   script: 'Script',
   agent: 'Agent',
   connector: 'Connector',
+  'json-schema': 'JSON Schema',
 }
 
 const typeColor: Record<ImportItem['type'], string> = {
@@ -14,6 +15,7 @@ const typeColor: Record<ImportItem['type'], string> = {
   script: 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300',
   agent: 'bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-300',
   connector: 'bg-teal-100 text-teal-700 dark:bg-teal-900/30 dark:text-teal-300',
+  'json-schema': 'bg-cyan-100 text-cyan-700 dark:bg-cyan-900/30 dark:text-cyan-300',
 }
 
 interface Props {

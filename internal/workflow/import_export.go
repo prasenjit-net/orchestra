@@ -7,16 +7,19 @@ import (
 	"time"
 )
 
+const jsonSchemaBundleType = "json-schema"
+
 // ─── Bundle types ─────────────────────────────────────────────────────────────
 
 type ImportBundle struct {
-	Version    int               `json:"version"`
-	ExportedAt string            `json:"exportedAt"`
-	BundleType string            `json:"bundleType"` // "workflow" | "agent" | "script" | "connector"
-	Definition *DefinitionExport `json:"definition,omitempty"`
-	Scripts    []Script          `json:"scripts,omitempty"`
-	Agents     []Agent           `json:"agents,omitempty"`
-	Connectors []MCPServer       `json:"connectors,omitempty"`
+	Version     int               `json:"version"`
+	ExportedAt  string            `json:"exportedAt"`
+	BundleType  string            `json:"bundleType"` // "workflow" | "agent" | "script" | "connector" | "json-schema"
+	Definition  *DefinitionExport `json:"definition,omitempty"`
+	Scripts     []Script          `json:"scripts,omitempty"`
+	Agents      []Agent           `json:"agents,omitempty"`
+	Connectors  []MCPServer       `json:"connectors,omitempty"`
+	JSONSchemas []JSONSchema      `json:"jsonSchemas,omitempty"`
 }
 
 type DefinitionExport struct {
@@ -167,6 +170,32 @@ func (s *Service) ExportConnector(ctx context.Context, serverID string) (ImportB
 	}, nil
 }
 
+func (s *Service) ExportJSONSchema(ctx context.Context, schemaID string) (ImportBundle, error) {
+	schema, err := s.GetJSONSchema(ctx, schemaID)
+	if err != nil {
+		return ImportBundle{}, fmt.Errorf("get JSON schema: %w", err)
+	}
+	return ImportBundle{
+		Version:     1,
+		ExportedAt:  formatTime(time.Now().UTC()),
+		BundleType:  jsonSchemaBundleType,
+		JSONSchemas: []JSONSchema{schema},
+	}, nil
+}
+
+func (s *Service) ExportJSONSchemas(ctx context.Context) (ImportBundle, error) {
+	schemas, err := s.ListJSONSchemas(ctx)
+	if err != nil {
+		return ImportBundle{}, fmt.Errorf("list JSON schemas: %w", err)
+	}
+	return ImportBundle{
+		Version:     1,
+		ExportedAt:  formatTime(time.Now().UTC()),
+		BundleType:  jsonSchemaBundleType,
+		JSONSchemas: schemas,
+	}, nil
+}
+
 // ─── Analyze ──────────────────────────────────────────────────────────────────
 
 func (s *Service) AnalyzeImport(ctx context.Context, bundle ImportBundle) (ImportAnalysis, error) {
@@ -201,6 +230,11 @@ func (s *Service) AnalyzeImport(ctx context.Context, bundle ImportBundle) (Impor
 			return ImportAnalysis{}, err
 		}
 	}
+	for _, schema := range bundle.JSONSchemas {
+		if err := classify(schema.ID, schema.Name, jsonSchemaBundleType); err != nil {
+			return ImportAnalysis{}, err
+		}
+	}
 	if bundle.Definition != nil {
 		if err := classify(bundle.Definition.ID, bundle.Definition.Name, "definition"); err != nil {
 			return ImportAnalysis{}, err
@@ -227,6 +261,8 @@ func (s *Service) entityExists(ctx context.Context, kind, id string) (bool, erro
 		table = "mcp_servers"
 	case "definition":
 		table = "workflow_definitions"
+	case jsonSchemaBundleType:
+		table = "json_schemas"
 	default:
 		return false, fmt.Errorf("unknown entity kind %q", kind)
 	}
@@ -289,7 +325,19 @@ func (s *Service) ApplyImport(ctx context.Context, bundle ImportBundle, override
 		imported++
 	}
 
-	// 3. Agents (after connectors so join rows can reference existing connectors)
+	// 3. JSON schemas
+	for i := range bundle.JSONSchemas {
+		schema := bundle.JSONSchemas[i]
+		if !willImport[schema.ID] {
+			continue
+		}
+		if err := s.upsertJSONSchema(ctx, schema, now); err != nil {
+			return imported, fmt.Errorf("import JSON schema %q: %w", schema.ID, err)
+		}
+		imported++
+	}
+
+	// 4. Agents (after connectors so join rows can reference existing connectors)
 	for i := range bundle.Agents {
 		ag := bundle.Agents[i]
 		if !willImport[ag.ID] {
@@ -301,7 +349,7 @@ func (s *Service) ApplyImport(ctx context.Context, bundle ImportBundle, override
 		imported++
 	}
 
-	// 4. Definition
+	// 5. Definition
 	if bundle.Definition != nil && willImport[bundle.Definition.ID] {
 		if err := s.upsertDefinition(ctx, *bundle.Definition, now); err != nil {
 			return imported, fmt.Errorf("import definition %q: %w", bundle.Definition.ID, err)
@@ -394,6 +442,24 @@ func (s *Service) upsertConnector(ctx context.Context, srv MCPServer, now time.T
 			headers_json = EXCLUDED.headers_json, enabled = EXCLUDED.enabled,
 			tools_json = EXCLUDED.tools_json, updated_at = EXCLUDED.updated_at
 	`), srv.ID, srv.Name, srv.Description, srv.Group, srv.URL, string(headersJSON), enabled, string(toolsJSON), ts, ts); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (s *Service) upsertJSONSchema(ctx context.Context, schema JSONSchema, now time.Time) error {
+	normalized, err := normalizeJSONSchemaInput(schema.Schema)
+	if err != nil {
+		return err
+	}
+	ts := formatTime(now)
+	if _, err := s.execDBQuery(ctx, `
+		INSERT INTO json_schemas (id, name, description, schema_json, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?)
+		ON CONFLICT (id) DO UPDATE SET
+			name = EXCLUDED.name, description = EXCLUDED.description,
+			schema_json = EXCLUDED.schema_json, updated_at = EXCLUDED.updated_at
+	`, schema.ID, schema.Name, schema.Description, string(normalized), ts, ts); err != nil {
 		return err
 	}
 	return nil

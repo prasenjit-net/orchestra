@@ -23,12 +23,14 @@ import {
   useNodesState,
   useReactFlow,
 } from '@xyflow/react'
-import { AlertCircle, ArrowLeft, Bot, CheckCircle2, ChevronDown, ChevronRight, ClipboardList, Clock3, Code2, FileText, GitBranch, Globe, Grip, Plus, Radio, Save, Send, Shuffle, Sparkles, SquareTerminal, Trash2, TriangleAlert, UserCheck, Users, Webhook, X } from 'lucide-react'
-import { Link, useNavigate, useParams } from 'react-router-dom'
+import { AlertCircle, ArrowLeft, Bot, Braces, CheckCircle2, ChevronDown, ChevronRight, ClipboardList, Clock3, Code2, FileText, GitBranch, Globe, Grip, History, Play, Plus, Radio, Save, Send, Shuffle, Sparkles, SquareTerminal, Trash2, TriangleAlert, UserCheck, Users, Webhook, X } from 'lucide-react'
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import ScriptAssistModal from '../components/ScriptAssistModal'
-import { agentsApi, scriptsApi, workflowApi } from '../services/api'
-import type { Agent, Script, WorkflowActivity, WorkflowDefinitionDocument, WorkflowStepTransition, WorkflowTransitionCondition } from '../types'
-import ContextExpressionPicker, { type PrecedingStep } from '../components/ContextExpressionPicker'
+import PublishVersionModal from '../components/PublishVersionModal'
+import StartWorkflowModal from '../components/StartWorkflowModal'
+import { agentsApi, jsonSchemasApi, scriptsApi, workflowApi } from '../services/api'
+import type { Agent, JSONSchemaDocument, Script, WorkflowActivity, WorkflowDefinitionDocument, WorkflowStepTransition, WorkflowTransitionCondition } from '../types'
+import ContextExpressionPicker, { type MappingField, type PrecedingStep } from '../components/ContextExpressionPicker'
 
 type InputRow = {
   id: string
@@ -48,6 +50,8 @@ type ActivityNodeData = {
 type BasicNodeData = {
   label: string
 }
+
+type BoundaryNodeKind = 'start' | 'end'
 
 type ContextReference = {
   label: string
@@ -74,9 +78,33 @@ type ActivityFlowNode = Node<ActivityNodeData, 'activity'>
 
 const startNodeID = 'workflow-start'
 const endNodeID = 'workflow-end'
+const terminalTransitionTarget = '__end__'
+const stepNamePattern = /^[a-z0-9_-]+$/
 
 function makeID(prefix: string) {
-  return `${prefix}-${Math.random().toString(36).slice(2, 10)}`
+  return `${prefix}-${crypto.randomUUID()}`
+}
+
+function toStepID(value: string) {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '')
+}
+
+function makeStepName(seed: string) {
+  return `${toStepID(seed) || 'step'}-${crypto.randomUUID().slice(0, 4)}`
+}
+
+function validateStepName(name: string) {
+  if (!name) {
+    throw new Error('Each step needs a name.')
+  }
+  if (!stepNamePattern.test(name)) {
+    throw new Error(`Step "${name}" must use only lowercase letters, numbers, "_" or "-".`)
+  }
 }
 
 function formatCategory(category: string) {
@@ -169,6 +197,59 @@ function buildInputPayload(rows: InputRow[]) {
   return payload
 }
 
+function outputRowsFromSchema(schema?: JSONSchemaDocument): InputRow[] {
+  const properties = schema?.schema.properties
+  if (!properties || typeof properties !== 'object' || Array.isArray(properties)) {
+    return [makeInputRow('result', '{{last}}')]
+  }
+  const rows = Object.keys(properties).map((key) => makeInputRow(key, `{{last.${key}}}`))
+  return rows.length ? rows : [makeInputRow('result', '{{last}}')]
+}
+
+function schemaPropertyNames(schema?: JSONSchemaDocument) {
+  const properties = schema?.schema.properties
+  if (!properties || typeof properties !== 'object' || Array.isArray(properties)) {
+    return []
+  }
+  return Object.keys(properties)
+}
+
+function schemaTypeLabel(schema: unknown) {
+  if (!schema || typeof schema !== 'object' || Array.isArray(schema)) {
+    return 'value'
+  }
+  const rawType = (schema as Record<string, unknown>).type
+  if (Array.isArray(rawType)) {
+    return rawType.map(String).join('|')
+  }
+  return typeof rawType === 'string' ? rawType : 'value'
+}
+
+function schemaMappingFields(schema?: JSONSchemaDocument): MappingField[] {
+  const collect = (node: unknown, prefix: string): MappingField[] => {
+    if (!node || typeof node !== 'object' || Array.isArray(node)) {
+      return []
+    }
+    const objectNode = node as Record<string, unknown>
+    const properties = objectNode.properties
+    if (!properties || typeof properties !== 'object' || Array.isArray(properties)) {
+      return []
+    }
+    const required = new Set(Array.isArray(objectNode.required) ? objectNode.required.map(String) : [])
+    return Object.entries(properties as Record<string, unknown>).flatMap(([key, child]) => {
+      const path = `${prefix}.${key}`
+      const field: MappingField = {
+        path,
+        type: schemaTypeLabel(child),
+        required: required.has(key),
+      }
+      return [field, ...collect(child, path)]
+    })
+  }
+
+  return collect(schema?.schema, 'input')
+}
+
 function findInputRowValue(rows: InputRow[], key: string) {
   return rows.find((row) => row.key === key)?.value ?? ''
 }
@@ -203,14 +284,14 @@ function formatStringListValue(value: unknown) {
   return value.map((item) => String(item)).join(', ')
 }
 
-function collectContextReferences(nodes: Node[], edges: Edge[], currentNodeID: string): ContextReference[] {
+function orderedPrecedingNodes(nodes: Node[], edges: Edge[], currentNodeID: string): ActivityFlowNode[] {
   const nodeMap = new Map(nodes.map((node) => [node.id, node]))
   const outgoing = new Map<string, string[]>()
   for (const edge of edges) {
     outgoing.set(edge.source, [...(outgoing.get(edge.source) ?? []), edge.target])
   }
 
-  const orderedPreviousNodes: ActivityFlowNode[] = []
+  const orderedNodes: ActivityFlowNode[] = []
   const visited = new Set<string>()
   let currentID = startNodeID
   while (!visited.has(currentID) && currentID !== currentNodeID) {
@@ -225,42 +306,34 @@ function collectContextReferences(nodes: Node[], edges: Edge[], currentNodeID: s
     }
     const nextNode = nodeMap.get(nextID)
     if (nextNode?.type === 'activity') {
-      orderedPreviousNodes.push(nextNode as ActivityFlowNode)
+      orderedNodes.push(nextNode as ActivityFlowNode)
     }
     currentID = nextID
   }
+  return orderedNodes
+}
 
-  const references: ContextReference[] = [
-    {
-      label: 'Latest completed step',
-      template: '{{last}}',
-      description: 'Uses the full output from the most recently completed step.',
-    },
-    {
-      label: 'Latest completed field',
-      template: '{{last.field}}',
-      description: 'Replace "field" with a property from the latest step output.',
-    },
-    {
-      label: 'Signal payload',
-      template: '{{signals.approval.lastPayload}}',
-      description: 'Reads the most recent payload for a workflow signal named approval.',
-    },
-    {
-      label: 'Signal count',
-      template: '{{signals.approval.count}}',
-      description: 'Reads how many times a workflow signal was received.',
-    },
-  ]
+function describeInputField(field: MappingField) {
+  const details = ['Start input']
+  if (field.type) details.push(field.type)
+  if (field.required) details.push('required')
+  return `${details.join(' · ')}.`
+}
+
+function collectContextReferences(nodes: Node[], edges: Edge[], currentNodeID: string, inputFields: MappingField[]): ContextReference[] {
+  const orderedPreviousNodes = orderedPrecedingNodes(nodes, edges, currentNodeID)
+
+  const references: ContextReference[] = inputFields.map((field) => ({
+    label: field.path,
+    template: `{{${field.path}}}`,
+    description: describeInputField(field),
+  }))
 
   for (const previousNode of orderedPreviousNodes) {
-    const stepName = previousNode.data.label.trim() || previousNode.data.activityName
-    references.push({
-      label: `${stepName} output`,
-      template: `{{steps.${stepName}}}`,
-      description: 'References the full output object for this earlier step.',
-    })
-
+    const stepName = previousNode.data.label.trim()
+    if (!stepName) {
+      continue
+    }
     const seenKeys = new Set<string>()
     for (const row of previousNode.data.inputRows) {
       const key = row.key.trim()
@@ -320,8 +393,12 @@ function getPrecedingSteps(
     if (node?.type === 'activity') {
       const data = (node as ActivityFlowNode).data
       const activity = activitiesByName.get(data.activityName)
+      const stepName = data.label.trim()
+      if (!stepName) {
+        continue
+      }
       result.push({
-        name: data.label.trim() || data.activityName,
+        name: stepName,
         activityName: data.activityName,
         exampleOutput: activity?.exampleOutput,
       })
@@ -577,12 +654,12 @@ function ScriptActivityFields({
   payload,
   setField,
   onUpdate,
-}: {
+}: Readonly<{
   node: ActivityFlowNode
   payload: unknown
   setField: (key: string, value: string, options?: { removeWhenBlank?: boolean }) => void
   onUpdate: (updater: (data: ActivityNodeData) => ActivityNodeData) => void
-}) {
+}>) {
   const [savedMode, setSavedMode] = useState(() => Boolean(findInputRowValue(node.data.inputRows, 'scriptId')))
   const [showAssist, setShowAssist] = useState(false)
 
@@ -859,10 +936,10 @@ function AgentActivityFields({
           rows={4}
           value={String((payload as Record<string, unknown>).prompt ?? '')}
           onChange={(event) => setField('prompt', event.target.value)}
-          placeholder="Summarize the following: {{.input}}"
+          placeholder="Summarize the following: {{.data.text}}"
           className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2.5 text-sm text-gray-900 outline-none transition-colors focus:border-primary-500 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
         />
-        <p className="mt-1 text-[11px] text-gray-400 dark:text-slate-500">Go template — workflow context is available as <span className="font-mono">.</span></p>
+        <p className="mt-1 text-[11px] text-gray-400 dark:text-slate-500">Go template — mapped activity input is available as <span className="font-mono">.</span></p>
       </div>
       <div>
         <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wide text-gray-500 dark:text-slate-400">Messages (conversation history JSON)</label>
@@ -893,11 +970,13 @@ type BranchCase = { id: string; label: string; path: string; operator: string; v
 
 function BranchActivityFields({
   node,
+  inputFields,
   stepNames,
   precedingSteps,
   onUpdate,
 }: {
   node: ActivityFlowNode
+  inputFields: MappingField[]
   stepNames: string[]
   precedingSteps: PrecedingStep[]
   onUpdate: (updater: (data: ActivityNodeData) => ActivityNodeData) => void
@@ -971,6 +1050,7 @@ function BranchActivityFields({
                   className="min-w-0 flex-1 rounded border border-gray-200 bg-white px-2 py-1.5 text-sm text-gray-900 outline-none focus:border-primary-500 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
                 />
                 <ContextExpressionPicker
+                  inputFields={inputFields}
                   precedingSteps={precedingSteps}
                   onSelect={(expr) => updateCase(c.id, { path: expr.replace(/^\{\{|\}\}$/g, '') })}
                 />
@@ -1020,6 +1100,7 @@ function BranchActivityFields({
 function ActivityPropertiesModal({
   node,
   contextReferences,
+  inputFields,
   precedingSteps,
   stepNames,
   onClose,
@@ -1028,6 +1109,7 @@ function ActivityPropertiesModal({
 }: {
   node: ActivityFlowNode
   contextReferences: ContextReference[]
+  inputFields: MappingField[]
   precedingSteps: PrecedingStep[]
   stepNames: string[]
   onClose: () => void
@@ -1101,6 +1183,7 @@ function ActivityPropertiesModal({
               className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-900 outline-none transition-colors focus:border-primary-500 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
             />
             <ContextExpressionPicker
+              inputFields={inputFields}
               precedingSteps={precedingSteps}
               onSelect={(expr) =>
                 onUpdate((data) => ({
@@ -1293,7 +1376,7 @@ function ActivityPropertiesModal({
       case 'agent':
         return <AgentActivityFields node={node} payload={payload} setField={setField} onUpdate={onUpdate} />
       case 'branch':
-        return <BranchActivityFields node={node} stepNames={stepNames} precedingSteps={precedingSteps} onUpdate={onUpdate} />
+        return <BranchActivityFields node={node} inputFields={inputFields} stepNames={stepNames} precedingSteps={precedingSteps} onUpdate={onUpdate} />
       default:
         return renderGenericRows()
     }
@@ -1328,9 +1411,11 @@ function ActivityPropertiesModal({
               <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wide text-gray-500 dark:text-slate-400">Step name</label>
               <input
                 value={node.data.label}
-                onChange={(event) => onUpdate((data) => ({ ...data, label: event.target.value }))}
+                onChange={(event) => onUpdate((data) => ({ ...data, label: toStepID(event.target.value) }))}
+                placeholder="step-name"
                 className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2.5 text-sm text-gray-900 outline-none transition-colors focus:border-primary-500 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
               />
+              <p className="mt-1 text-xs text-gray-500 dark:text-slate-400">Use lowercase letters, numbers, underscore, or hyphen.</p>
             </div>
 
             <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
@@ -1379,9 +1464,9 @@ function ActivityPropertiesModal({
               className="flex w-full items-start justify-between gap-3 px-3 py-3 text-left"
             >
               <div>
-                <h3 className="text-sm font-semibold text-gray-900 dark:text-slate-100">Available context values</h3>
+                <h3 className="text-sm font-semibold text-gray-900 dark:text-slate-100">Mapping values</h3>
                 <p className="mt-1 text-xs text-gray-600 dark:text-slate-300">
-                  Copy a template to reuse data from earlier steps or workflow signals.
+                  Copy a template to map start input, earlier step output, or workflow signals into this node input.
                 </p>
               </div>
               <div className="mt-0.5 flex items-center gap-2">
@@ -1418,7 +1503,7 @@ function ActivityPropertiesModal({
                   ))}
                 </div>
                 <p className="mt-3 text-[11px] text-gray-500 dark:text-slate-400">
-                  Step names with spaces are supported. Use additional dot paths after the copied root to reach nested fields.
+                  Step names are stable ids, so copied templates can be referenced directly. Add dot paths after the copied root to reach nested fields.
                 </p>
               </div>
             ) : null}
@@ -1453,12 +1538,14 @@ const CONDITION_OPERATORS = ['eq', 'neq', 'exists', 'not_exists', 'truthy', 'fal
 function EdgeConditionModal({
   edgeId,
   initialData,
+  inputFields,
   precedingSteps,
   onSave,
   onClose,
 }: {
   edgeId: string
   initialData: EdgeConditionData
+  inputFields: MappingField[]
   precedingSteps: PrecedingStep[]
   onSave: (edgeId: string, data: EdgeConditionData) => void
   onClose: () => void
@@ -1522,6 +1609,7 @@ function EdgeConditionModal({
                     className="min-w-0 flex-1 rounded-lg border border-gray-200 bg-white px-3 py-2.5 text-sm text-gray-900 outline-none transition-colors focus:border-primary-500 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
                   />
                   <ContextExpressionPicker
+                    inputFields={inputFields}
                     precedingSteps={precedingSteps}
                     onSelect={(expr) => setPath(expr.replace(/^\{\{|\}\}$/g, ''))}
                   />
@@ -1554,6 +1642,145 @@ function EdgeConditionModal({
         <div className="flex justify-end gap-3 border-t border-gray-200 px-5 py-4 dark:border-slate-800">
           <button type="button" onClick={onClose} className="rounded-lg border border-gray-200 px-4 py-2 text-sm font-semibold text-gray-700 transition-colors hover:bg-gray-50 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800">Cancel</button>
           <button type="button" onClick={save} className="rounded-lg bg-primary-600 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-primary-700">Save</button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function BoundarySettingsModal({
+  kind,
+  schemas,
+  startSchemaId,
+  endSchemaId,
+  endOutputRows,
+  onStartSchemaChange,
+  onEndSchemaChange,
+  onEndOutputRowsChange,
+  onClose,
+}: {
+  kind: BoundaryNodeKind
+  schemas: JSONSchemaDocument[]
+  startSchemaId: string
+  endSchemaId: string
+  endOutputRows: InputRow[]
+  onStartSchemaChange: (schemaId: string) => void
+  onEndSchemaChange: (schemaId: string) => void
+  onEndOutputRowsChange: (rows: InputRow[]) => void
+  onClose: () => void
+}) {
+  const selectedEndSchema = schemas.find((schema) => schema.id === endSchemaId)
+  const endSchemaProperties = schemaPropertyNames(selectedEndSchema)
+  const isStart = kind === 'start'
+
+  const updateOutputRow = (id: string, patch: Partial<InputRow>) => {
+    onEndOutputRowsChange(endOutputRows.map((row) => (row.id === id ? { ...row, ...patch } : row)))
+  }
+
+  const applySchemaFields = () => {
+    onEndOutputRowsChange(outputRowsFromSchema(selectedEndSchema))
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-4 backdrop-blur-sm">
+      <div className="flex max-h-[90vh] w-full max-w-2xl flex-col overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-2xl dark:border-slate-800 dark:bg-slate-900">
+        <div className="flex items-start justify-between gap-4 border-b border-gray-200 px-5 py-4 dark:border-slate-800">
+          <div>
+            <div className="flex items-center gap-2">
+              <Braces className="h-5 w-5 text-primary-600 dark:text-primary-400" />
+              <h2 className="text-lg font-semibold text-gray-900 dark:text-slate-100">{isStart ? 'Start node schema' : 'End node response'}</h2>
+            </div>
+            <p className="mt-1 text-sm text-gray-500 dark:text-slate-400">
+              {isStart ? 'Optionally validate incoming workflow input before a run starts.' : 'Optionally define the final response schema and map output fields.'}
+            </p>
+          </div>
+          <button type="button" onClick={onClose} className="rounded-lg border border-gray-200 p-2 text-gray-500 transition-colors hover:bg-gray-50 dark:border-slate-700 dark:text-slate-400 dark:hover:bg-slate-800">
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+
+        <div className="min-h-0 flex-1 space-y-5 overflow-y-auto px-5 py-4">
+          <label className="block">
+            <span className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wide text-gray-500 dark:text-slate-400">
+              {isStart ? 'Start schema' : 'End schema'}
+            </span>
+            <select
+              value={isStart ? startSchemaId : endSchemaId}
+              onChange={(event) => {
+                if (isStart) {
+                  onStartSchemaChange(event.target.value)
+                } else {
+                  onEndSchemaChange(event.target.value)
+                }
+              }}
+              className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2.5 text-sm text-gray-900 outline-none transition-colors focus:border-primary-500 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
+            >
+              <option value="">No schema</option>
+              {schemas.map((schema) => (
+                <option key={schema.id} value={schema.id}>{schema.name}</option>
+              ))}
+            </select>
+          </label>
+
+          {!isStart && (
+            <div className="rounded-xl border border-gray-200 p-3 dark:border-slate-700">
+              <div className="mb-3 flex items-center justify-between gap-3">
+                <div>
+                  <h3 className="text-sm font-semibold text-gray-900 dark:text-slate-100">Response mapping</h3>
+                  <p className="mt-1 text-xs text-gray-500 dark:text-slate-400">Use templates such as {'{{last}}'}, {'{{last.id}}'}, or {'{{steps.stepName.value}}'}.</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={applySchemaFields}
+                  disabled={!selectedEndSchema}
+                  className="rounded-lg border border-gray-200 px-3 py-2 text-xs font-semibold text-gray-700 transition-colors hover:bg-gray-50 disabled:opacity-50 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800"
+                >
+                  Use schema fields
+                </button>
+              </div>
+              <div className="space-y-2">
+                {endOutputRows.map((row) => (
+                  <div key={row.id} className="grid grid-cols-[minmax(0,0.8fr)_minmax(0,1fr)_auto] gap-2">
+                    <input
+                      value={row.key}
+                      onChange={(event) => updateOutputRow(row.id, { key: event.target.value })}
+                      list="end-schema-fields"
+                      placeholder="responseField"
+                      className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-900 outline-none transition-colors focus:border-primary-500 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
+                    />
+                    <input
+                      value={row.value}
+                      onChange={(event) => updateOutputRow(row.id, { value: event.target.value })}
+                      placeholder="{{last.value}}"
+                      className="rounded-lg border border-gray-200 bg-white px-3 py-2 font-mono text-xs text-gray-900 outline-none transition-colors focus:border-primary-500 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => onEndOutputRowsChange(endOutputRows.filter((item) => item.id !== row.id))}
+                      className="rounded-lg border border-gray-200 px-2.5 text-gray-500 transition-colors hover:bg-gray-50 dark:border-slate-700 dark:text-slate-400 dark:hover:bg-slate-800"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </button>
+                  </div>
+                ))}
+                <datalist id="end-schema-fields">
+                  {endSchemaProperties.map((property) => <option key={property} value={property} />)}
+                </datalist>
+              </div>
+              <button
+                type="button"
+                onClick={() => onEndOutputRowsChange([...endOutputRows, makeInputRow()])}
+                className="mt-3 inline-flex items-center gap-2 rounded-lg border border-gray-200 px-3 py-2 text-xs font-semibold text-gray-700 transition-colors hover:bg-gray-50 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800"
+              >
+                <Plus className="h-3.5 w-3.5" />
+                Add mapping
+              </button>
+            </div>
+          )}
+        </div>
+
+        <div className="flex justify-end border-t border-gray-200 px-5 py-4 dark:border-slate-800">
+          <button type="button" onClick={onClose} className="rounded-lg bg-primary-600 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-primary-700">Done</button>
         </div>
       </div>
     </div>
@@ -1619,7 +1846,7 @@ function createActivityNode(activity: WorkflowActivity, position: { x: number; y
     sourcePosition: Position.Right,
     targetPosition: Position.Left,
     data: {
-      label: label ?? `${activityDisplayName(activity)} step`,
+      label: label ?? makeStepName(activity.name || activityDisplayName(activity)),
       activityName: activity.name,
       description: activity.description,
       inputRows: rowsFromInput(input, activity.exampleInput),
@@ -1691,7 +1918,58 @@ function buildGraphFromDefinition(definition: WorkflowDefinitionDocument, activi
   return { nodes, edges }
 }
 
-function compileDocument(name: string, description: string, nodes: Node[], edges: Edge[]): WorkflowDefinitionDocument {
+function indexOutgoingEdges(edges: Edge[]) {
+  const outgoingEdges = new Map<string, Edge[]>()
+  for (const edge of edges) {
+    outgoingEdges.set(edge.source, [...(outgoingEdges.get(edge.source) ?? []), edge])
+  }
+  return outgoingEdges
+}
+
+function discoverOrderedStepIDs(nodeMap: Map<string, Node>, outgoingEdges: Map<string, Edge[]>, firstNodeID: string) {
+  const orderedStepIds: string[] = []
+  const visited = new Set<string>()
+  const bfsQueue: string[] = [firstNodeID]
+
+  while (bfsQueue.length > 0) {
+    const currentID = bfsQueue.shift()!
+    if (visited.has(currentID) || currentID === endNodeID) continue
+    visited.add(currentID)
+
+    const node = nodeMap.get(currentID)
+    if (!node || node.type !== 'activity') continue
+    orderedStepIds.push(currentID)
+
+    for (const edge of outgoingEdges.get(currentID) ?? []) {
+      if (!visited.has(edge.target)) bfsQueue.push(edge.target)
+    }
+  }
+  return orderedStepIds
+}
+
+function buildStepNameMap(orderedStepIds: string[], nodeMap: Map<string, Node>) {
+  const stepNameByNodeId = new Map<string, string>()
+  const seenStepNames = new Set<string>()
+  for (const nodeId of orderedStepIds) {
+    const node = nodeMap.get(nodeId) as ActivityFlowNode
+    const stepName = node.data.label.trim()
+    validateStepName(stepName)
+    if (seenStepNames.has(stepName)) {
+      throw new Error(`Step name "${stepName}" must be unique.`)
+    }
+    seenStepNames.add(stepName)
+    stepNameByNodeId.set(nodeId, stepName)
+  }
+  return stepNameByNodeId
+}
+
+function compileDocument(
+  name: string,
+  description: string,
+  nodes: Node[],
+  edges: Edge[],
+  options: { startSchemaId?: string; endSchemaId?: string; endOutputRows: InputRow[] },
+): WorkflowDefinitionDocument {
   if (!name.trim()) {
     throw new Error('Workflow name is required.')
   }
@@ -1702,52 +1980,25 @@ function compileDocument(name: string, description: string, nodes: Node[], edges
   }
 
   const nodeMap = new Map(nodes.map((node) => [node.id, node]))
-  const outgoingEdges = new Map<string, Edge[]>()
-  for (const edge of edges) {
-    outgoingEdges.set(edge.source, [...(outgoingEdges.get(edge.source) ?? []), edge])
-  }
+  const outgoingEdges = indexOutgoingEdges(edges)
 
   const startTargets = outgoingEdges.get(startNodeID) ?? []
   if (startTargets.length !== 1) {
     throw new Error('The start node must connect to exactly one step.')
   }
 
-  // BFS from start to discover step order
-  const orderedStepIds: string[] = []
-  const visited = new Set<string>()
-  const bfsQueue: string[] = [startTargets[0].target]
-
-  while (bfsQueue.length > 0) {
-    const currentID = bfsQueue.shift()!
-    if (visited.has(currentID) || currentID === endNodeID) continue
-    visited.add(currentID)
-
-    const node = nodeMap.get(currentID)
-    if (!node || node.type !== 'activity') continue
-
-    orderedStepIds.push(currentID)
-    for (const edge of outgoingEdges.get(currentID) ?? []) {
-      if (!visited.has(edge.target)) {
-        bfsQueue.push(edge.target)
-      }
-    }
-  }
+  const orderedStepIds = discoverOrderedStepIDs(nodeMap, outgoingEdges, startTargets[0].target)
 
   if (orderedStepIds.length !== activityNodes.length) {
     throw new Error('All activity nodes must be reachable from Start.')
   }
 
-  // Build name→index map for transition validation
-  const stepNameByNodeId = new Map<string, string>()
-  for (const nodeId of orderedStepIds) {
-    const node = nodeMap.get(nodeId) as ActivityFlowNode
-    stepNameByNodeId.set(nodeId, node.data.label.trim() || node.data.activityName)
-  }
+  const stepNameByNodeId = buildStepNameMap(orderedStepIds, nodeMap)
 
   const steps = orderedStepIds.map((nodeId, index) => {
     const node = nodeMap.get(nodeId) as ActivityFlowNode
     const nodeData = node.data
-    const stepName = nodeData.label.trim() || nodeData.activityName
+    const stepName = nodeData.label.trim()
 
     const outs = outgoingEdges.get(nodeId) ?? []
     const toActivity = outs.filter((e) => e.target !== endNodeID)
@@ -1755,6 +2006,15 @@ function compileDocument(name: string, description: string, nodes: Node[], edges
 
     let transitions: WorkflowStepTransition[] | undefined
     const isLastStep = index === orderedStepIds.length - 1
+    const edgeTargetName = (edge: Edge) => (edge.target === endNodeID ? terminalTransitionTarget : (stepNameByNodeId.get(edge.target) ?? edge.target))
+    const edgeToTransition = (edge: Edge): WorkflowStepTransition => {
+      const edgeData = edge.data as EdgeConditionData | undefined
+      return {
+        to: edgeTargetName(edge),
+        label: edgeData?.label,
+        condition: edgeData?.condition,
+      }
+    }
 
     if (toActivity.length === 0 && toEnd.length > 0 && !isLastStep) {
       // Explicit terminal (non-last step that only connects to End)
@@ -1773,18 +2033,15 @@ function compileDocument(name: string, description: string, nodes: Node[], edges
           condition: edgeData?.condition,
         }]
       }
-    } else if (toActivity.length > 1 || (toActivity.length >= 1 && toEnd.length >= 1)) {
-      // Branching: build explicit transitions for each outgoing edge
-      transitions = outs.map((e) => {
-        const edgeData = e.data as EdgeConditionData | undefined
-        const targetName = e.target === endNodeID ? '__end__' : (stepNameByNodeId.get(e.target) ?? e.target)
-        return {
-          to: targetName,
-          label: edgeData?.label,
-          condition: edgeData?.condition,
-        }
-      }).filter((t) => t.to !== '__end__') // transitions to End are handled by empty array or nil
-      if (transitions.length === 0) transitions = []
+    } else if (outs.length > 1) {
+      const defaultEdges = outs.filter((edge) => {
+        const edgeData = edge.data as EdgeConditionData | undefined
+        return !edgeData?.condition
+      })
+      if (defaultEdges.length !== 1) {
+        throw new Error(`Step "${stepName}" with multiple outgoing edges needs exactly one default edge without a condition.`)
+      }
+      transitions = outs.map(edgeToTransition)
     } else {
       // Last step or only connects to End naturally — nil transitions (linear fallback)
       transitions = undefined
@@ -1806,15 +2063,20 @@ function compileDocument(name: string, description: string, nodes: Node[], edges
     }
   })
 
+  const endOutput = buildInputPayload(options.endOutputRows)
   return {
     name: name.trim(),
     description: description.trim(),
+    startSchemaId: options.startSchemaId || undefined,
+    endSchemaId: options.endSchemaId || undefined,
+    endOutput: Object.keys(endOutput).length > 0 ? endOutput : undefined,
     steps,
   }
 }
 
 function WorkflowDesignerCanvas() {
   const { definitionId } = useParams<{ definitionId: string }>()
+  const [searchParams] = useSearchParams()
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   const reactFlowWrapper = useRef<HTMLDivElement | null>(null)
@@ -1823,9 +2085,16 @@ function WorkflowDesignerCanvas() {
 
   const [workflowName, setWorkflowName] = useState('')
   const [workflowDescription, setWorkflowDescription] = useState('')
+  const [startSchemaId, setStartSchemaId] = useState('')
+  const [endSchemaId, setEndSchemaId] = useState('')
+  const [endOutputRows, setEndOutputRows] = useState<InputRow[]>(() => [makeInputRow()])
   const [notice, setNotice] = useState<string | null>(null)
   const [pageError, setPageError] = useState<string | null>(null)
+  const [publishTarget, setPublishTarget] = useState<number | null>(null)
+  const [startRunOpen, setStartRunOpen] = useState(false)
+  const [startRunError, setStartRunError] = useState<string | null>(null)
   const [editingNodeID, setEditingNodeID] = useState<string | null>(null)
+  const [editingBoundary, setEditingBoundary] = useState<BoundaryNodeKind | null>(null)
   const [isDesktop, setIsDesktop] = useState(() => (typeof window === 'undefined' ? true : window.innerWidth >= 1024))
   const [contextMenu, setContextMenu] = useState<CanvasContextMenuState | null>(null)
   const [editingEdgeID, setEditingEdgeID] = useState<string | null>(null)
@@ -1835,13 +2104,26 @@ function WorkflowDesignerCanvas() {
     queryFn: workflowApi.listActivities,
   })
 
+  const schemasQuery = useQuery({
+    queryKey: ['json-schemas'],
+    queryFn: jsonSchemasApi.list,
+  })
+
+  const requestedVersionValue = Number(searchParams.get('version'))
+  const requestedVersion = Number.isInteger(requestedVersionValue) && requestedVersionValue > 0 ? requestedVersionValue : null
+
   const definitionQuery = useQuery({
-    queryKey: ['workflow-definition', definitionId],
-    queryFn: () => workflowApi.getDefinition(definitionId as string),
+    queryKey: ['workflow-definition', definitionId, requestedVersion ?? 'active'],
+    queryFn: () => requestedVersion
+      ? workflowApi.getDefinitionVersion(definitionId as string, requestedVersion)
+      : workflowApi.getDefinition(definitionId as string),
     enabled: Boolean(definitionId),
   })
 
   const activities = useMemo(() => activitiesQuery.data?.activities ?? [], [activitiesQuery.data?.activities])
+  const schemas = useMemo(() => schemasQuery.data?.schemas ?? [], [schemasQuery.data?.schemas])
+  const selectedStartSchema = useMemo(() => schemas.find((schema) => schema.id === startSchemaId), [schemas, startSchemaId])
+  const inputFields = useMemo(() => schemaMappingFields(selectedStartSchema), [selectedStartSchema])
   const activitiesByName = useMemo(() => new Map(activities.map((activity) => [activity.name, activity])), [activities])
   const activityCategories = useMemo(() => [...new Set(activities.map((activity) => activity.category))], [activities])
   const nodeTypes = useMemo(() => ({ activity: ActivityNode }), [])
@@ -1878,6 +2160,9 @@ function WorkflowDesignerCanvas() {
       setEdges(nextState.edges)
       setWorkflowName('')
       setWorkflowDescription('')
+      setStartSchemaId('')
+      setEndSchemaId('')
+      setEndOutputRows([makeInputRow()])
       return
     }
 
@@ -1890,20 +2175,23 @@ function WorkflowDesignerCanvas() {
     setEdges(nextState.edges)
     setWorkflowName(definitionQuery.data.document.name)
     setWorkflowDescription(definitionQuery.data.document.description)
+    setStartSchemaId(definitionQuery.data.document.startSchemaId ?? '')
+    setEndSchemaId(definitionQuery.data.document.endSchemaId ?? '')
+    setEndOutputRows(rowsFromInput(definitionQuery.data.document.endOutput ?? {}))
   }, [definitionId, definitionQuery.data, activitiesByName, setEdges, setNodes])
 
   const selectedNode = nodes.find((node) => node.selected && node.type === 'activity') as ActivityFlowNode | undefined
   const editingNode = nodes.find((node) => node.id === editingNodeID && node.type === 'activity') as ActivityFlowNode | undefined
   const contextReferences = useMemo(
-    () => (editingNode ? collectContextReferences(nodes, edges, editingNode.id) : []),
-    [editingNode, nodes, edges],
+    () => (editingNode ? collectContextReferences(nodes, edges, editingNode.id, inputFields) : []),
+    [editingNode, inputFields, nodes, edges],
   )
   const precedingSteps = useMemo(
     () => (editingNode ? getPrecedingSteps(editingNode.id, nodes, edges, activitiesByName) : []),
     [editingNode, nodes, edges, activitiesByName],
   )
   const allStepNames = useMemo(
-    () => (nodes.filter((n) => n.type === 'activity') as ActivityFlowNode[]).map((n) => n.data.label.trim() || n.data.activityName),
+    () => (nodes.filter((n) => n.type === 'activity') as ActivityFlowNode[]).map((n) => n.data.label.trim()).filter(Boolean),
     [nodes],
   )
   const editingEdge = useMemo(
@@ -2019,6 +2307,17 @@ function WorkflowDesignerCanvas() {
     [],
   )
 
+  const updateEndSchema = useCallback((schemaId: string) => {
+    setEndSchemaId(schemaId)
+    if (!schemaId) {
+      return
+    }
+    const schema = schemas.find((item) => item.id === schemaId)
+    if (schema && endOutputRows.length <= 1 && !endOutputRows.some((row) => row.key.trim() || row.value.trim())) {
+      setEndOutputRows(outputRowsFromSchema(schema))
+    }
+  }, [endOutputRows, schemas])
+
   const saveEdgeCondition = useCallback(
     (edgeId: string, data: EdgeConditionData) => {
       setEdges((currentEdges) =>
@@ -2057,8 +2356,8 @@ function WorkflowDesignerCanvas() {
 
   const removeNodeByID = useCallback(
     (nodeID: string) => {
-      const targetNode = nodes.find((node) => node.id === nodeID && node.type === 'activity')
-      if (!targetNode) {
+      const hasTargetNode = nodes.some((node) => node.id === nodeID && node.type === 'activity')
+      if (!hasTargetNode) {
         return
       }
 
@@ -2093,15 +2392,16 @@ function WorkflowDesignerCanvas() {
   })
 
   const createDefinitionVersionMutation = useMutation({
-    mutationFn: ({ targetDefinitionId, payload }: { targetDefinitionId: string; payload: WorkflowDefinitionDocument }) =>
-      workflowApi.createDefinitionVersion(targetDefinitionId, payload),
+    mutationFn: ({ targetDefinitionId, payload, basedOnVersion }: { targetDefinitionId: string; payload: WorkflowDefinitionDocument; basedOnVersion: number }) =>
+      workflowApi.createDefinitionVersion(targetDefinitionId, payload, basedOnVersion),
     onSuccess: (definition) => {
       setPageError(null)
-      setNotice(`Saved draft version v${definition.draftVersion ?? definition.latestVersion}.`)
+      setNotice(`Saved draft version v${definition.latestVersion}.`)
       void Promise.all([
         queryClient.invalidateQueries({ queryKey: ['workflow-definitions'] }),
         queryClient.invalidateQueries({ queryKey: ['workflow-definition', definition.id] }),
       ])
+      navigate(`/workflows/${definition.id}/designer?version=${definition.latestVersion}`, { replace: true })
     },
     onError: (error: Error) => {
       setNotice(null)
@@ -2110,11 +2410,14 @@ function WorkflowDesignerCanvas() {
   })
 
   const publishDefinitionMutation = useMutation({
-    mutationFn: ({ targetDefinitionId, version }: { targetDefinitionId: string; version: number }) =>
-      workflowApi.publishDefinitionVersion(targetDefinitionId, version),
-    onSuccess: (definition) => {
+    mutationFn: ({ targetDefinitionId, version, activate }: { targetDefinitionId: string; version: number; activate: boolean }) =>
+      workflowApi.publishDefinitionVersion(targetDefinitionId, version, activate),
+    onSuccess: (definition, variables) => {
+      setPublishTarget(null)
       setPageError(null)
-      setNotice(`Published ${definition.name} v${definition.activeVersion}.`)
+      setNotice(variables.activate
+        ? `Published and activated v${variables.version}.`
+        : `Published v${variables.version}. Active version remains v${definition.activeVersion}.`)
       void Promise.all([
         queryClient.invalidateQueries({ queryKey: ['workflow-definitions'] }),
         queryClient.invalidateQueries({ queryKey: ['workflow-definition', definition.id] }),
@@ -2126,12 +2429,54 @@ function WorkflowDesignerCanvas() {
     },
   })
 
+  const activateDefinitionMutation = useMutation({
+    mutationFn: ({ targetDefinitionId, version }: { targetDefinitionId: string; version: number }) =>
+      workflowApi.activateDefinitionVersion(targetDefinitionId, version),
+    onSuccess: (definition) => {
+      setPageError(null)
+      setNotice(`Activated v${definition.activeVersion} for new workflow runs.`)
+      void Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['workflow-definitions'] }),
+        queryClient.invalidateQueries({ queryKey: ['workflow-definition', definition.id] }),
+      ])
+    },
+    onError: (error: Error) => {
+      setNotice(null)
+      setPageError(error.message)
+    },
+  })
+
+  const startWorkflowMutation = useMutation({
+    mutationFn: ({ input, callbackUrl, version }: { input: Record<string, unknown>; callbackUrl: string; version: number }) =>
+      workflowApi.startWorkflow(definitionId as string, {
+        input: Object.keys(input).length > 0 ? input : undefined,
+        callbackUrl: callbackUrl || undefined,
+        version,
+      }),
+    onSuccess: (instance) => {
+      setStartRunOpen(false)
+      setStartRunError(null)
+      void queryClient.invalidateQueries({ queryKey: ['workflows'] })
+      void queryClient.invalidateQueries({ queryKey: ['workflow-tasks'] })
+      navigate(`/runs/${instance.id}`)
+    },
+    onError: (error: Error) => setStartRunError(error.message),
+  })
+
   const saveDocument = useCallback(() => {
     try {
-      const payload = compileDocument(workflowName, workflowDescription, nodes, edges)
+      const payload = compileDocument(workflowName, workflowDescription, nodes, edges, {
+        startSchemaId,
+        endSchemaId,
+        endOutputRows,
+      })
       setPageError(null)
       if (definitionId) {
-        createDefinitionVersionMutation.mutate({ targetDefinitionId: definitionId, payload })
+        const basedOnVersion = requestedVersion ?? definitionQuery.data?.activeVersion
+        if (!basedOnVersion) {
+          throw new Error('Select a source workflow version before saving.')
+        }
+        createDefinitionVersionMutation.mutate({ targetDefinitionId: definitionId, payload, basedOnVersion })
         return
       }
       createDefinitionMutation.mutate(payload)
@@ -2139,18 +2484,25 @@ function WorkflowDesignerCanvas() {
       setNotice(null)
       setPageError(error instanceof Error ? error.message : 'Unable to build workflow definition.')
     }
-  }, [createDefinitionMutation, createDefinitionVersionMutation, definitionId, edges, nodes, workflowDescription, workflowName])
+  }, [createDefinitionMutation, createDefinitionVersionMutation, definitionId, definitionQuery.data?.activeVersion, edges, endOutputRows, endSchemaId, nodes, requestedVersion, startSchemaId, workflowDescription, workflowName])
 
-  if (activitiesQuery.isLoading || (definitionId && definitionQuery.isLoading)) {
+  if (activitiesQuery.isLoading || schemasQuery.isLoading || (definitionId && definitionQuery.isLoading)) {
     return <div className="p-8 text-sm text-gray-500 dark:text-slate-400">Loading designer…</div>
   }
 
-  if (activitiesQuery.error || definitionQuery.error) {
+  if (activitiesQuery.error || schemasQuery.error || definitionQuery.error) {
     return <div className="p-8 text-sm text-red-600 dark:text-red-300">Unable to load workflow designer.</div>
   }
 
   const loadedDefinition = definitionQuery.data
-  const hasExistingDraft = Boolean(loadedDefinition?.draftVersion)
+  const viewedVersion = requestedVersion ?? loadedDefinition?.activeVersion ?? null
+  const viewedVersionMeta = loadedDefinition?.versions.find((version) => version.version === viewedVersion)
+  let activationTitle = 'Activate this version for new workflow runs'
+  if (viewedVersionMeta?.status === 'draft') activationTitle = 'Publish this version before activating it'
+  else if (viewedVersion === loadedDefinition?.activeVersion) activationTitle = 'This version is already active'
+
+  let activationLabel = viewedVersion ? `Activate v${viewedVersion}` : 'Activate'
+  if (activateDefinitionMutation.isPending) activationLabel = 'Activating...'
 
   if (!isDesktop) {
     return (
@@ -2194,6 +2546,15 @@ function WorkflowDesignerCanvas() {
             </div>
           </div>
           <div className="flex flex-wrap gap-2">
+            {definitionId ? (
+              <Link
+                to={`/workflows/${definitionId}/versions`}
+                className="inline-flex items-center gap-2 rounded-lg border border-gray-200 px-3 py-2 text-xs font-semibold text-gray-700 transition-colors hover:bg-gray-50 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800"
+              >
+                <History className="h-4 w-4" />
+                Versions
+              </Link>
+            ) : null}
             <Link
               to="/operations"
               className="rounded-lg border border-gray-200 px-3 py-2 text-xs font-semibold text-gray-700 transition-colors hover:bg-gray-50 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800"
@@ -2203,35 +2564,53 @@ function WorkflowDesignerCanvas() {
             <button
               type="button"
               onClick={saveDocument}
-              disabled={createDefinitionMutation.isPending || createDefinitionVersionMutation.isPending || Boolean(definitionId && hasExistingDraft)}
+              disabled={createDefinitionMutation.isPending || createDefinitionVersionMutation.isPending}
               className="inline-flex items-center gap-2 rounded-lg bg-primary-600 px-3 py-2 text-xs font-semibold text-white transition-colors hover:bg-primary-700 disabled:cursor-not-allowed disabled:opacity-60"
             >
               <Save className="h-4 w-4" />
-              {definitionId ? 'Save draft version' : 'Create workflow'}
+              {definitionId ? 'Save as new version' : 'Create workflow'}
             </button>
-            {definitionId && loadedDefinition?.draftVersion ? (
+            {definitionId && viewedVersionMeta?.status === 'draft' && viewedVersion ? (
               <button
                 type="button"
-                onClick={() =>
-                  publishDefinitionMutation.mutate({
-                    targetDefinitionId: definitionId,
-                    version: loadedDefinition.draftVersion as number,
-                  })
-                }
+                onClick={() => setPublishTarget(viewedVersion)}
                 disabled={publishDefinitionMutation.isPending}
                 className="inline-flex items-center gap-2 rounded-lg border border-emerald-200 px-3 py-2 text-xs font-semibold text-emerald-700 transition-colors hover:bg-emerald-50 disabled:cursor-not-allowed disabled:opacity-60 dark:border-emerald-900/40 dark:text-emerald-300 dark:hover:bg-emerald-950/20"
               >
                 <Send className="h-4 w-4" />
-                Publish draft
+                Publish v{viewedVersion}
+              </button>
+            ) : null}
+            {definitionId ? (
+              <button
+                type="button"
+                onClick={() => { setStartRunError(null); setStartRunOpen(true) }}
+                disabled={!viewedVersion || viewedVersionMeta?.status !== 'published'}
+                title={viewedVersionMeta?.status === 'draft' ? 'Publish this version before starting a run' : 'Start a run with this version'}
+                className="inline-flex items-center gap-2 rounded-lg border border-gray-200 px-3 py-2 text-xs font-semibold text-gray-700 transition-colors hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800"
+              >
+                <Play className="h-4 w-4" />
+                {viewedVersion ? `Start v${viewedVersion}` : 'Start run'}
+              </button>
+            ) : null}
+            {definitionId ? (
+              <button
+                type="button"
+                onClick={() => {
+                  if (viewedVersion) {
+                    activateDefinitionMutation.mutate({ targetDefinitionId: definitionId, version: viewedVersion })
+                  }
+                }}
+                disabled={activateDefinitionMutation.isPending || !viewedVersion || viewedVersionMeta?.status !== 'published' || viewedVersion === loadedDefinition?.activeVersion}
+                title={activationTitle}
+                className="inline-flex items-center gap-2 rounded-lg border border-emerald-200 px-3 py-2 text-xs font-semibold text-emerald-700 transition-colors hover:bg-emerald-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-emerald-900/40 dark:text-emerald-300 dark:hover:bg-emerald-950/20"
+              >
+                <Play className="h-4 w-4" />
+                {activationLabel}
               </button>
             ) : null}
           </div>
         </div>
-        {hasExistingDraft ? (
-          <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700 dark:border-amber-900/40 dark:bg-amber-950/20 dark:text-amber-300">
-            This definition already has a draft version. Publish the draft before saving another one from the designer.
-          </div>
-        ) : null}
         {notice ? (
           <div className="mt-3 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-700 dark:border-emerald-900/40 dark:bg-emerald-950/30 dark:text-emerald-300">
             <div className="flex items-center gap-2">
@@ -2272,12 +2651,23 @@ function WorkflowDesignerCanvas() {
           </div>
           {loadedDefinition ? (
             <div className="flex shrink-0 items-center gap-1.5 text-[11px] text-gray-500 dark:text-slate-400">
+              <label htmlFor="designer-version" className="font-semibold uppercase text-gray-400 dark:text-slate-500">Version</label>
+              <select
+                id="designer-version"
+                value={viewedVersion ?? ''}
+                onChange={(event) => navigate(`/workflows/${loadedDefinition.id}/designer?version=${event.target.value}`)}
+                className="rounded-md border border-gray-200 bg-white px-2 py-1 text-xs font-semibold text-gray-700 outline-none focus:border-primary-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
+              >
+                {loadedDefinition.versions.map((version) => (
+                  <option key={version.version} value={version.version}>v{version.version} · {version.status}</option>
+                ))}
+              </select>
               <span className="rounded-full bg-gray-100 px-2 py-0.5 font-semibold dark:bg-slate-800">v{loadedDefinition.activeVersion} active</span>
               {loadedDefinition.latestVersion !== loadedDefinition.activeVersion ? (
                 <span className="rounded-full bg-gray-100 px-2 py-0.5 dark:bg-slate-800">v{loadedDefinition.latestVersion} latest</span>
               ) : null}
-              {loadedDefinition.draftVersion ? (
-                <span className="rounded-full bg-amber-100 px-2 py-0.5 font-semibold text-amber-700 dark:bg-amber-900/40 dark:text-amber-300">v{loadedDefinition.draftVersion} draft</span>
+              {loadedDefinition.draftCount > 0 ? (
+                <span className="rounded-full bg-amber-100 px-2 py-0.5 font-semibold text-amber-700 dark:bg-amber-900/40 dark:text-amber-300">{loadedDefinition.draftCount} {loadedDefinition.draftCount === 1 ? 'draft' : 'drafts'}</span>
               ) : null}
             </div>
           ) : null}
@@ -2303,6 +2693,10 @@ function WorkflowDesignerCanvas() {
             onNodeDoubleClick={(_, node) => {
               if (node.type === 'activity') {
                 setEditingNodeID(node.id)
+              } else if (node.id === startNodeID) {
+                setEditingBoundary('start')
+              } else if (node.id === endNodeID) {
+                setEditingBoundary('end')
               }
             }}
             onPaneClick={() => setContextMenu(null)}
@@ -2377,10 +2771,33 @@ function WorkflowDesignerCanvas() {
         </div>
       </div>
 
+      {publishTarget !== null && loadedDefinition && definitionId ? (
+        <PublishVersionModal
+          version={publishTarget}
+          activeVersion={loadedDefinition.activeVersion}
+          isPending={publishDefinitionMutation.isPending}
+          error={publishDefinitionMutation.error instanceof Error ? publishDefinitionMutation.error.message : null}
+          onClose={() => setPublishTarget(null)}
+          onPublish={(activate) => publishDefinitionMutation.mutate({ targetDefinitionId: definitionId, version: publishTarget, activate })}
+        />
+      ) : null}
+      {startRunOpen && loadedDefinition && viewedVersion ? (
+        <StartWorkflowModal
+          definitionName={loadedDefinition.document.name}
+          activeVersion={loadedDefinition.activeVersion}
+          initialVersion={viewedVersion}
+          publishedVersions={loadedDefinition.versions.filter((version) => version.status === 'published').map((version) => version.version)}
+          isPending={startWorkflowMutation.isPending}
+          error={startRunError}
+          onClose={() => { setStartRunOpen(false); setStartRunError(null) }}
+          onStart={(input, callbackUrl, version) => startWorkflowMutation.mutate({ input, callbackUrl, version })}
+        />
+      ) : null}
       {editingNode ? (
         <ActivityPropertiesModal
           node={editingNode}
           contextReferences={contextReferences}
+          inputFields={inputFields}
           precedingSteps={precedingSteps}
           stepNames={allStepNames}
           onClose={() => setEditingNodeID(null)}
@@ -2388,10 +2805,24 @@ function WorkflowDesignerCanvas() {
           onUpdate={(updater) => updateNodeData(editingNode.id, updater)}
         />
       ) : null}
+      {editingBoundary ? (
+        <BoundarySettingsModal
+          kind={editingBoundary}
+          schemas={schemas}
+          startSchemaId={startSchemaId}
+          endSchemaId={endSchemaId}
+          endOutputRows={endOutputRows}
+          onStartSchemaChange={setStartSchemaId}
+          onEndSchemaChange={updateEndSchema}
+          onEndOutputRowsChange={setEndOutputRows}
+          onClose={() => setEditingBoundary(null)}
+        />
+      ) : null}
       {editingEdge ? (
         <EdgeConditionModal
           edgeId={editingEdge.id}
           initialData={(editingEdge.data as EdgeConditionData | undefined) ?? {}}
+          inputFields={inputFields}
           precedingSteps={editingEdgePrecedingSteps}
           onSave={saveEdgeCondition}
           onClose={() => setEditingEdgeID(null)}

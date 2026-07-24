@@ -171,6 +171,23 @@ func resolveStepInput(raw json.RawMessage, contextRaw json.RawMessage) (json.Raw
 	return json.RawMessage(encoded), nil
 }
 
+func resolveEndOutput(raw, contextRaw json.RawMessage) (json.RawMessage, error) {
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	var payload any
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return nil, fmt.Errorf("decode end output mapping: %w", err)
+	}
+	context := decodeJSONObject(contextRaw)
+	resolved := resolveTemplateValue(payload, context)
+	encoded, err := json.Marshal(resolved)
+	if err != nil {
+		return nil, fmt.Errorf("encode end output mapping: %w", err)
+	}
+	return json.RawMessage(encoded), nil
+}
+
 func applyStepOutputToContext(contextRaw json.RawMessage, stepName string, output json.RawMessage) (json.RawMessage, error) {
 	context := decodeJSONObject(contextRaw)
 	outputValue := decodeJSONValue(output)
@@ -255,6 +272,9 @@ func resolveNextStep(steps []StepDefinition, currentIndex int, contextRaw json.R
 			return -1, nil, fmt.Errorf("evaluate transition from step %q to %q: %w", step.Name, transition.To, err)
 		}
 		if matched {
+			if transition.To == terminalTransitionTarget {
+				return -1, transition, nil
+			}
 			nextIndex, ok := indexByName[transition.To]
 			if !ok {
 				return -1, nil, fmt.Errorf("transition target %q not found", transition.To)
@@ -264,6 +284,9 @@ func resolveNextStep(steps []StepDefinition, currentIndex int, contextRaw json.R
 	}
 
 	if defaultTransition != nil {
+		if defaultTransition.To == terminalTransitionTarget {
+			return -1, defaultTransition, nil
+		}
 		nextIndex, ok := indexByName[defaultTransition.To]
 		if !ok {
 			return -1, nil, fmt.Errorf("transition target %q not found", defaultTransition.To)

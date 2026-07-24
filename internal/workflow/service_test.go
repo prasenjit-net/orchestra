@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -79,6 +80,31 @@ func TestWorkflowCompletesBuiltInActivities(t *testing.T) {
 	}
 	if events[len(events)-1].EventType != "WorkflowCompleted" {
 		t.Fatalf("expected final event WorkflowCompleted, got %s", events[len(events)-1].EventType)
+	}
+}
+
+func TestCreateDefinitionRejectsNonIDStepNames(t *testing.T) {
+	cfg := config.Default()
+	cfg.Workflow.DatabasePath = filepath.Join(t.TempDir(), "workflows.db")
+	service, err := NewService(cfg.Workflow, cfg.AI, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatalf("NewService returned error: %v", err)
+	}
+	defer service.Close()
+
+	for _, stepName := range []string{"Send Email", "send.email", "Send_Email"} {
+		_, err := service.CreateDefinition(context.Background(), CreateDefinitionInput{
+			Name: "Invalid step name",
+			Steps: []StepDefinition{
+				{Name: stepName, Activity: "noop", Input: []byte(`{}`)},
+			},
+		})
+		if err == nil {
+			t.Fatalf("expected step name %q to be rejected", stepName)
+		}
+		if !strings.Contains(err.Error(), "must use only lowercase letters") {
+			t.Fatalf("expected step name format error, got %v", err)
+		}
 	}
 }
 
@@ -182,6 +208,112 @@ func TestWorkflowBranchesUsingTransitionConditions(t *testing.T) {
 	}
 	if !foundTransition {
 		t.Fatal("expected TransitionSelected event to be recorded")
+	}
+}
+
+func TestWorkflowDefaultTransitionCanEndWorkflow(t *testing.T) {
+	cfg := config.Default()
+	cfg.Workflow.DatabasePath = filepath.Join(t.TempDir(), "workflows.db")
+	service, err := NewService(cfg.Workflow, cfg.AI, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatalf("NewService returned error: %v", err)
+	}
+	defer service.Close()
+
+	definition, err := service.CreateDefinition(context.Background(), CreateDefinitionInput{
+		Name: "Default terminal transition",
+		Steps: []StepDefinition{
+			{
+				Name:     "decision",
+				Activity: "noop",
+				Input:    []byte(`{"approved":false}`),
+				Transitions: []StepTransition{
+					{
+						To: "approved",
+						Condition: &TransitionCondition{
+							Path:     "steps.decision.approved",
+							Operator: "eq",
+							Value:    []byte(`true`),
+						},
+					},
+					{To: terminalTransitionTarget, Label: "default-end"},
+				},
+			},
+			{Name: "approved", Activity: "noop", Input: []byte(`{"status":"approved"}`)},
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateDefinition returned error: %v", err)
+	}
+
+	instance, err := service.StartWorkflow(context.Background(), definition.ID)
+	if err != nil {
+		t.Fatalf("StartWorkflow returned error: %v", err)
+	}
+	if _, err := service.RunOnce(context.Background()); err != nil {
+		t.Fatalf("RunOnce returned error: %v", err)
+	}
+	instance, err = service.GetWorkflow(context.Background(), instance.ID)
+	if err != nil {
+		t.Fatalf("GetWorkflow returned error: %v", err)
+	}
+	if instance.Status != StatusCompleted {
+		t.Fatalf("expected completed workflow, got %s", instance.Status)
+	}
+
+	var contextPayload map[string]any
+	if err := json.Unmarshal(instance.Context, &contextPayload); err != nil {
+		t.Fatalf("Unmarshal workflow context returned error: %v", err)
+	}
+	steps, _ := contextPayload["steps"].(map[string]any)
+	if _, executedApproved := steps["approved"]; executedApproved {
+		t.Fatalf("expected approved step to be skipped, got context %#v", steps["approved"])
+	}
+}
+
+func TestDefinitionRejectsMultiTransitionWithoutDefault(t *testing.T) {
+	cfg := config.Default()
+	cfg.Workflow.DatabasePath = filepath.Join(t.TempDir(), "workflows.db")
+	service, err := NewService(cfg.Workflow, cfg.AI, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatalf("NewService returned error: %v", err)
+	}
+	defer service.Close()
+
+	_, err = service.CreateDefinition(context.Background(), CreateDefinitionInput{
+		Name: "Missing default branch",
+		Steps: []StepDefinition{
+			{
+				Name:     "decision",
+				Activity: "noop",
+				Transitions: []StepTransition{
+					{
+						To: "approved",
+						Condition: &TransitionCondition{
+							Path:     "steps.decision.approved",
+							Operator: "eq",
+							Value:    []byte(`true`),
+						},
+					},
+					{
+						To: "rejected",
+						Condition: &TransitionCondition{
+							Path:     "steps.decision.approved",
+							Operator: "eq",
+							Value:    []byte(`false`),
+						},
+					},
+				},
+			},
+			{Name: "approved", Activity: "noop"},
+			{Name: "rejected", Activity: "noop"},
+		},
+	})
+	if err == nil {
+		t.Fatal("expected CreateDefinition to reject multiple transitions without a default")
+	}
+	if !strings.Contains(err.Error(), "requires exactly one default transition") {
+		t.Fatalf("expected default transition error, got %v", err)
 	}
 }
 
@@ -706,9 +838,9 @@ func TestScriptActivityExecutesStarlark(t *testing.T) {
 				Activity: "script",
 				Input: []byte(`{
 					"language":"starlark",
-					"script":"result = {\"message\": strings.upper(input[\"name\"]), \"original\": workflow.step_output(\"seed\")[\"message\"], \"count\": workflow.step_output(\"seed\")[\"count\"]}",
+					"script":"result = {\"message\": strings.upper(input[\"name\"]), \"original\": input[\"seed\"][\"message\"], \"count\": input[\"seed\"][\"count\"]}",
 					"exports":["result"],
-					"data":{"name":"{{steps.seed.message}}"}
+					"data":{"name":"{{steps.seed.message}}","seed":"{{steps.seed}}"}
 				}`),
 			},
 		},
@@ -745,7 +877,59 @@ func TestScriptActivityExecutesStarlark(t *testing.T) {
 		t.Fatalf("expected upper-cased result, got %#v", result["message"])
 	}
 	if result["original"] != "orchestra" {
-		t.Fatalf("expected original value from workflow.step_output, got %#v", result["original"])
+		t.Fatalf("expected original value from mapped script input, got %#v", result["original"])
+	}
+}
+
+func TestScriptActivityCannotAccessWorkflowContext(t *testing.T) {
+	cfg := config.Default()
+	cfg.Workflow.DatabasePath = filepath.Join(t.TempDir(), "workflows.db")
+	cfg.Workflow.ScriptEnabled = true
+	service, err := NewService(cfg.Workflow, cfg.AI, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatalf("NewService returned error: %v", err)
+	}
+	defer service.Close()
+
+	definition, err := service.CreateDefinition(context.Background(), CreateDefinitionInput{
+		Name: "Script isolation workflow",
+		Steps: []StepDefinition{
+			{Name: "seed", Activity: "noop", Input: []byte(`{"secret":"do-not-leak"}`)},
+			{
+				Name:     "script-step",
+				Activity: "script",
+				Input: []byte(`{
+					"language":"starlark",
+					"script":"result = ctx[\"steps\"][\"seed\"]",
+					"exports":["result"],
+					"data":{}
+				}`),
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateDefinition returned error: %v", err)
+	}
+
+	instance, err := service.StartWorkflow(context.Background(), definition.ID)
+	if err != nil {
+		t.Fatalf("StartWorkflow returned error: %v", err)
+	}
+	if _, err := service.RunOnce(context.Background()); err != nil {
+		t.Fatalf("RunOnce seed returned error: %v", err)
+	}
+	if _, err := service.RunOnce(context.Background()); err != nil {
+		t.Fatalf("RunOnce script returned error: %v", err)
+	}
+	instance, err = service.GetWorkflow(context.Background(), instance.ID)
+	if err != nil {
+		t.Fatalf("GetWorkflow returned error: %v", err)
+	}
+	if instance.Status != StatusFailed {
+		t.Fatalf("expected failed workflow when script accesses ctx, got %s", instance.Status)
+	}
+	if !strings.Contains(instance.LastError, "undefined: ctx") {
+		t.Fatalf("expected undefined ctx error, got %q", instance.LastError)
 	}
 }
 
@@ -801,7 +985,7 @@ func TestScriptActivityHonorsExecutionStepLimit(t *testing.T) {
 	}
 }
 
-func TestDefinitionVersioningPublishesNewActiveVersion(t *testing.T) {
+func TestDefinitionVersioningPublishesAndActivatesIndependently(t *testing.T) {
 	cfg := config.Default()
 	cfg.Workflow.DatabasePath = filepath.Join(t.TempDir(), "workflows.db")
 	service, err := NewService(cfg.Workflow, cfg.AI, slog.New(slog.NewTextHandler(io.Discard, nil)))
@@ -820,63 +1004,180 @@ func TestDefinitionVersioningPublishesNewActiveVersion(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateDefinition returned error: %v", err)
 	}
-	if definition.ActiveVersion != 1 || definition.LatestVersion != 1 || definition.DraftVersion != 0 {
+	if definition.ActiveVersion != 1 || definition.LatestVersion != 1 || definition.DraftCount != 0 {
 		t.Fatalf("unexpected initial definition summary: %+v", definition.DefinitionSummary)
 	}
 
-	drafted, err := service.CreateDefinitionVersion(context.Background(), definition.ID, CreateDefinitionInput{
-		Name:        "Versioned workflow",
-		Description: "Tracks version lifecycle",
-		Steps: []StepDefinition{
-			{Name: "step-v2", Activity: "noop", Input: []byte(`{"version":2}`)},
-		},
+	ctx := context.Background()
+	t.Run("create drafts", func(t *testing.T) {
+		draftedV2, err := service.CreateDefinitionVersion(ctx, definition.ID, CreateDefinitionInput{
+			Name:        "Versioned workflow",
+			Description: "Tracks version lifecycle",
+			Steps:       []StepDefinition{{Name: "step-v2", Activity: "noop", Input: []byte(`{"version":2}`)}},
+		})
+		if err != nil {
+			t.Fatalf("CreateDefinitionVersion returned error: %v", err)
+		}
+		if draftedV2.ActiveVersion != 1 {
+			t.Fatalf("expected active version to remain 1 before publish, got %d", draftedV2.ActiveVersion)
+		}
+		if draftedV2.LatestDraftVersion != 2 || draftedV2.DraftCount != 1 || draftedV2.LatestVersion != 2 {
+			t.Fatalf("expected one draft at version 2, got %+v", draftedV2.DefinitionSummary)
+		}
+
+		draftedV3, err := service.CreateDefinitionVersion(ctx, definition.ID, CreateDefinitionInput{
+			Name:           "Versioned workflow from v1",
+			Description:    "Branches from the original version",
+			BasedOnVersion: 1,
+			Steps:          []StepDefinition{{Name: "step-v3", Activity: "noop", Input: []byte(`{"version":3}`)}},
+		})
+		if err != nil {
+			t.Fatalf("CreateDefinitionVersion second draft returned error: %v", err)
+		}
+		if draftedV3.LatestDraftVersion != 3 || draftedV3.DraftCount != 2 || draftedV3.LatestVersion != 3 {
+			t.Fatalf("expected two drafts through version 3, got %+v", draftedV3.DefinitionSummary)
+		}
+	})
+
+	t.Run("draft cannot start or activate", func(t *testing.T) {
+		beforePublish, err := service.StartWorkflow(ctx, definition.ID)
+		if err != nil {
+			t.Fatalf("StartWorkflow before publish returned error: %v", err)
+		}
+		if beforePublish.DefinitionVersion != 1 {
+			t.Fatalf("expected workflow to pin version 1 before publish, got %d", beforePublish.DefinitionVersion)
+		}
+		if _, err := service.StartWorkflowWithInput(ctx, StartWorkflowInput{
+			DefinitionID: definition.ID, DefinitionVersion: 2,
+		}); !errors.Is(err, ErrVersionNotPublished) {
+			t.Fatalf("expected draft version start to fail with ErrVersionNotPublished, got %v", err)
+		}
+		if _, err := service.ActivateDefinitionVersion(ctx, definition.ID, 3); err == nil {
+			t.Fatal("expected draft version activation to fail")
+		}
+	})
+
+	t.Run("published inactive version can run", func(t *testing.T) {
+		published, err := service.PublishDefinitionVersion(ctx, definition.ID, 2, false)
+		if err != nil {
+			t.Fatalf("PublishDefinitionVersion returned error: %v", err)
+		}
+		if published.ActiveVersion != 1 || published.DraftCount != 1 {
+			t.Fatalf("expected v1 to remain active with one draft after publishing v2, got %+v", published.DefinitionSummary)
+		}
+
+		afterPublish, err := service.StartWorkflow(ctx, definition.ID)
+		if err != nil {
+			t.Fatalf("StartWorkflow after publish returned error: %v", err)
+		}
+		if afterPublish.DefinitionVersion != 1 {
+			t.Fatalf("expected workflow to remain pinned to active version 1 after publish, got %d", afterPublish.DefinitionVersion)
+		}
+		explicitV2, err := service.StartWorkflowWithInput(ctx, StartWorkflowInput{
+			DefinitionID: definition.ID, DefinitionVersion: 2,
+		})
+		if err != nil {
+			t.Fatalf("StartWorkflowWithInput published inactive version returned error: %v", err)
+		}
+		if explicitV2.DefinitionVersion != 2 {
+			t.Fatalf("expected explicit run to pin published inactive version 2, got %d", explicitV2.DefinitionVersion)
+		}
+	})
+
+	t.Run("activation changes the default version", func(t *testing.T) {
+		activatedV2, err := service.ActivateDefinitionVersion(ctx, definition.ID, 2)
+		if err != nil {
+			t.Fatalf("ActivateDefinitionVersion returned error: %v", err)
+		}
+		if activatedV2.ActiveVersion != 2 {
+			t.Fatalf("expected version 2 to become active, got %+v", activatedV2.DefinitionSummary)
+		}
+
+		afterActivation, err := service.StartWorkflow(ctx, definition.ID)
+		if err != nil {
+			t.Fatalf("StartWorkflow after activation returned error: %v", err)
+		}
+		if afterActivation.DefinitionVersion != 2 {
+			t.Fatalf("expected workflow to pin activated version 2, got %d", afterActivation.DefinitionVersion)
+		}
+	})
+
+	t.Run("publish with activation and reactivate history", func(t *testing.T) {
+		publishedAndActivated, err := service.PublishDefinitionVersion(ctx, definition.ID, 3, true)
+		if err != nil {
+			t.Fatalf("PublishDefinitionVersion with activation returned error: %v", err)
+		}
+		if publishedAndActivated.ActiveVersion != 3 || publishedAndActivated.DraftCount != 0 {
+			t.Fatalf("expected v3 active and no drafts, got %+v", publishedAndActivated.DefinitionSummary)
+		}
+
+		reactivatedV1, err := service.ActivateDefinitionVersion(ctx, definition.ID, 1)
+		if err != nil {
+			t.Fatalf("ActivateDefinitionVersion historical version returned error: %v", err)
+		}
+		if reactivatedV1.ActiveVersion != 1 {
+			t.Fatalf("expected historical version 1 to become active, got %+v", reactivatedV1.DefinitionSummary)
+		}
+	})
+
+	t.Run("history preserves lineage", func(t *testing.T) {
+		reloaded, err := service.GetDefinition(ctx, definition.ID)
+		if err != nil {
+			t.Fatalf("GetDefinition returned error: %v", err)
+		}
+		if len(reloaded.Versions) != 3 {
+			t.Fatalf("expected three definition versions, got %d", len(reloaded.Versions))
+		}
+		if reloaded.Versions[0].Version != 3 || reloaded.Versions[0].Status != "published" || reloaded.Versions[0].BasedOnVersion != 1 {
+			t.Fatalf("expected latest version to be published v3 based on v1, got %+v", reloaded.Versions[0])
+		}
+		if reloaded.Versions[1].Version != 2 || reloaded.Versions[1].Status != "published" || reloaded.Versions[1].BasedOnVersion != 1 {
+			t.Fatalf("expected version 2 to remain published and based on v1, got %+v", reloaded.Versions[1])
+		}
+		if reloaded.Versions[2].Version != 1 || reloaded.Versions[2].Status != "published" {
+			t.Fatalf("expected original version to remain published, got %+v", reloaded.Versions[2])
+		}
+	})
+}
+
+func TestDefinitionVersionMigrationRestoresHistoricalVersions(t *testing.T) {
+	cfg := config.Default()
+	cfg.Workflow.DatabasePath = filepath.Join(t.TempDir(), "workflows.db")
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	service, err := NewService(cfg.Workflow, cfg.AI, logger)
+	if err != nil {
+		t.Fatalf("NewService returned error: %v", err)
+	}
+
+	definition, err := service.CreateDefinition(context.Background(), CreateDefinitionInput{
+		Name:  "Migrated workflow",
+		Steps: []StepDefinition{{Name: "version_1", Activity: "noop"}},
 	})
 	if err != nil {
-		t.Fatalf("CreateDefinitionVersion returned error: %v", err)
+		t.Fatalf("CreateDefinition returned error: %v", err)
 	}
-	if drafted.ActiveVersion != 1 {
-		t.Fatalf("expected active version to remain 1 before publish, got %d", drafted.ActiveVersion)
+	if _, err := service.db.Exec(`UPDATE workflow_definition_versions SET status = 'archived' WHERE definition_id = ? AND version = 1`, definition.ID); err != nil {
+		t.Fatalf("archive legacy version: %v", err)
 	}
-	if drafted.DraftVersion != 2 || drafted.LatestVersion != 2 {
-		t.Fatalf("expected draft/latest version to be 2, got %+v", drafted.DefinitionSummary)
+	if _, err := service.db.Exec(`UPDATE workflow_definitions SET status = 'draft' WHERE id = ?`, definition.ID); err != nil {
+		t.Fatalf("set legacy definition status: %v", err)
 	}
-
-	beforePublish, err := service.StartWorkflow(context.Background(), definition.ID)
-	if err != nil {
-		t.Fatalf("StartWorkflow before publish returned error: %v", err)
-	}
-	if beforePublish.DefinitionVersion != 1 {
-		t.Fatalf("expected workflow to pin version 1 before publish, got %d", beforePublish.DefinitionVersion)
+	if err := service.Close(); err != nil {
+		t.Fatalf("Close returned error: %v", err)
 	}
 
-	published, err := service.PublishDefinitionVersion(context.Background(), definition.ID, 2)
+	reopened, err := NewService(cfg.Workflow, cfg.AI, logger)
 	if err != nil {
-		t.Fatalf("PublishDefinitionVersion returned error: %v", err)
+		t.Fatalf("reopen NewService returned error: %v", err)
 	}
-	if published.ActiveVersion != 2 || published.DraftVersion != 0 {
-		t.Fatalf("expected active version 2 and no draft after publish, got %+v", published.DefinitionSummary)
-	}
+	defer reopened.Close()
 
-	afterPublish, err := service.StartWorkflow(context.Background(), definition.ID)
+	reloaded, err := reopened.GetDefinition(context.Background(), definition.ID)
 	if err != nil {
-		t.Fatalf("StartWorkflow after publish returned error: %v", err)
+		t.Fatalf("GetDefinition after migration returned error: %v", err)
 	}
-	if afterPublish.DefinitionVersion != 2 {
-		t.Fatalf("expected workflow to pin version 2 after publish, got %d", afterPublish.DefinitionVersion)
-	}
-
-	reloaded, err := service.GetDefinition(context.Background(), definition.ID)
-	if err != nil {
-		t.Fatalf("GetDefinition returned error: %v", err)
-	}
-	if len(reloaded.Versions) != 2 {
-		t.Fatalf("expected two definition versions, got %d", len(reloaded.Versions))
-	}
-	if reloaded.Versions[0].Version != 2 || reloaded.Versions[0].Status != "published" {
-		t.Fatalf("expected latest version to be published v2, got %+v", reloaded.Versions[0])
-	}
-	if reloaded.Versions[1].Version != 1 || reloaded.Versions[1].Status != "archived" {
-		t.Fatalf("expected original version to be archived, got %+v", reloaded.Versions[1])
+	if reloaded.Status != "published" || len(reloaded.Versions) != 1 || reloaded.Versions[0].Status != "published" {
+		t.Fatalf("expected legacy definition and version to be published, got %+v versions=%+v", reloaded.DefinitionSummary, reloaded.Versions)
 	}
 }
 

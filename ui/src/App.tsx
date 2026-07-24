@@ -9,13 +9,16 @@ import RunsPage from './pages/RunsPage'
 import AgentsPage from './pages/AgentsPage'
 import ConnectorsPage from './pages/ConnectorsPage'
 import ScriptsPage from './pages/ScriptsPage'
+import JsonSchemasPage from './pages/JsonSchemasPage'
 import SignalsPage from './pages/SignalsPage'
 import ClusterPage from './pages/ClusterPage'
 import SettingsPage from './pages/SettingsPage'
 import WorkflowListPage from './pages/WorkflowListPage'
+import WorkflowVersionsPage from './pages/WorkflowVersionsPage'
 
 const WorkflowDesignerPage = lazy(() => import('./pages/WorkflowDesignerPage'))
 const ScriptEditorPage = lazy(() => import('./pages/ScriptEditorPage'))
+const JsonSchemaEditorPage = lazy(() => import('./pages/JsonSchemaEditorPage'))
 const AgentEditorPage = lazy(() => import('./pages/AgentEditorPage'))
 const ConnectorEditorPage = lazy(() => import('./pages/ConnectorEditorPage'))
 
@@ -32,12 +35,16 @@ function App() {
         <Route path="workflows" element={<WorkflowListPage />} />
         <Route path="workflows/new" element={<Suspense fallback={<PageLoader />}><WorkflowDesignerPage /></Suspense>} />
         <Route path="workflows/:definitionId/designer" element={<Suspense fallback={<PageLoader />}><WorkflowDesignerPage /></Suspense>} />
+        <Route path="workflows/:definitionId/versions" element={<WorkflowVersionsPage />} />
         <Route path="workflows/designer" element={<Suspense fallback={<PageLoader />}><WorkflowDesignerPage /></Suspense>} />
         <Route path="workflows/designer/:definitionId" element={<Suspense fallback={<PageLoader />}><WorkflowDesignerPage /></Suspense>} />
         <Route path="workflows/operations" element={<Navigate to="/operations" replace />} />
         <Route path="scripts" element={<ScriptsPage />} />
         <Route path="scripts/new" element={<Suspense fallback={<PageLoader />}><ScriptEditorPage /></Suspense>} />
         <Route path="scripts/:scriptId/editor" element={<Suspense fallback={<PageLoader />}><ScriptEditorPage /></Suspense>} />
+        <Route path="json-schemas" element={<JsonSchemasPage />} />
+        <Route path="json-schemas/new" element={<Suspense fallback={<PageLoader />}><JsonSchemaEditorPage /></Suspense>} />
+        <Route path="json-schemas/:schemaId/editor" element={<Suspense fallback={<PageLoader />}><JsonSchemaEditorPage /></Suspense>} />
         <Route path="agents" element={<AgentsPage />} />
         <Route path="agents/new" element={<Suspense fallback={<PageLoader />}><AgentEditorPage /></Suspense>} />
         <Route path="agents/:agentId/editor" element={<Suspense fallback={<PageLoader />}><AgentEditorPage /></Suspense>} />

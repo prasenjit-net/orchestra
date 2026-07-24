@@ -31,6 +31,9 @@ func bundleName(b workflow.ImportBundle) string {
 	if b.Definition != nil {
 		return b.Definition.Name
 	}
+	if len(b.JSONSchemas) > 1 {
+		return "json-schemas"
+	}
 	if len(b.Agents) > 0 {
 		return b.Agents[0].Name
 	}
@@ -39,6 +42,9 @@ func bundleName(b workflow.ImportBundle) string {
 	}
 	if len(b.Connectors) > 0 {
 		return b.Connectors[0].Name
+	}
+	if len(b.JSONSchemas) > 0 {
+		return b.JSONSchemas[0].Name
 	}
 	return b.BundleType
 }
@@ -89,6 +95,32 @@ func (h *Handler) ExportConnector(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	bundle, err := h.workflow.ExportConnector(r.Context(), chi.URLParam(r, "serverID"))
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeBundle(w, bundle)
+}
+
+func (h *Handler) ExportJSONSchemas(w http.ResponseWriter, r *http.Request) {
+	if h.workflow == nil {
+		writeError(w, http.StatusServiceUnavailable, "workflow service unavailable")
+		return
+	}
+	bundle, err := h.workflow.ExportJSONSchemas(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeBundle(w, bundle)
+}
+
+func (h *Handler) ExportJSONSchema(w http.ResponseWriter, r *http.Request) {
+	if h.workflow == nil {
+		writeError(w, http.StatusServiceUnavailable, "workflow service unavailable")
+		return
+	}
+	bundle, err := h.workflow.ExportJSONSchema(r.Context(), chi.URLParam(r, "schemaID"))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return

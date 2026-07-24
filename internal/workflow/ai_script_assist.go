@@ -2,7 +2,6 @@ package workflow
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -23,14 +22,8 @@ Write the complete, runnable script every time — not fragments.
 
 ## Available predeclared names
 
-### ctx — dict
-Full workflow context. Structure:
-  ctx["input"]             → dict of workflow start input (keys from the start payload)
-  ctx["steps"]["name"]     → output dict of the step named "name"
-  ctx["signals"]["name"]   → last received signal payload dict
-
 ### input — any
-The step's static ` + "`data`" + ` field configured in the workflow definition.
+The step's mapped ` + "`data`" + ` field configured in the workflow definition. Map workflow input, previous step outputs, or signal values into ` + "`data`" + ` before the script runs.
 
 ### step — dict
   step["name"]        → current step name (string)
@@ -56,8 +49,6 @@ The step's static ` + "`data`" + ` field configured in the workflow definition.
   workflow.definition_id             → definition ID (string)
   workflow.definition_version        → version number (int)
   workflow.step_name                 → current step name (string)
-  workflow.step_output("step_name")  → output dict of a past step
-  workflow.signal("signal_name")     → last signal payload dict
   workflow.fail("message")           → fails the step with an error message
 
 ### asserts module
@@ -66,14 +57,12 @@ The step's static ` + "`data`" + ` field configured in the workflow definition.
 
 ## Common patterns
 
-Access workflow input:
-  amount = ctx["input"].get("amount", 0)
+Access mapped workflow input:
+  amount = input.get("amount", 0)
 
-Read a previous step's output:
-  review = ctx["steps"].get("review-step", {})
+Read a mapped previous step output:
+  review = input.get("review", {})
   approved = review.get("approved", False)
-  # or equivalently:
-  review = workflow.step_output("review-step")
 
 Conditional branching result:
   if approved:
@@ -82,7 +71,7 @@ Conditional branching result:
       result = {"decision": "rejected"}
 
 Fail on bad data:
-  asserts.non_empty(ctx["input"].get("userId"), "userId is required")
+  asserts.non_empty(input.get("userId"), "userId is required")
 
 ## Rules
 - No import statements
@@ -97,7 +86,7 @@ Fail on bad data:
 
 // ScriptChatMessage is one turn in a script assistant conversation.
 type ScriptChatMessage struct {
-	Role    string `json:"role"`    // "user" | "assistant"
+	Role    string `json:"role"` // "user" | "assistant"
 	Content string `json:"content"`
 }
 
@@ -141,11 +130,10 @@ type ValidateScriptResult struct {
 // without triggering any runtime errors about missing context data.
 func (s *Service) ValidateScript(source string) ValidateScriptResult {
 	dummyReq := ActivityExecutionRequest{
-		WorkflowContext: json.RawMessage(`{}`),
-		Now:             time.Now().UTC(),
+		Now: time.Now().UTC(),
 	}
 
-	predeclared, err := buildScriptPredeclared(dummyReq, map[string]any{}, map[string]any{})
+	predeclared, err := buildScriptPredeclared(dummyReq, map[string]any{})
 	if err != nil {
 		return ValidateScriptResult{Error: fmt.Sprintf("build env: %s", err)}
 	}

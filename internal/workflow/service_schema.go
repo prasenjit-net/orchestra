@@ -25,6 +25,7 @@ func (s *Service) initSchema(ctx context.Context) error {
 			created_at TEXT NOT NULL,
 			updated_at TEXT NOT NULL DEFAULT '',
 			published_at TEXT,
+			based_on_version INTEGER,
 			PRIMARY KEY (definition_id, version)
 		)`,
 		`CREATE TABLE IF NOT EXISTS workflow_instances (
@@ -118,6 +119,14 @@ func (s *Service) initSchema(ctx context.Context) error {
 			explored_at TEXT,
 			created_at  TEXT NOT NULL,
 			updated_at  TEXT NOT NULL
+		)`,
+		`CREATE TABLE IF NOT EXISTS json_schemas (
+			id TEXT PRIMARY KEY,
+			name TEXT NOT NULL,
+			description TEXT NOT NULL DEFAULT '',
+			schema_json TEXT NOT NULL DEFAULT '{}',
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL
 		)`,
 		`CREATE TABLE IF NOT EXISTS agent_mcp_servers (
 			agent_id  TEXT NOT NULL,
@@ -216,6 +225,7 @@ func ensureWorkflowDefinitionVersionColumns(ctx context.Context, db *sql.DB) err
 	hasStatus := false
 	hasUpdatedAt := false
 	hasPublishedAt := false
+	hasBasedOnVersion := false
 	for rows.Next() {
 		var (
 			cid        int
@@ -235,6 +245,8 @@ func ensureWorkflowDefinitionVersionColumns(ctx context.Context, db *sql.DB) err
 			hasUpdatedAt = true
 		case "published_at":
 			hasPublishedAt = true
+		case "based_on_version":
+			hasBasedOnVersion = true
 		}
 	}
 	if err := rows.Err(); err != nil {
@@ -258,6 +270,17 @@ func ensureWorkflowDefinitionVersionColumns(ctx context.Context, db *sql.DB) err
 		if _, err := db.ExecContext(ctx, `ALTER TABLE workflow_definition_versions ADD COLUMN published_at TEXT`); err != nil {
 			return fmt.Errorf("add workflow_definition_versions.published_at column: %w", err)
 		}
+	}
+	if !hasBasedOnVersion {
+		if _, err := db.ExecContext(ctx, `ALTER TABLE workflow_definition_versions ADD COLUMN based_on_version INTEGER`); err != nil {
+			return fmt.Errorf("add workflow_definition_versions.based_on_version column: %w", err)
+		}
+	}
+	if _, err := db.ExecContext(ctx, `UPDATE workflow_definition_versions SET status = 'published' WHERE status = 'archived'`); err != nil {
+		return fmt.Errorf("normalize archived workflow definition versions: %w", err)
+	}
+	if _, err := db.ExecContext(ctx, `UPDATE workflow_definitions SET status = 'published' WHERE active_version > 0`); err != nil {
+		return fmt.Errorf("normalize workflow definition status: %w", err)
 	}
 	if _, err := db.ExecContext(ctx, `UPDATE workflow_definition_versions SET published_at = created_at WHERE status = 'published' AND (published_at IS NULL OR published_at = '')`); err != nil {
 		return fmt.Errorf("backfill workflow_definition_versions.published_at: %w", err)

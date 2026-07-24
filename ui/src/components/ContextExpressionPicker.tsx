@@ -7,7 +7,14 @@ export interface PrecedingStep {
   exampleOutput?: Record<string, unknown>
 }
 
+export interface MappingField {
+  path: string
+  type?: string
+  required?: boolean
+}
+
 interface Props {
+  inputFields?: MappingField[]
   precedingSteps: PrecedingStep[]
   signalNames?: string[]
   onSelect: (expression: string) => void
@@ -24,7 +31,7 @@ function flatKeys(obj: Record<string, unknown>, prefix = ''): string[] {
   })
 }
 
-export default function ContextExpressionPicker({ precedingSteps, signalNames = [], onSelect }: Props) {
+export default function ContextExpressionPicker({ inputFields = [], precedingSteps, signalNames = [], onSelect }: Readonly<Props>) {
   const [open, setOpen] = useState(false)
   const [dropdownPos, setDropdownPos] = useState<{ top: number; left: number }>({ top: 0, left: 0 })
   const buttonRef = useRef<HTMLButtonElement>(null)
@@ -59,13 +66,18 @@ export default function ContextExpressionPicker({ precedingSteps, signalNames = 
     onSelect(expr)
     setOpen(false)
   }
+  const lastStep = precedingSteps[precedingSteps.length - 1]
+  const lastStepKeys = lastStep ? flatKeys(lastStep.exampleOutput ?? {}) : []
+  const stepOutputSections = precedingSteps
+    .map((step) => ({ step, keys: flatKeys(step.exampleOutput ?? {}) }))
+    .filter((section) => section.keys.length > 0)
 
   return (
     <div className="shrink-0">
       <button
         ref={buttonRef}
         type="button"
-        title="Insert context expression"
+        title="Insert mapped value"
         onClick={handleToggle}
         className="flex h-full items-center rounded-md border border-gray-200 bg-white px-1.5 text-[11px] font-mono font-semibold text-gray-500 transition-colors hover:border-primary-400 hover:text-primary-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-400 dark:hover:border-primary-500 dark:hover:text-primary-400"
       >
@@ -78,28 +90,33 @@ export default function ContextExpressionPicker({ precedingSteps, signalNames = 
           style={{ top: dropdownPos.top, left: dropdownPos.left }}
           className="fixed z-[9999] w-72 overflow-hidden rounded-xl border border-gray-200 bg-white shadow-xl dark:border-slate-700 dark:bg-slate-900">
           <div className="max-h-80 overflow-y-auto">
-            {/* Workflow */}
-            <Section label="Workflow">
-              <Item label="{{workflow.id}}" onPick={pick} />
-              <Item label="{{workflow.name}}" onPick={pick} />
-            </Section>
+            {inputFields.length > 0 && (
+              <Section label="Start input">
+                {inputFields.map((field) => (
+                  <Item
+                    key={field.path}
+                    label={`{{${field.path}}}`}
+                    detail={[field.type, field.required ? 'required' : 'optional'].filter(Boolean).join(' · ')}
+                    onPick={pick}
+                  />
+                ))}
+              </Section>
+            )}
 
             {/* Last */}
-            {precedingSteps.length > 0 && (
+            {lastStepKeys.length > 0 && (
               <Section label="Last step output">
-                <Item label="{{last}}" onPick={pick} />
-                {flatKeys(precedingSteps[precedingSteps.length - 1].exampleOutput ?? {}).map((k) => (
+                {lastStepKeys.map((k) => (
                   <Item key={k} label={`{{last.${k}}}`} onPick={pick} />
                 ))}
               </Section>
             )}
 
             {/* Named step outputs */}
-            {precedingSteps.map((s) => (
-              <Section key={s.name} label={`steps.${s.name}`}>
-                <Item label={`{{steps.${s.name}}}`} onPick={pick} />
-                {flatKeys(s.exampleOutput ?? {}).map((k) => (
-                  <Item key={k} label={`{{steps.${s.name}.${k}}}`} onPick={pick} />
+            {stepOutputSections.map(({ step, keys }) => (
+              <Section key={step.name} label={`steps.${step.name}`}>
+                {keys.map((k) => (
+                  <Item key={k} label={`{{steps.${step.name}.${k}}}`} onPick={pick} />
                 ))}
               </Section>
             ))}
@@ -114,8 +131,8 @@ export default function ContextExpressionPicker({ precedingSteps, signalNames = 
               </Section>
             )}
 
-            {precedingSteps.length === 0 && signalNames.length === 0 && (
-              <p className="px-3 py-4 text-xs text-gray-400 dark:text-slate-500">No preceding steps yet.</p>
+            {inputFields.length === 0 && stepOutputSections.length === 0 && signalNames.length === 0 && (
+              <p className="px-3 py-4 text-xs text-gray-400 dark:text-slate-500">No mapped values available yet.</p>
             )}
           </div>
         </div>
@@ -124,7 +141,7 @@ export default function ContextExpressionPicker({ precedingSteps, signalNames = 
   )
 }
 
-function Section({ label, children }: { label: string; children: React.ReactNode }) {
+function Section({ label, children }: Readonly<{ label: string; children: React.ReactNode }>) {
   return (
     <div>
       <div className="sticky top-0 bg-gray-50 px-3 py-1 text-[10px] font-semibold uppercase tracking-wide text-gray-400 dark:bg-slate-800 dark:text-slate-500">
@@ -135,14 +152,15 @@ function Section({ label, children }: { label: string; children: React.ReactNode
   )
 }
 
-function Item({ label, onPick }: { label: string; onPick: (v: string) => void }) {
+function Item({ label, detail, onPick }: Readonly<{ label: string; detail?: string; onPick: (v: string) => void }>) {
   return (
     <button
       type="button"
       onClick={() => onPick(label)}
-      className="block w-full px-3 py-1.5 text-left font-mono text-xs text-gray-700 transition-colors hover:bg-primary-50 hover:text-primary-700 dark:text-slate-300 dark:hover:bg-primary-900/20 dark:hover:text-primary-300"
+      className="block w-full px-3 py-1.5 text-left transition-colors hover:bg-primary-50 hover:text-primary-700 dark:hover:bg-primary-900/20 dark:hover:text-primary-300"
     >
-      {label}
+      <span className="block font-mono text-xs text-gray-700 dark:text-slate-300">{label}</span>
+      {detail ? <span className="mt-0.5 block text-[10px] font-medium text-gray-400 dark:text-slate-500">{detail}</span> : null}
     </button>
   )
 }
