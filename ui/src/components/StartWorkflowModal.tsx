@@ -3,14 +3,20 @@ import { Play, X } from 'lucide-react'
 
 interface StartWorkflowModalProps {
   definitionName: string
+  activeVersion: number
+  initialVersion?: number
+  publishedVersions: number[]
   onClose: () => void
-  onStart: (input: Record<string, unknown>, callbackUrl: string) => void
+  onStart: (input: Record<string, unknown>, callbackUrl: string, version: number) => void
   isPending: boolean
   error?: string | null
 }
 
 export default function StartWorkflowModal({
   definitionName,
+  activeVersion,
+  initialVersion,
+  publishedVersions,
   onClose,
   onStart,
   isPending,
@@ -18,6 +24,7 @@ export default function StartWorkflowModal({
 }: StartWorkflowModalProps) {
   const [inputText, setInputText] = useState('{}')
   const [callbackUrl, setCallbackUrl] = useState('')
+  const [version, setVersion] = useState(initialVersion ?? activeVersion)
   const [parseError, setParseError] = useState<string | null>(null)
 
   function handleStart() {
@@ -33,12 +40,12 @@ export default function StartWorkflowModal({
       return
     }
     setParseError(null)
-    onStart(parsed, callbackUrl.trim())
+    onStart(parsed, callbackUrl.trim(), version)
   }
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-      <div className="w-full max-w-lg rounded-2xl bg-white shadow-xl dark:bg-slate-900">
+      <div className="w-full max-w-lg rounded-lg bg-white shadow-xl dark:bg-slate-900">
         {/* Header */}
         <div className="flex items-center justify-between border-b border-gray-200 px-6 py-4 dark:border-slate-800">
           <h2 className="text-base font-semibold text-gray-900 dark:text-slate-100">
@@ -55,6 +62,21 @@ export default function StartWorkflowModal({
 
         {/* Body */}
         <div className="space-y-4 px-6 py-5">
+          <div>
+            <label className="mb-1.5 block text-sm font-medium text-gray-700 dark:text-slate-300">Workflow version</label>
+            <select
+              value={version}
+              onChange={(event) => setVersion(Number(event.target.value))}
+              className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
+            >
+              {publishedVersions.map((publishedVersion) => (
+                <option key={publishedVersion} value={publishedVersion}>
+                  Version {publishedVersion}{publishedVersion === activeVersion ? ' · active' : ''}
+                </option>
+              ))}
+            </select>
+          </div>
+
           <div>
             <label className="mb-1.5 block text-sm font-medium text-gray-700 dark:text-slate-300">
               Input JSON

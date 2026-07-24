@@ -14,6 +14,7 @@ import SignalsPage from './pages/SignalsPage'
 import ClusterPage from './pages/ClusterPage'
 import SettingsPage from './pages/SettingsPage'
 import WorkflowListPage from './pages/WorkflowListPage'
+import WorkflowVersionsPage from './pages/WorkflowVersionsPage'
 
 const WorkflowDesignerPage = lazy(() => import('./pages/WorkflowDesignerPage'))
 const ScriptEditorPage = lazy(() => import('./pages/ScriptEditorPage'))
@@ -34,6 +35,7 @@ function App() {
         <Route path="workflows" element={<WorkflowListPage />} />
         <Route path="workflows/new" element={<Suspense fallback={<PageLoader />}><WorkflowDesignerPage /></Suspense>} />
         <Route path="workflows/:definitionId/designer" element={<Suspense fallback={<PageLoader />}><WorkflowDesignerPage /></Suspense>} />
+        <Route path="workflows/:definitionId/versions" element={<WorkflowVersionsPage />} />
         <Route path="workflows/designer" element={<Suspense fallback={<PageLoader />}><WorkflowDesignerPage /></Suspense>} />
         <Route path="workflows/designer/:definitionId" element={<Suspense fallback={<PageLoader />}><WorkflowDesignerPage /></Suspense>} />
         <Route path="workflows/operations" element={<Navigate to="/operations" replace />} />

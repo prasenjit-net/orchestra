@@ -119,7 +119,8 @@ export interface WorkflowDefinitionSummary {
   status: string
   activeVersion: number
   latestVersion: number
-  draftVersion?: number
+  latestDraftVersion?: number
+  draftCount: number
   createdAt: string
   updatedAt: string
 }
@@ -127,6 +128,7 @@ export interface WorkflowDefinitionSummary {
 export interface WorkflowDefinitionVersionSummary {
   version: number
   status: string
+  basedOnVersion?: number
   createdAt: string
   updatedAt: string
   publishedAt?: string

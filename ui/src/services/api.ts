@@ -276,21 +276,31 @@ export const workflowApi = {
     ),
   getDefinition: async (definitionId: string) =>
     handleResponse<WorkflowDefinitionDetails>(await fetch(buildApiUrl(`/workflow-definitions/${definitionId}`))),
-  createDefinitionVersion: async (definitionId: string, payload: WorkflowDefinitionDocument) =>
+  getDefinitionVersion: async (definitionId: string, version: number) =>
+    handleResponse<WorkflowDefinitionDetails>(await fetch(buildApiUrl(`/workflow-definitions/${definitionId}/versions/${version}`))),
+  createDefinitionVersion: async (definitionId: string, payload: WorkflowDefinitionDocument, basedOnVersion: number) =>
     handleResponse<WorkflowDefinitionDetails>(
       await fetch(buildApiUrl(`/workflow-definitions/${definitionId}/versions`), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
+        body: JSON.stringify({ ...payload, basedOnVersion }),
       }),
     ),
-  publishDefinitionVersion: async (definitionId: string, version: number) =>
+  publishDefinitionVersion: async (definitionId: string, version: number, activate = false) =>
     handleResponse<WorkflowDefinitionDetails>(
       await fetch(buildApiUrl(`/workflow-definitions/${definitionId}/versions/${version}/publish`), {
         method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ activate }),
       }),
     ),
-  startWorkflow: async (definitionId: string, body?: { input?: Record<string, unknown>; callbackUrl?: string }) =>
+  activateDefinitionVersion: async (definitionId: string, version: number) =>
+    handleResponse<WorkflowDefinitionDetails>(
+      await fetch(buildApiUrl(`/workflow-definitions/${definitionId}/versions/${version}/activate`), {
+        method: 'POST',
+      }),
+    ),
+  startWorkflow: async (definitionId: string, body?: { input?: Record<string, unknown>; callbackUrl?: string; version?: number }) =>
     handleResponse<WorkflowInstance>(
       await fetch(buildApiUrl(`/workflow-definitions/${definitionId}/start`), {
         method: 'POST',

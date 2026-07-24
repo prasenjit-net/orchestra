@@ -219,6 +219,20 @@ func (h *Handler) GetWorkflowDefinition(w http.ResponseWriter, r *http.Request, 
 	respondJSON(w, http.StatusOK, definition)
 }
 
+func (h *Handler) GetWorkflowDefinitionVersion(w http.ResponseWriter, r *http.Request, definitionID string, version int) {
+	if h.workflow == nil {
+		writeError(w, http.StatusServiceUnavailable, "workflow service unavailable")
+		return
+	}
+
+	definition, err := h.workflow.GetDefinitionVersion(r.Context(), definitionID, version)
+	if err != nil {
+		writeWorkflowError(w, err)
+		return
+	}
+	respondJSON(w, http.StatusOK, definition)
+}
+
 func (h *Handler) CreateWorkflowDefinitionVersion(w http.ResponseWriter, r *http.Request, definitionID string) {
 	if h.workflow == nil {
 		writeError(w, http.StatusServiceUnavailable, "workflow service unavailable")
@@ -250,7 +264,17 @@ func (h *Handler) PublishWorkflowDefinitionVersion(w http.ResponseWriter, r *htt
 		return
 	}
 
-	definition, err := h.workflow.PublishDefinitionVersion(r.Context(), definitionID, version)
+	var input struct {
+		Activate bool `json:"activate"`
+	}
+	if r.ContentLength != 0 {
+		if err := decodeJSON(r, &input); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+	}
+
+	definition, err := h.workflow.PublishDefinitionVersion(r.Context(), definitionID, version, input.Activate)
 	if err != nil {
 		if errors.Is(err, workflow.ErrNotFound) {
 			writeError(w, http.StatusNotFound, err.Error())
@@ -263,6 +287,24 @@ func (h *Handler) PublishWorkflowDefinitionVersion(w http.ResponseWriter, r *htt
 	respondJSON(w, http.StatusOK, definition)
 }
 
+func (h *Handler) ActivateWorkflowDefinitionVersion(w http.ResponseWriter, r *http.Request, definitionID string, version int) {
+	if h.workflow == nil {
+		writeError(w, http.StatusServiceUnavailable, "workflow service unavailable")
+		return
+	}
+
+	definition, err := h.workflow.ActivateDefinitionVersion(r.Context(), definitionID, version)
+	if err != nil {
+		if errors.Is(err, workflow.ErrNotFound) {
+			writeError(w, http.StatusNotFound, err.Error())
+			return
+		}
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	respondJSON(w, http.StatusOK, definition)
+}
+
 func (h *Handler) StartWorkflow(w http.ResponseWriter, r *http.Request, definitionID string) {
 	if h.workflow == nil {
 		writeError(w, http.StatusServiceUnavailable, "workflow service unavailable")
@@ -272,6 +314,7 @@ func (h *Handler) StartWorkflow(w http.ResponseWriter, r *http.Request, definiti
 	var body struct {
 		Input       map[string]any `json:"input"`
 		CallbackURL string         `json:"callbackUrl"`
+		Version     int            `json:"version"`
 	}
 	if r.ContentLength > 0 {
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -293,10 +336,11 @@ func (h *Handler) StartWorkflow(w http.ResponseWriter, r *http.Request, definiti
 	}
 
 	instance, err := h.workflow.StartWorkflowWithInput(r.Context(), workflow.StartWorkflowInput{
-		DefinitionID:  definitionID,
-		Input:         body.Input,
-		CallbackURL:   body.CallbackURL,
-		TriggerSource: "ui",
+		DefinitionID:      definitionID,
+		DefinitionVersion: body.Version,
+		Input:             body.Input,
+		CallbackURL:       body.CallbackURL,
+		TriggerSource:     "ui",
 	})
 	if err != nil {
 		writeWorkflowError(w, err)
@@ -612,6 +656,10 @@ func writeError(w http.ResponseWriter, status int, message string) {
 func writeWorkflowError(w http.ResponseWriter, err error) {
 	if errors.Is(err, workflow.ErrNotFound) {
 		writeError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	if errors.Is(err, workflow.ErrVersionNotPublished) {
+		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	writeError(w, http.StatusInternalServerError, err.Error())

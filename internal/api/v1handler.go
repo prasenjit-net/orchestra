@@ -33,6 +33,19 @@ func (h *WebhookHandler) StartWorkflow(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	definitionID := chi.URLParam(r, "definitionId")
+	versionRaw := r.URL.Query().Get("version")
+	if versionRaw == "" {
+		versionRaw = r.Header.Get("X-Workflow-Version")
+	}
+	definitionVersion := 0
+	if versionRaw != "" {
+		var err error
+		definitionVersion, err = parseVersion(versionRaw)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+	}
 
 	callbackURL := r.Header.Get("X-Callback-URL")
 	if callbackURL != "" && !h.allowlist.Allows(callbackURL) {
@@ -49,10 +62,11 @@ func (h *WebhookHandler) StartWorkflow(w http.ResponseWriter, r *http.Request) {
 	}
 
 	instance, err := h.workflow.StartWorkflowWithInput(r.Context(), workflow.StartWorkflowInput{
-		DefinitionID:  definitionID,
-		Input:         input,
-		CallbackURL:   callbackURL,
-		TriggerSource: "webhook",
+		DefinitionID:      definitionID,
+		DefinitionVersion: definitionVersion,
+		Input:             input,
+		CallbackURL:       callbackURL,
+		TriggerSource:     "webhook",
 	})
 	if err != nil {
 		writeWorkflowError(w, err)
@@ -60,9 +74,10 @@ func (h *WebhookHandler) StartWorkflow(w http.ResponseWriter, r *http.Request) {
 	}
 
 	respondJSON(w, http.StatusCreated, map[string]any{
-		"workflowId": instance.ID,
-		"status":     instance.Status,
-		"resultUrl":  "/ext/result/" + instance.ID,
+		"workflowId":        instance.ID,
+		"status":            instance.Status,
+		"definitionVersion": instance.DefinitionVersion,
+		"resultUrl":         "/ext/result/" + instance.ID,
 	})
 }
 
@@ -123,10 +138,10 @@ func (h *WebhookHandler) ListSignals(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	respondJSON(w, http.StatusOK, map[string]any{
-		"workflowId":     instance.ID,
-		"status":         instance.Status,
-		"pendingSignals": instance.PendingSignals,
-		"currentStep":    instance.CurrentStepName,
+		"workflowId":      instance.ID,
+		"status":          instance.Status,
+		"pendingSignals":  instance.PendingSignals,
+		"currentStep":     instance.CurrentStepName,
 		"currentActivity": instance.CurrentActivity,
 	})
 }

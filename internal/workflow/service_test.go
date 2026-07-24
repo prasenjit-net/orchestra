@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -984,7 +985,7 @@ func TestScriptActivityHonorsExecutionStepLimit(t *testing.T) {
 	}
 }
 
-func TestDefinitionVersioningPublishesNewActiveVersion(t *testing.T) {
+func TestDefinitionVersioningPublishesAndActivatesIndependently(t *testing.T) {
 	cfg := config.Default()
 	cfg.Workflow.DatabasePath = filepath.Join(t.TempDir(), "workflows.db")
 	service, err := NewService(cfg.Workflow, cfg.AI, slog.New(slog.NewTextHandler(io.Discard, nil)))
@@ -1003,11 +1004,11 @@ func TestDefinitionVersioningPublishesNewActiveVersion(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateDefinition returned error: %v", err)
 	}
-	if definition.ActiveVersion != 1 || definition.LatestVersion != 1 || definition.DraftVersion != 0 {
+	if definition.ActiveVersion != 1 || definition.LatestVersion != 1 || definition.DraftCount != 0 {
 		t.Fatalf("unexpected initial definition summary: %+v", definition.DefinitionSummary)
 	}
 
-	drafted, err := service.CreateDefinitionVersion(context.Background(), definition.ID, CreateDefinitionInput{
+	draftedV2, err := service.CreateDefinitionVersion(context.Background(), definition.ID, CreateDefinitionInput{
 		Name:        "Versioned workflow",
 		Description: "Tracks version lifecycle",
 		Steps: []StepDefinition{
@@ -1017,11 +1018,26 @@ func TestDefinitionVersioningPublishesNewActiveVersion(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateDefinitionVersion returned error: %v", err)
 	}
-	if drafted.ActiveVersion != 1 {
-		t.Fatalf("expected active version to remain 1 before publish, got %d", drafted.ActiveVersion)
+	if draftedV2.ActiveVersion != 1 {
+		t.Fatalf("expected active version to remain 1 before publish, got %d", draftedV2.ActiveVersion)
 	}
-	if drafted.DraftVersion != 2 || drafted.LatestVersion != 2 {
-		t.Fatalf("expected draft/latest version to be 2, got %+v", drafted.DefinitionSummary)
+	if draftedV2.LatestDraftVersion != 2 || draftedV2.DraftCount != 1 || draftedV2.LatestVersion != 2 {
+		t.Fatalf("expected one draft at version 2, got %+v", draftedV2.DefinitionSummary)
+	}
+
+	draftedV3, err := service.CreateDefinitionVersion(context.Background(), definition.ID, CreateDefinitionInput{
+		Name:           "Versioned workflow from v1",
+		Description:    "Branches from the original version",
+		BasedOnVersion: 1,
+		Steps: []StepDefinition{
+			{Name: "step-v3", Activity: "noop", Input: []byte(`{"version":3}`)},
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateDefinitionVersion second draft returned error: %v", err)
+	}
+	if draftedV3.LatestDraftVersion != 3 || draftedV3.DraftCount != 2 || draftedV3.LatestVersion != 3 {
+		t.Fatalf("expected two drafts through version 3, got %+v", draftedV3.DefinitionSummary)
 	}
 
 	beforePublish, err := service.StartWorkflow(context.Background(), definition.ID)
@@ -1031,35 +1047,131 @@ func TestDefinitionVersioningPublishesNewActiveVersion(t *testing.T) {
 	if beforePublish.DefinitionVersion != 1 {
 		t.Fatalf("expected workflow to pin version 1 before publish, got %d", beforePublish.DefinitionVersion)
 	}
+	if _, err := service.StartWorkflowWithInput(context.Background(), StartWorkflowInput{
+		DefinitionID:      definition.ID,
+		DefinitionVersion: 2,
+	}); !errors.Is(err, ErrVersionNotPublished) {
+		t.Fatalf("expected draft version start to fail with ErrVersionNotPublished, got %v", err)
+	}
 
-	published, err := service.PublishDefinitionVersion(context.Background(), definition.ID, 2)
+	published, err := service.PublishDefinitionVersion(context.Background(), definition.ID, 2, false)
 	if err != nil {
 		t.Fatalf("PublishDefinitionVersion returned error: %v", err)
 	}
-	if published.ActiveVersion != 2 || published.DraftVersion != 0 {
-		t.Fatalf("expected active version 2 and no draft after publish, got %+v", published.DefinitionSummary)
+	if published.ActiveVersion != 1 || published.DraftCount != 1 {
+		t.Fatalf("expected v1 to remain active with one draft after publishing v2, got %+v", published.DefinitionSummary)
 	}
 
 	afterPublish, err := service.StartWorkflow(context.Background(), definition.ID)
 	if err != nil {
 		t.Fatalf("StartWorkflow after publish returned error: %v", err)
 	}
-	if afterPublish.DefinitionVersion != 2 {
-		t.Fatalf("expected workflow to pin version 2 after publish, got %d", afterPublish.DefinitionVersion)
+	if afterPublish.DefinitionVersion != 1 {
+		t.Fatalf("expected workflow to remain pinned to active version 1 after publish, got %d", afterPublish.DefinitionVersion)
+	}
+	explicitV2, err := service.StartWorkflowWithInput(context.Background(), StartWorkflowInput{
+		DefinitionID:      definition.ID,
+		DefinitionVersion: 2,
+	})
+	if err != nil {
+		t.Fatalf("StartWorkflowWithInput published inactive version returned error: %v", err)
+	}
+	if explicitV2.DefinitionVersion != 2 {
+		t.Fatalf("expected explicit run to pin published inactive version 2, got %d", explicitV2.DefinitionVersion)
+	}
+
+	if _, err := service.ActivateDefinitionVersion(context.Background(), definition.ID, 3); err == nil {
+		t.Fatal("expected draft version activation to fail")
+	}
+
+	activatedV2, err := service.ActivateDefinitionVersion(context.Background(), definition.ID, 2)
+	if err != nil {
+		t.Fatalf("ActivateDefinitionVersion returned error: %v", err)
+	}
+	if activatedV2.ActiveVersion != 2 {
+		t.Fatalf("expected version 2 to become active, got %+v", activatedV2.DefinitionSummary)
+	}
+
+	afterActivation, err := service.StartWorkflow(context.Background(), definition.ID)
+	if err != nil {
+		t.Fatalf("StartWorkflow after activation returned error: %v", err)
+	}
+	if afterActivation.DefinitionVersion != 2 {
+		t.Fatalf("expected workflow to pin activated version 2, got %d", afterActivation.DefinitionVersion)
+	}
+
+	publishedAndActivated, err := service.PublishDefinitionVersion(context.Background(), definition.ID, 3, true)
+	if err != nil {
+		t.Fatalf("PublishDefinitionVersion with activation returned error: %v", err)
+	}
+	if publishedAndActivated.ActiveVersion != 3 || publishedAndActivated.DraftCount != 0 {
+		t.Fatalf("expected v3 active and no drafts, got %+v", publishedAndActivated.DefinitionSummary)
+	}
+
+	reactivatedV1, err := service.ActivateDefinitionVersion(context.Background(), definition.ID, 1)
+	if err != nil {
+		t.Fatalf("ActivateDefinitionVersion historical version returned error: %v", err)
+	}
+	if reactivatedV1.ActiveVersion != 1 {
+		t.Fatalf("expected historical version 1 to become active, got %+v", reactivatedV1.DefinitionSummary)
 	}
 
 	reloaded, err := service.GetDefinition(context.Background(), definition.ID)
 	if err != nil {
 		t.Fatalf("GetDefinition returned error: %v", err)
 	}
-	if len(reloaded.Versions) != 2 {
-		t.Fatalf("expected two definition versions, got %d", len(reloaded.Versions))
+	if len(reloaded.Versions) != 3 {
+		t.Fatalf("expected three definition versions, got %d", len(reloaded.Versions))
 	}
-	if reloaded.Versions[0].Version != 2 || reloaded.Versions[0].Status != "published" {
-		t.Fatalf("expected latest version to be published v2, got %+v", reloaded.Versions[0])
+	if reloaded.Versions[0].Version != 3 || reloaded.Versions[0].Status != "published" || reloaded.Versions[0].BasedOnVersion != 1 {
+		t.Fatalf("expected latest version to be published v3 based on v1, got %+v", reloaded.Versions[0])
 	}
-	if reloaded.Versions[1].Version != 1 || reloaded.Versions[1].Status != "archived" {
-		t.Fatalf("expected original version to be archived, got %+v", reloaded.Versions[1])
+	if reloaded.Versions[1].Version != 2 || reloaded.Versions[1].Status != "published" || reloaded.Versions[1].BasedOnVersion != 1 {
+		t.Fatalf("expected version 2 to remain published and based on v1, got %+v", reloaded.Versions[1])
+	}
+	if reloaded.Versions[2].Version != 1 || reloaded.Versions[2].Status != "published" {
+		t.Fatalf("expected original version to remain published, got %+v", reloaded.Versions[2])
+	}
+}
+
+func TestDefinitionVersionMigrationRestoresHistoricalVersions(t *testing.T) {
+	cfg := config.Default()
+	cfg.Workflow.DatabasePath = filepath.Join(t.TempDir(), "workflows.db")
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	service, err := NewService(cfg.Workflow, cfg.AI, logger)
+	if err != nil {
+		t.Fatalf("NewService returned error: %v", err)
+	}
+
+	definition, err := service.CreateDefinition(context.Background(), CreateDefinitionInput{
+		Name:  "Migrated workflow",
+		Steps: []StepDefinition{{Name: "version_1", Activity: "noop"}},
+	})
+	if err != nil {
+		t.Fatalf("CreateDefinition returned error: %v", err)
+	}
+	if _, err := service.db.Exec(`UPDATE workflow_definition_versions SET status = 'archived' WHERE definition_id = ? AND version = 1`, definition.ID); err != nil {
+		t.Fatalf("archive legacy version: %v", err)
+	}
+	if _, err := service.db.Exec(`UPDATE workflow_definitions SET status = 'draft' WHERE id = ?`, definition.ID); err != nil {
+		t.Fatalf("set legacy definition status: %v", err)
+	}
+	if err := service.Close(); err != nil {
+		t.Fatalf("Close returned error: %v", err)
+	}
+
+	reopened, err := NewService(cfg.Workflow, cfg.AI, logger)
+	if err != nil {
+		t.Fatalf("reopen NewService returned error: %v", err)
+	}
+	defer reopened.Close()
+
+	reloaded, err := reopened.GetDefinition(context.Background(), definition.ID)
+	if err != nil {
+		t.Fatalf("GetDefinition after migration returned error: %v", err)
+	}
+	if reloaded.Status != "published" || len(reloaded.Versions) != 1 || reloaded.Versions[0].Status != "published" {
+		t.Fatalf("expected legacy definition and version to be published, got %+v versions=%+v", reloaded.DefinitionSummary, reloaded.Versions)
 	}
 }
 

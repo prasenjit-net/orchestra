@@ -23,9 +23,11 @@ import {
   useNodesState,
   useReactFlow,
 } from '@xyflow/react'
-import { AlertCircle, ArrowLeft, Bot, Braces, CheckCircle2, ChevronDown, ChevronRight, ClipboardList, Clock3, Code2, FileText, GitBranch, Globe, Grip, Plus, Radio, Save, Send, Shuffle, Sparkles, SquareTerminal, Trash2, TriangleAlert, UserCheck, Users, Webhook, X } from 'lucide-react'
-import { Link, useNavigate, useParams } from 'react-router-dom'
+import { AlertCircle, ArrowLeft, Bot, Braces, CheckCircle2, ChevronDown, ChevronRight, ClipboardList, Clock3, Code2, FileText, GitBranch, Globe, Grip, History, Play, Plus, Radio, Save, Send, Shuffle, Sparkles, SquareTerminal, Trash2, TriangleAlert, UserCheck, Users, Webhook, X } from 'lucide-react'
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import ScriptAssistModal from '../components/ScriptAssistModal'
+import PublishVersionModal from '../components/PublishVersionModal'
+import StartWorkflowModal from '../components/StartWorkflowModal'
 import { agentsApi, jsonSchemasApi, scriptsApi, workflowApi } from '../services/api'
 import type { Agent, JSONSchemaDocument, Script, WorkflowActivity, WorkflowDefinitionDocument, WorkflowStepTransition, WorkflowTransitionCondition } from '../types'
 import ContextExpressionPicker, { type MappingField, type PrecedingStep } from '../components/ContextExpressionPicker'
@@ -2051,6 +2053,7 @@ function compileDocument(
 
 function WorkflowDesignerCanvas() {
   const { definitionId } = useParams<{ definitionId: string }>()
+  const [searchParams] = useSearchParams()
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   const reactFlowWrapper = useRef<HTMLDivElement | null>(null)
@@ -2064,6 +2067,9 @@ function WorkflowDesignerCanvas() {
   const [endOutputRows, setEndOutputRows] = useState<InputRow[]>(() => [makeInputRow()])
   const [notice, setNotice] = useState<string | null>(null)
   const [pageError, setPageError] = useState<string | null>(null)
+  const [publishTarget, setPublishTarget] = useState<number | null>(null)
+  const [startRunOpen, setStartRunOpen] = useState(false)
+  const [startRunError, setStartRunError] = useState<string | null>(null)
   const [editingNodeID, setEditingNodeID] = useState<string | null>(null)
   const [editingBoundary, setEditingBoundary] = useState<BoundaryNodeKind | null>(null)
   const [isDesktop, setIsDesktop] = useState(() => (typeof window === 'undefined' ? true : window.innerWidth >= 1024))
@@ -2080,9 +2086,14 @@ function WorkflowDesignerCanvas() {
     queryFn: jsonSchemasApi.list,
   })
 
+  const requestedVersionValue = Number(searchParams.get('version'))
+  const requestedVersion = Number.isInteger(requestedVersionValue) && requestedVersionValue > 0 ? requestedVersionValue : null
+
   const definitionQuery = useQuery({
-    queryKey: ['workflow-definition', definitionId],
-    queryFn: () => workflowApi.getDefinition(definitionId as string),
+    queryKey: ['workflow-definition', definitionId, requestedVersion ?? 'active'],
+    queryFn: () => requestedVersion
+      ? workflowApi.getDefinitionVersion(definitionId as string, requestedVersion)
+      : workflowApi.getDefinition(definitionId as string),
     enabled: Boolean(definitionId),
   })
 
@@ -2358,11 +2369,32 @@ function WorkflowDesignerCanvas() {
   })
 
   const createDefinitionVersionMutation = useMutation({
-    mutationFn: ({ targetDefinitionId, payload }: { targetDefinitionId: string; payload: WorkflowDefinitionDocument }) =>
-      workflowApi.createDefinitionVersion(targetDefinitionId, payload),
+    mutationFn: ({ targetDefinitionId, payload, basedOnVersion }: { targetDefinitionId: string; payload: WorkflowDefinitionDocument; basedOnVersion: number }) =>
+      workflowApi.createDefinitionVersion(targetDefinitionId, payload, basedOnVersion),
     onSuccess: (definition) => {
       setPageError(null)
-      setNotice(`Saved draft version v${definition.draftVersion ?? definition.latestVersion}.`)
+      setNotice(`Saved draft version v${definition.latestVersion}.`)
+      void Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['workflow-definitions'] }),
+        queryClient.invalidateQueries({ queryKey: ['workflow-definition', definition.id] }),
+      ])
+      navigate(`/workflows/${definition.id}/designer?version=${definition.latestVersion}`, { replace: true })
+    },
+    onError: (error: Error) => {
+      setNotice(null)
+      setPageError(error.message)
+    },
+  })
+
+  const publishDefinitionMutation = useMutation({
+    mutationFn: ({ targetDefinitionId, version, activate }: { targetDefinitionId: string; version: number; activate: boolean }) =>
+      workflowApi.publishDefinitionVersion(targetDefinitionId, version, activate),
+    onSuccess: (definition, variables) => {
+      setPublishTarget(null)
+      setPageError(null)
+      setNotice(variables.activate
+        ? `Published and activated v${variables.version}.`
+        : `Published v${variables.version}. Active version remains v${definition.activeVersion}.`)
       void Promise.all([
         queryClient.invalidateQueries({ queryKey: ['workflow-definitions'] }),
         queryClient.invalidateQueries({ queryKey: ['workflow-definition', definition.id] }),
@@ -2374,12 +2406,12 @@ function WorkflowDesignerCanvas() {
     },
   })
 
-  const publishDefinitionMutation = useMutation({
+  const activateDefinitionMutation = useMutation({
     mutationFn: ({ targetDefinitionId, version }: { targetDefinitionId: string; version: number }) =>
-      workflowApi.publishDefinitionVersion(targetDefinitionId, version),
+      workflowApi.activateDefinitionVersion(targetDefinitionId, version),
     onSuccess: (definition) => {
       setPageError(null)
-      setNotice(`Published ${definition.name} v${definition.activeVersion}.`)
+      setNotice(`Activated v${definition.activeVersion} for new workflow runs.`)
       void Promise.all([
         queryClient.invalidateQueries({ queryKey: ['workflow-definitions'] }),
         queryClient.invalidateQueries({ queryKey: ['workflow-definition', definition.id] }),
@@ -2389,6 +2421,23 @@ function WorkflowDesignerCanvas() {
       setNotice(null)
       setPageError(error.message)
     },
+  })
+
+  const startWorkflowMutation = useMutation({
+    mutationFn: ({ input, callbackUrl, version }: { input: Record<string, unknown>; callbackUrl: string; version: number }) =>
+      workflowApi.startWorkflow(definitionId as string, {
+        input: Object.keys(input).length > 0 ? input : undefined,
+        callbackUrl: callbackUrl || undefined,
+        version,
+      }),
+    onSuccess: (instance) => {
+      setStartRunOpen(false)
+      setStartRunError(null)
+      void queryClient.invalidateQueries({ queryKey: ['workflows'] })
+      void queryClient.invalidateQueries({ queryKey: ['workflow-tasks'] })
+      navigate(`/runs/${instance.id}`)
+    },
+    onError: (error: Error) => setStartRunError(error.message),
   })
 
   const saveDocument = useCallback(() => {
@@ -2400,7 +2449,11 @@ function WorkflowDesignerCanvas() {
       })
       setPageError(null)
       if (definitionId) {
-        createDefinitionVersionMutation.mutate({ targetDefinitionId: definitionId, payload })
+        const basedOnVersion = requestedVersion ?? definitionQuery.data?.activeVersion
+        if (!basedOnVersion) {
+          throw new Error('Select a source workflow version before saving.')
+        }
+        createDefinitionVersionMutation.mutate({ targetDefinitionId: definitionId, payload, basedOnVersion })
         return
       }
       createDefinitionMutation.mutate(payload)
@@ -2408,7 +2461,7 @@ function WorkflowDesignerCanvas() {
       setNotice(null)
       setPageError(error instanceof Error ? error.message : 'Unable to build workflow definition.')
     }
-  }, [createDefinitionMutation, createDefinitionVersionMutation, definitionId, edges, endOutputRows, endSchemaId, nodes, startSchemaId, workflowDescription, workflowName])
+  }, [createDefinitionMutation, createDefinitionVersionMutation, definitionId, definitionQuery.data?.activeVersion, edges, endOutputRows, endSchemaId, nodes, requestedVersion, startSchemaId, workflowDescription, workflowName])
 
   if (activitiesQuery.isLoading || schemasQuery.isLoading || (definitionId && definitionQuery.isLoading)) {
     return <div className="p-8 text-sm text-gray-500 dark:text-slate-400">Loading designer…</div>
@@ -2419,7 +2472,8 @@ function WorkflowDesignerCanvas() {
   }
 
   const loadedDefinition = definitionQuery.data
-  const hasExistingDraft = Boolean(loadedDefinition?.draftVersion)
+  const viewedVersion = requestedVersion ?? loadedDefinition?.activeVersion ?? null
+  const viewedVersionMeta = loadedDefinition?.versions.find((version) => version.version === viewedVersion)
 
   if (!isDesktop) {
     return (
@@ -2463,6 +2517,15 @@ function WorkflowDesignerCanvas() {
             </div>
           </div>
           <div className="flex flex-wrap gap-2">
+            {definitionId ? (
+              <Link
+                to={`/workflows/${definitionId}/versions`}
+                className="inline-flex items-center gap-2 rounded-lg border border-gray-200 px-3 py-2 text-xs font-semibold text-gray-700 transition-colors hover:bg-gray-50 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800"
+              >
+                <History className="h-4 w-4" />
+                Versions
+              </Link>
+            ) : null}
             <Link
               to="/operations"
               className="rounded-lg border border-gray-200 px-3 py-2 text-xs font-semibold text-gray-700 transition-colors hover:bg-gray-50 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800"
@@ -2472,35 +2535,57 @@ function WorkflowDesignerCanvas() {
             <button
               type="button"
               onClick={saveDocument}
-              disabled={createDefinitionMutation.isPending || createDefinitionVersionMutation.isPending || Boolean(definitionId && hasExistingDraft)}
+              disabled={createDefinitionMutation.isPending || createDefinitionVersionMutation.isPending}
               className="inline-flex items-center gap-2 rounded-lg bg-primary-600 px-3 py-2 text-xs font-semibold text-white transition-colors hover:bg-primary-700 disabled:cursor-not-allowed disabled:opacity-60"
             >
               <Save className="h-4 w-4" />
-              {definitionId ? 'Save draft version' : 'Create workflow'}
+              {definitionId ? 'Save as new version' : 'Create workflow'}
             </button>
-            {definitionId && loadedDefinition?.draftVersion ? (
+            {definitionId && viewedVersionMeta?.status === 'draft' && viewedVersion ? (
               <button
                 type="button"
-                onClick={() =>
-                  publishDefinitionMutation.mutate({
-                    targetDefinitionId: definitionId,
-                    version: loadedDefinition.draftVersion as number,
-                  })
-                }
+                onClick={() => setPublishTarget(viewedVersion)}
                 disabled={publishDefinitionMutation.isPending}
                 className="inline-flex items-center gap-2 rounded-lg border border-emerald-200 px-3 py-2 text-xs font-semibold text-emerald-700 transition-colors hover:bg-emerald-50 disabled:cursor-not-allowed disabled:opacity-60 dark:border-emerald-900/40 dark:text-emerald-300 dark:hover:bg-emerald-950/20"
               >
                 <Send className="h-4 w-4" />
-                Publish draft
+                Publish v{viewedVersion}
+              </button>
+            ) : null}
+            {definitionId ? (
+              <button
+                type="button"
+                onClick={() => { setStartRunError(null); setStartRunOpen(true) }}
+                disabled={!viewedVersion || viewedVersionMeta?.status !== 'published'}
+                title={viewedVersionMeta?.status === 'draft' ? 'Publish this version before starting a run' : 'Start a run with this version'}
+                className="inline-flex items-center gap-2 rounded-lg border border-gray-200 px-3 py-2 text-xs font-semibold text-gray-700 transition-colors hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800"
+              >
+                <Play className="h-4 w-4" />
+                {viewedVersion ? `Start v${viewedVersion}` : 'Start run'}
+              </button>
+            ) : null}
+            {definitionId ? (
+              <button
+                type="button"
+                onClick={() => {
+                  if (viewedVersion) {
+                    activateDefinitionMutation.mutate({ targetDefinitionId: definitionId, version: viewedVersion })
+                  }
+                }}
+                disabled={activateDefinitionMutation.isPending || !viewedVersion || viewedVersionMeta?.status !== 'published' || viewedVersion === loadedDefinition?.activeVersion}
+                title={viewedVersionMeta?.status === 'draft'
+                  ? 'Publish this version before activating it'
+                  : viewedVersion === loadedDefinition?.activeVersion
+                    ? 'This version is already active'
+                    : 'Activate this version for new workflow runs'}
+                className="inline-flex items-center gap-2 rounded-lg border border-emerald-200 px-3 py-2 text-xs font-semibold text-emerald-700 transition-colors hover:bg-emerald-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-emerald-900/40 dark:text-emerald-300 dark:hover:bg-emerald-950/20"
+              >
+                <Play className="h-4 w-4" />
+                {activateDefinitionMutation.isPending ? 'Activating…' : viewedVersion ? `Activate v${viewedVersion}` : 'Activate'}
               </button>
             ) : null}
           </div>
         </div>
-        {hasExistingDraft ? (
-          <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700 dark:border-amber-900/40 dark:bg-amber-950/20 dark:text-amber-300">
-            This definition already has a draft version. Publish the draft before saving another one from the designer.
-          </div>
-        ) : null}
         {notice ? (
           <div className="mt-3 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-700 dark:border-emerald-900/40 dark:bg-emerald-950/30 dark:text-emerald-300">
             <div className="flex items-center gap-2">
@@ -2541,12 +2626,23 @@ function WorkflowDesignerCanvas() {
           </div>
           {loadedDefinition ? (
             <div className="flex shrink-0 items-center gap-1.5 text-[11px] text-gray-500 dark:text-slate-400">
+              <label htmlFor="designer-version" className="font-semibold uppercase text-gray-400 dark:text-slate-500">Version</label>
+              <select
+                id="designer-version"
+                value={viewedVersion ?? ''}
+                onChange={(event) => navigate(`/workflows/${loadedDefinition.id}/designer?version=${event.target.value}`)}
+                className="rounded-md border border-gray-200 bg-white px-2 py-1 text-xs font-semibold text-gray-700 outline-none focus:border-primary-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
+              >
+                {loadedDefinition.versions.map((version) => (
+                  <option key={version.version} value={version.version}>v{version.version} · {version.status}</option>
+                ))}
+              </select>
               <span className="rounded-full bg-gray-100 px-2 py-0.5 font-semibold dark:bg-slate-800">v{loadedDefinition.activeVersion} active</span>
               {loadedDefinition.latestVersion !== loadedDefinition.activeVersion ? (
                 <span className="rounded-full bg-gray-100 px-2 py-0.5 dark:bg-slate-800">v{loadedDefinition.latestVersion} latest</span>
               ) : null}
-              {loadedDefinition.draftVersion ? (
-                <span className="rounded-full bg-amber-100 px-2 py-0.5 font-semibold text-amber-700 dark:bg-amber-900/40 dark:text-amber-300">v{loadedDefinition.draftVersion} draft</span>
+              {loadedDefinition.draftCount > 0 ? (
+                <span className="rounded-full bg-amber-100 px-2 py-0.5 font-semibold text-amber-700 dark:bg-amber-900/40 dark:text-amber-300">{loadedDefinition.draftCount} {loadedDefinition.draftCount === 1 ? 'draft' : 'drafts'}</span>
               ) : null}
             </div>
           ) : null}
@@ -2650,6 +2746,28 @@ function WorkflowDesignerCanvas() {
         </div>
       </div>
 
+      {publishTarget !== null && loadedDefinition && definitionId ? (
+        <PublishVersionModal
+          version={publishTarget}
+          activeVersion={loadedDefinition.activeVersion}
+          isPending={publishDefinitionMutation.isPending}
+          error={publishDefinitionMutation.error instanceof Error ? publishDefinitionMutation.error.message : null}
+          onClose={() => setPublishTarget(null)}
+          onPublish={(activate) => publishDefinitionMutation.mutate({ targetDefinitionId: definitionId, version: publishTarget, activate })}
+        />
+      ) : null}
+      {startRunOpen && loadedDefinition && viewedVersion ? (
+        <StartWorkflowModal
+          definitionName={loadedDefinition.document.name}
+          activeVersion={loadedDefinition.activeVersion}
+          initialVersion={viewedVersion}
+          publishedVersions={loadedDefinition.versions.filter((version) => version.status === 'published').map((version) => version.version)}
+          isPending={startWorkflowMutation.isPending}
+          error={startRunError}
+          onClose={() => { setStartRunOpen(false); setStartRunError(null) }}
+          onStart={(input, callbackUrl, version) => startWorkflowMutation.mutate({ input, callbackUrl, version })}
+        />
+      ) : null}
       {editingNode ? (
         <ActivityPropertiesModal
           node={editingNode}

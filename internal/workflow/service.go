@@ -17,7 +17,10 @@ import (
 	"github.com/prasenjit-net/orchestra/internal/livebus"
 )
 
-var ErrNotFound = errors.New("workflow resource not found")
+var (
+	ErrNotFound            = errors.New("workflow resource not found")
+	ErrVersionNotPublished = errors.New("workflow definition version is not published")
+)
 
 type Service struct {
 	db         *sql.DB

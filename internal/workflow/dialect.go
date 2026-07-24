@@ -71,6 +71,7 @@ var sqliteDDL = []string{
 	created_at TEXT NOT NULL,
 	updated_at TEXT NOT NULL DEFAULT '',
 	published_at TEXT,
+	based_on_version INTEGER,
 	PRIMARY KEY (definition_id, version)
 )`,
 	`CREATE TABLE IF NOT EXISTS workflow_instances (
@@ -217,9 +218,12 @@ var postgresMigrations = []string{
 	`ALTER TABLE workflow_definition_versions ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'published'`,
 	`ALTER TABLE workflow_definition_versions ADD COLUMN IF NOT EXISTS updated_at TEXT NOT NULL DEFAULT ''`,
 	`ALTER TABLE workflow_definition_versions ADD COLUMN IF NOT EXISTS published_at TEXT`,
+	`ALTER TABLE workflow_definition_versions ADD COLUMN IF NOT EXISTS based_on_version INTEGER`,
 	// backfill updated_at / published_at for rows created before these columns existed
 	`UPDATE workflow_definition_versions SET updated_at = created_at WHERE updated_at = ''`,
 	`UPDATE workflow_definition_versions SET published_at = created_at WHERE status = 'published' AND published_at IS NULL`,
+	`UPDATE workflow_definition_versions SET status = 'published' WHERE status = 'archived'`,
+	`UPDATE workflow_definitions SET status = 'published' WHERE active_version > 0`,
 	// workflow_instances: callback and trigger columns added later
 	`ALTER TABLE workflow_instances ADD COLUMN IF NOT EXISTS callback_url TEXT NOT NULL DEFAULT ''`,
 	`ALTER TABLE workflow_instances ADD COLUMN IF NOT EXISTS trigger_source TEXT NOT NULL DEFAULT 'ui'`,
@@ -263,6 +267,7 @@ var postgresDDL = []string{
 	created_at TEXT NOT NULL,
 	updated_at TEXT NOT NULL DEFAULT '',
 	published_at TEXT,
+	based_on_version INTEGER,
 	PRIMARY KEY (definition_id, version)
 )`,
 	`CREATE TABLE IF NOT EXISTS workflow_instances (
