@@ -55,6 +55,10 @@ func (s *Service) execTxQuery(ctx context.Context, tx *sql.Tx, query string, arg
 	return tx.ExecContext(ctx, s.rebind(query), args...) // NOSONAR -- rebind changes placeholders, never query structure.
 }
 
+func (s *Service) queryTx(ctx context.Context, tx *sql.Tx, query string, args ...any) (*sql.Rows, error) {
+	return tx.QueryContext(ctx, s.rebind(query), args...) // NOSONAR -- rebind changes placeholders, never query structure.
+}
+
 func (s *Service) queryRowTx(ctx context.Context, tx *sql.Tx, query string, args ...any) *sql.Row {
 	return tx.QueryRowContext(ctx, s.rebind(query), args...) // NOSONAR -- rebind changes placeholders, never query structure.
 }

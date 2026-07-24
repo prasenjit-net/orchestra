@@ -9,7 +9,7 @@ import { formatDate } from './workflowUi'
 type HeaderRow = { id: string; key: string; value: string }
 
 function makeHeaderRow(key = '', value = ''): HeaderRow {
-  return { id: `${Date.now()}-${Math.random()}`, key, value }
+  return { id: crypto.randomUUID(), key, value }
 }
 
 export default function ConnectorEditorPage() {

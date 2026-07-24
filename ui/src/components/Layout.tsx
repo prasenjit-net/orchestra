@@ -199,7 +199,9 @@ export default function Layout() {
           </div>
         </header>
 
-        <div
+        <button
+          type="button"
+          aria-label="Close navigation"
           className={clsx(
             'fixed inset-0 z-40 bg-slate-950/40 backdrop-blur-sm transition-opacity lg:hidden',
             isDrawerOpen ? 'pointer-events-auto opacity-100' : 'pointer-events-none opacity-0',

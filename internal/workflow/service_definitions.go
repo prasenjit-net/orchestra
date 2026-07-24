@@ -30,17 +30,17 @@ func (s *Service) CreateDefinition(ctx context.Context, input CreateDefinitionIn
 	defer tx.Rollback()
 
 	timestamp := formatTime(now)
-	if _, err := tx.ExecContext(ctx, s.rebind(`
+	if _, err := s.execTxQuery(ctx, tx, `
 		INSERT INTO workflow_definitions (id, name, description, status, active_version, created_at, updated_at)
 		VALUES (?, ?, ?, 'published', 1, ?, ?)
-	`), definitionID, document.Name, document.Description, timestamp, timestamp); err != nil {
+	`, definitionID, document.Name, document.Description, timestamp, timestamp); err != nil {
 		return DefinitionDetails{}, fmt.Errorf("insert workflow definition: %w", err)
 	}
 
-	if _, err := tx.ExecContext(ctx, s.rebind(`
+	if _, err := s.execTxQuery(ctx, tx, `
 		INSERT INTO workflow_definition_versions (definition_id, version, status, document_json, created_at, updated_at, published_at, based_on_version)
 		VALUES (?, 1, 'published', ?, ?, ?, ?, NULL)
-	`), definitionID, string(documentJSON), timestamp, timestamp, timestamp); err != nil {
+	`, definitionID, string(documentJSON), timestamp, timestamp, timestamp); err != nil {
 		return DefinitionDetails{}, fmt.Errorf("insert workflow definition version: %w", err)
 	}
 
@@ -104,18 +104,18 @@ func (s *Service) CreateDefinitionVersion(ctx context.Context, definitionID stri
 		return DefinitionDetails{}, fmt.Errorf("encode definition version document: %w", err)
 	}
 
-	if _, err := tx.ExecContext(ctx, s.rebind(`
+	if _, err := s.execTxQuery(ctx, tx, `
 		INSERT INTO workflow_definition_versions (definition_id, version, status, document_json, created_at, updated_at, published_at, based_on_version)
 		VALUES (?, ?, 'draft', ?, ?, ?, NULL, ?)
-	`), definitionID, nextVersion, string(documentJSON), timestamp, timestamp, basedOnVersion); err != nil {
+	`, definitionID, nextVersion, string(documentJSON), timestamp, timestamp, basedOnVersion); err != nil {
 		return DefinitionDetails{}, fmt.Errorf("insert draft definition version: %w", err)
 	}
 
-	if _, err := tx.ExecContext(ctx, s.rebind(`
+	if _, err := s.execTxQuery(ctx, tx, `
 		UPDATE workflow_definitions
 		SET updated_at = ?
 		WHERE id = ?
-	`), timestamp, definitionID); err != nil {
+	`, timestamp, definitionID); err != nil {
 		return DefinitionDetails{}, fmt.Errorf("update definition draft status: %w", err)
 	}
 
@@ -219,18 +219,18 @@ func (s *Service) activateDefinitionVersionTx(ctx context.Context, tx *sql.Tx, d
 	if err != nil {
 		return err
 	}
-	if _, err := tx.ExecContext(ctx, s.rebind(`
+	if _, err := s.execTxQuery(ctx, tx, `
 		UPDATE workflow_definitions
 		SET name = ?, description = ?, active_version = ?, status = 'published', updated_at = ?
 		WHERE id = ?
-	`), document.Name, document.Description, version, timestamp, definitionID); err != nil {
+	`, document.Name, document.Description, version, timestamp, definitionID); err != nil {
 		return fmt.Errorf("activate workflow definition version: %w", err)
 	}
 	return nil
 }
 
 func (s *Service) ListDefinitions(ctx context.Context) ([]DefinitionSummary, error) {
-	rows, err := s.db.QueryContext(ctx, s.rebind(`
+	rows, err := s.queryDB(ctx, `
 		SELECT d.id, d.name, d.description, d.status, d.active_version,
 		       COALESCE(MAX(v.version), d.active_version) AS latest_version,
 		       COALESCE(MAX(CASE WHEN v.status = 'draft' THEN v.version END), 0) AS latest_draft_version,
@@ -240,7 +240,7 @@ func (s *Service) ListDefinitions(ctx context.Context) ([]DefinitionSummary, err
 		LEFT JOIN workflow_definition_versions v ON v.definition_id = d.id
 		GROUP BY d.id, d.name, d.description, d.status, d.active_version, d.created_at, d.updated_at
 		ORDER BY d.updated_at DESC, d.created_at DESC
-	`))
+	`)
 	if err != nil {
 		return nil, fmt.Errorf("query workflow definitions: %w", err)
 	}
@@ -263,7 +263,7 @@ func (s *Service) ListDefinitions(ctx context.Context) ([]DefinitionSummary, err
 }
 
 func (s *Service) GetDefinition(ctx context.Context, definitionID string) (DefinitionDetails, error) {
-	row := s.db.QueryRowContext(ctx, s.rebind(`
+	row := s.queryRowDB(ctx, `
 		SELECT d.id, d.name, d.description, d.status, d.active_version,
 		       COALESCE(MAX(v_all.version), d.active_version) AS latest_version,
 		       COALESCE(MAX(CASE WHEN v_all.status = 'draft' THEN v_all.version END), 0) AS latest_draft_version,
@@ -275,7 +275,7 @@ func (s *Service) GetDefinition(ctx context.Context, definitionID string) (Defin
 		LEFT JOIN workflow_definition_versions v_all ON v_all.definition_id = d.id
 		WHERE d.id = ?
 		GROUP BY d.id, d.name, d.description, d.status, d.active_version, d.created_at, d.updated_at, v.document_json
-	`), definitionID)
+	`, definitionID)
 
 	var (
 		documentJSON string
@@ -320,7 +320,7 @@ func (s *Service) GetDefinition(ctx context.Context, definitionID string) (Defin
 }
 
 func (s *Service) GetDefinitionVersion(ctx context.Context, definitionID string, version int) (DefinitionDetails, error) {
-	row := s.db.QueryRowContext(ctx, s.rebind(`
+	row := s.queryRowDB(ctx, `
 		SELECT d.id, d.name, d.description, d.status, d.active_version,
 		       COALESCE(MAX(v_all.version), d.active_version) AS latest_version,
 		       COALESCE(MAX(CASE WHEN v_all.status = 'draft' THEN v_all.version END), 0) AS latest_draft_version,
@@ -332,7 +332,7 @@ func (s *Service) GetDefinitionVersion(ctx context.Context, definitionID string,
 		LEFT JOIN workflow_definition_versions v_all ON v_all.definition_id = d.id
 		WHERE d.id = ?
 		GROUP BY d.id, d.name, d.description, d.status, d.active_version, d.created_at, d.updated_at, v.document_json
-	`), version, definitionID)
+	`, version, definitionID)
 
 	var (
 		documentJSON string
@@ -502,12 +502,12 @@ func isValidStepName(name string) bool {
 }
 
 func (s *Service) listDefinitionVersions(ctx context.Context, definitionID string) ([]DefinitionVersionSummary, error) {
-	rows, err := s.db.QueryContext(ctx, s.rebind(`
+	rows, err := s.queryDB(ctx, `
 		SELECT version, status, based_on_version, created_at, updated_at, published_at
 		FROM workflow_definition_versions
 		WHERE definition_id = ?
 		ORDER BY version DESC
-	`), definitionID)
+	`, definitionID)
 	if err != nil {
 		return nil, fmt.Errorf("query workflow definition versions: %w", err)
 	}
@@ -528,7 +528,7 @@ func (s *Service) listDefinitionVersions(ctx context.Context, definitionID strin
 }
 
 func (s *Service) getDefinitionSummaryTx(ctx context.Context, tx *sql.Tx, definitionID string) (DefinitionSummary, error) {
-	row := tx.QueryRowContext(ctx, s.rebind(`
+	row := s.queryRowTx(ctx, tx, `
 		SELECT d.id, d.name, d.description, d.status, d.active_version,
 		       COALESCE(MAX(v.version), d.active_version) AS latest_version,
 		       COALESCE(MAX(CASE WHEN v.status = 'draft' THEN v.version END), 0) AS latest_draft_version,
@@ -538,7 +538,7 @@ func (s *Service) getDefinitionSummaryTx(ctx context.Context, tx *sql.Tx, defini
 		LEFT JOIN workflow_definition_versions v ON v.definition_id = d.id
 		WHERE d.id = ?
 		GROUP BY d.id, d.name, d.description, d.status, d.active_version, d.created_at, d.updated_at
-	`), definitionID)
+	`, definitionID)
 
 	definition, err := scanDefinitionSummary(row)
 	if err != nil {
@@ -551,11 +551,11 @@ func (s *Service) getDefinitionSummaryTx(ctx context.Context, tx *sql.Tx, defini
 }
 
 func (s *Service) getDefinitionVersionMetaTx(ctx context.Context, tx *sql.Tx, definitionID string, version int) (DefinitionVersionSummary, error) {
-	row := tx.QueryRowContext(ctx, s.rebind(`
+	row := s.queryRowTx(ctx, tx, `
 		SELECT version, status, based_on_version, created_at, updated_at, published_at
 		FROM workflow_definition_versions
 		WHERE definition_id = ? AND version = ?
-	`), definitionID, version)
+	`, definitionID, version)
 
 	meta, err := scanDefinitionVersionSummary(row)
 	if err != nil {
@@ -568,7 +568,7 @@ func (s *Service) getDefinitionVersionMetaTx(ctx context.Context, tx *sql.Tx, de
 }
 
 func (s *Service) getDefinitionTx(ctx context.Context, tx *sql.Tx, definitionID string) (DefinitionDetails, error) {
-	row := tx.QueryRowContext(ctx, s.rebind(`
+	row := s.queryRowTx(ctx, tx, `
 		SELECT d.id, d.name, d.description, d.status, d.active_version,
 		       COALESCE(MAX(v_all.version), d.active_version) AS latest_version,
 		       COALESCE(MAX(CASE WHEN v_all.status = 'draft' THEN v_all.version END), 0) AS latest_draft_version,
@@ -580,7 +580,7 @@ func (s *Service) getDefinitionTx(ctx context.Context, tx *sql.Tx, definitionID 
 		LEFT JOIN workflow_definition_versions v_all ON v_all.definition_id = d.id
 		WHERE d.id = ?
 		GROUP BY d.id, d.name, d.description, d.status, d.active_version, d.created_at, d.updated_at, v.document_json
-	`), definitionID)
+	`, definitionID)
 
 	var (
 		documentJSON string
@@ -621,11 +621,11 @@ func (s *Service) getDefinitionTx(ctx context.Context, tx *sql.Tx, definitionID 
 }
 
 func (s *Service) getDefinitionVersionDocumentTx(ctx context.Context, tx *sql.Tx, definitionID string, version int) (DefinitionDocument, error) {
-	row := tx.QueryRowContext(ctx, s.rebind(`
+	row := s.queryRowTx(ctx, tx, `
 		SELECT document_json
 		FROM workflow_definition_versions
 		WHERE definition_id = ? AND version = ?
-	`), definitionID, version)
+	`, definitionID, version)
 	var documentJSON string
 	if err := row.Scan(&documentJSON); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {

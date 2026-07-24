@@ -267,7 +267,7 @@ func (s *Service) entityExists(ctx context.Context, kind, id string) (bool, erro
 		return false, fmt.Errorf("unknown entity kind %q", kind)
 	}
 	var count int
-	err := s.db.QueryRowContext(ctx, s.rebind("SELECT COUNT(*) FROM "+table+" WHERE id = ?"), id).Scan(&count)
+	err := s.queryRowDB(ctx, "SELECT COUNT(*) FROM "+table+" WHERE id = ?", id).Scan(&count)
 	if err != nil {
 		return false, fmt.Errorf("check %s existence: %w", kind, err)
 	}
@@ -368,7 +368,7 @@ func (s *Service) upsertScript(ctx context.Context, sc Script, now time.Time) er
 		return fmt.Errorf("encode exports: %w", err)
 	}
 	ts := formatTime(now)
-	if _, err := s.db.ExecContext(ctx, s.rebind(`
+	if _, err := s.execDBQuery(ctx, `
 		INSERT INTO scripts (id, name, description, language, source, timeout_ms, exports_json, created_at, updated_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (id) DO UPDATE SET
@@ -376,7 +376,7 @@ func (s *Service) upsertScript(ctx context.Context, sc Script, now time.Time) er
 			language = EXCLUDED.language, source = EXCLUDED.source,
 			timeout_ms = EXCLUDED.timeout_ms, exports_json = EXCLUDED.exports_json,
 			updated_at = EXCLUDED.updated_at
-	`), sc.ID, sc.Name, sc.Description, sc.Language, sc.Source, sc.TimeoutMs, string(exportsJSON), ts, ts); err != nil {
+	`, sc.ID, sc.Name, sc.Description, sc.Language, sc.Source, sc.TimeoutMs, string(exportsJSON), ts, ts); err != nil {
 		return err
 	}
 	return nil
@@ -388,7 +388,7 @@ func (s *Service) upsertAgent(ctx context.Context, ag Agent, now time.Time) erro
 		return err
 	}
 	ts := formatTime(now)
-	if _, err := s.db.ExecContext(ctx, s.rebind(`
+	if _, err := s.execDBQuery(ctx, `
 		INSERT INTO agents (id, name, description, provider, model, system_prompt, max_tokens, temperature, created_at, updated_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (id) DO UPDATE SET
@@ -396,12 +396,12 @@ func (s *Service) upsertAgent(ctx context.Context, ag Agent, now time.Time) erro
 			provider = EXCLUDED.provider, model = EXCLUDED.model, system_prompt = EXCLUDED.system_prompt,
 			max_tokens = EXCLUDED.max_tokens, temperature = EXCLUDED.temperature,
 			updated_at = EXCLUDED.updated_at
-	`), ag.ID, ag.Name, ag.Description, provider, model, ag.SystemPrompt, ag.MaxTokens, ag.Temperature, ts, ts); err != nil {
+	`, ag.ID, ag.Name, ag.Description, provider, model, ag.SystemPrompt, ag.MaxTokens, ag.Temperature, ts, ts); err != nil {
 		return err
 	}
 
 	// Recreate join rows for connectors that actually exist in the DB.
-	if _, err := s.db.ExecContext(ctx, s.rebind(`DELETE FROM agent_mcp_servers WHERE agent_id = ?`), ag.ID); err != nil {
+	if _, err := s.execDBQuery(ctx, `DELETE FROM agent_mcp_servers WHERE agent_id = ?`, ag.ID); err != nil {
 		return fmt.Errorf("clear agent connectors: %w", err)
 	}
 	for _, mcpID := range ag.MCPServerIDs {
@@ -409,10 +409,10 @@ func (s *Service) upsertAgent(ctx context.Context, ag Agent, now time.Time) erro
 		if err != nil || !exists {
 			continue // connector was skipped or is missing — omit link
 		}
-		if _, err := s.db.ExecContext(ctx, s.rebind(`
+		if _, err := s.execDBQuery(ctx, `
 			INSERT INTO agent_mcp_servers (agent_id, server_id) VALUES (?, ?)
 			ON CONFLICT (agent_id, server_id) DO NOTHING
-		`), ag.ID, mcpID); err != nil {
+		`, ag.ID, mcpID); err != nil {
 			return fmt.Errorf("link agent connector %s: %w", mcpID, err)
 		}
 	}
@@ -433,7 +433,7 @@ func (s *Service) upsertConnector(ctx context.Context, srv MCPServer, now time.T
 		enabled = 1
 	}
 	ts := formatTime(now)
-	if _, err := s.db.ExecContext(ctx, s.rebind(`
+	if _, err := s.execDBQuery(ctx, `
 		INSERT INTO mcp_servers (id, name, description, group_name, url, headers_json, enabled, tools_json, explored_at, created_at, updated_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)
 		ON CONFLICT (id) DO UPDATE SET
@@ -441,7 +441,7 @@ func (s *Service) upsertConnector(ctx context.Context, srv MCPServer, now time.T
 			group_name = EXCLUDED.group_name, url = EXCLUDED.url,
 			headers_json = EXCLUDED.headers_json, enabled = EXCLUDED.enabled,
 			tools_json = EXCLUDED.tools_json, updated_at = EXCLUDED.updated_at
-	`), srv.ID, srv.Name, srv.Description, srv.Group, srv.URL, string(headersJSON), enabled, string(toolsJSON), ts, ts); err != nil {
+	`, srv.ID, srv.Name, srv.Description, srv.Group, srv.URL, string(headersJSON), enabled, string(toolsJSON), ts, ts); err != nil {
 		return err
 	}
 	return nil
@@ -478,23 +478,23 @@ func (s *Service) upsertDefinition(ctx context.Context, def DefinitionExport, no
 	}
 	defer tx.Rollback()
 
-	if _, err := tx.ExecContext(ctx, s.rebind(`
+	if _, err := s.execTxQuery(ctx, tx, `
 		INSERT INTO workflow_definitions (id, name, description, status, active_version, created_at, updated_at)
 		VALUES (?, ?, ?, 'published', 1, ?, ?)
 		ON CONFLICT (id) DO UPDATE SET
 			name = EXCLUDED.name, description = EXCLUDED.description,
 			updated_at = EXCLUDED.updated_at
-	`), def.ID, def.Name, def.Description, ts, ts); err != nil {
+	`, def.ID, def.Name, def.Description, ts, ts); err != nil {
 		return fmt.Errorf("upsert definition: %w", err)
 	}
 
-	if _, err := tx.ExecContext(ctx, s.rebind(`
+	if _, err := s.execTxQuery(ctx, tx, `
 		INSERT INTO workflow_definition_versions (definition_id, version, status, document_json, created_at, updated_at, published_at)
 		VALUES (?, 1, 'published', ?, ?, ?, ?)
 		ON CONFLICT (definition_id, version) DO UPDATE SET
 			document_json = EXCLUDED.document_json, status = EXCLUDED.status,
 			updated_at = EXCLUDED.updated_at, published_at = EXCLUDED.published_at
-	`), def.ID, string(documentJSON), ts, ts, ts); err != nil {
+	`, def.ID, string(documentJSON), ts, ts, ts); err != nil {
 		return fmt.Errorf("upsert definition version: %w", err)
 	}
 

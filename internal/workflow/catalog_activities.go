@@ -813,10 +813,10 @@ func normalizeHashInput(value any) ([]byte, error) {
 func digestBytes(algorithm string, payload []byte) ([]byte, error) {
 	switch algorithm {
 	case "md5":
-		sum := md5.Sum(payload) // #nosec G401 -- data checksum, not a security primitive
+		sum := md5.Sum(payload) // #nosec G401 -- checksum compatibility; NOSONAR
 		return sum[:], nil
 	case "sha1":
-		sum := sha1.Sum(payload) // #nosec G401 -- data checksum, not a security primitive
+		sum := sha1.Sum(payload) // #nosec G401 -- checksum compatibility; NOSONAR
 		return sum[:], nil
 	case "sha256":
 		sum := sha256.Sum256(payload)
