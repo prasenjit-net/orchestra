@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Check, RefreshCw, RotateCcw, Save } from 'lucide-react'
-import Editor from '@monaco-editor/react'
+import Editor from '../components/MonacoEditor'
 import SectionHeader from '../components/SectionHeader'
 import { adminApi, configApi, metaApi } from '../services/api'
 import { useMonacoTheme } from '../hooks/useMonacoTheme'

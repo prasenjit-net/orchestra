@@ -12,7 +12,6 @@ import ScriptsPage from './pages/ScriptsPage'
 import JsonSchemasPage from './pages/JsonSchemasPage'
 import SignalsPage from './pages/SignalsPage'
 import ClusterPage from './pages/ClusterPage'
-import SettingsPage from './pages/SettingsPage'
 import WorkflowListPage from './pages/WorkflowListPage'
 import WorkflowVersionsPage from './pages/WorkflowVersionsPage'
 import LoginPage from './pages/LoginPage'
@@ -27,6 +26,7 @@ const ScriptEditorPage = lazy(() => import('./pages/ScriptEditorPage'))
 const JsonSchemaEditorPage = lazy(() => import('./pages/JsonSchemaEditorPage'))
 const AgentEditorPage = lazy(() => import('./pages/AgentEditorPage'))
 const ConnectorEditorPage = lazy(() => import('./pages/ConnectorEditorPage'))
+const SettingsPage = lazy(() => import('./pages/SettingsPage'))
 
 function PageLoader() {
   return <div className="flex h-64 items-center justify-center text-sm text-gray-500 dark:text-slate-400">Loading…</div>
@@ -75,7 +75,7 @@ function App() {
           <Route path="queues" element={<QueuesPage />} />
           <Route path="operations" element={<OperationsPage />} />
           <Route path="cluster" element={<ClusterPage />} />
-          <Route path="settings" element={<SettingsPage />} />
+          <Route path="settings" element={<Suspense fallback={<PageLoader />}><SettingsPage /></Suspense>} />
           <Route path="security" element={<SecurityPage />} />
         </Route>
       </Route>
