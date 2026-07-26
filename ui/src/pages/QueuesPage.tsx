@@ -8,11 +8,13 @@ import StatCard from '../components/StatCard'
 import { workflowApi } from '../services/api'
 import type { WorkflowTaskAction } from '../types'
 import { actionLabel, availableTaskActions, formatDate, statusClasses } from './workflowUi'
+import { useAuth } from '../auth/AuthProvider'
 
 const PAGE_SIZE = 20
 
 export default function QueuesPage() {
   const queryClient = useQueryClient()
+  const { hasPermission } = useAuth()
   const [page, setPage] = useState(0)
 
   const tasksQuery = useQuery({
@@ -92,7 +94,7 @@ export default function QueuesPage() {
                     </div>
                     {task.lastError ? <div className="mt-2 text-sm text-red-600 dark:text-red-300">{task.lastError}</div> : null}
                   </div>
-                  <div className="flex flex-wrap gap-2">
+                  {hasPermission('workflow.task.control') && <div className="flex flex-wrap gap-2">
                     {availableTaskActions(task).map((action) => (
                       <button
                         key={action}
@@ -104,7 +106,7 @@ export default function QueuesPage() {
                         {actionLabel(action)}
                       </button>
                     ))}
-                  </div>
+                  </div>}
                 </div>
               </div>
             ))

@@ -114,3 +114,51 @@ func TestShouldServeDevSPAIndex(t *testing.T) {
 		})
 	}
 }
+
+func TestTrustedRealIPUsesForwardedChainOnlyFromTrustedPeer(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	handler := trustedRealIP([]string{"10.0.0.0/8"}, logger)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, r.RemoteAddr)
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.RemoteAddr = "10.0.0.2:1234"
+	req.Header.Set("X-Forwarded-For", "198.51.100.20, 10.0.0.3")
+	res := httptest.NewRecorder()
+	handler.ServeHTTP(res, req)
+	if got := res.Body.String(); got != "198.51.100.20" {
+		t.Fatalf("trusted chain remote address = %q", got)
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/", nil)
+	req.RemoteAddr = "203.0.113.8:4321"
+	req.Header.Set("X-Forwarded-For", "198.51.100.99")
+	res = httptest.NewRecorder()
+	handler.ServeHTTP(res, req)
+	if got := res.Body.String(); got != "203.0.113.8:4321" {
+		t.Fatalf("untrusted peer spoofed remote address = %q", got)
+	}
+}
+
+func TestSecurityHeaders(t *testing.T) {
+	handler := securityHeaders(false)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	req := httptest.NewRequest(http.MethodGet, "/api/users", nil)
+	res := httptest.NewRecorder()
+	handler.ServeHTTP(res, req)
+
+	for header, want := range map[string]string{
+		"X-Content-Type-Options": "nosniff",
+		"X-Frame-Options":        "DENY",
+		"Referrer-Policy":        "same-origin",
+		"Cache-Control":          "no-store",
+	} {
+		if got := res.Header().Get(header); got != want {
+			t.Errorf("%s = %q, want %q", header, got, want)
+		}
+	}
+	if got := res.Header().Get("Content-Security-Policy"); !strings.Contains(got, "frame-ancestors 'none'") {
+		t.Fatalf("Content-Security-Policy = %q", got)
+	}
+}

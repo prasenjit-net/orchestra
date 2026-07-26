@@ -8,6 +8,7 @@ import StatCard from '../components/StatCard'
 import { workflowApi } from '../services/api'
 import type { WorkflowDefinitionDetails, WorkflowInstance, WorkflowStepDefinition } from '../types'
 import { formatDate, statusClasses } from './workflowUi'
+import { useAuth } from '../auth/AuthProvider'
 
 const PAGE_SIZE = 20
 
@@ -111,6 +112,7 @@ function parseSignalPayload(payloadText: string) {
 }
 
 export default function SignalsPage() {
+  const { hasPermission } = useAuth()
   const queryClient = useQueryClient()
   const [payloadText, setPayloadText] = useState('{\n  "approved": true\n}')
   const [notice, setNotice] = useState<string | null>(null)
@@ -202,7 +204,7 @@ export default function SignalsPage() {
         title="Signals"
         description="Find workflows blocked on signal-driven steps and resume them from one operator console."
         action={
-          <button
+          hasPermission('workflow.run.control') ? <button
             type="button"
             onClick={submitAllSignals}
             disabled={total === 0 || signalAllMutation.isPending}
@@ -210,7 +212,7 @@ export default function SignalsPage() {
           >
             <Send className="h-4 w-4" />
             Signal all waiting
-          </button>
+          </button> : null
         }
       />
 
@@ -285,7 +287,7 @@ export default function SignalsPage() {
                   >
                     Open run
                   </Link>
-                  <button
+                  {hasPermission('workflow.run.control') && <button
                     type="button"
                     onClick={() => submitSingleSignal(item)}
                     disabled={signalOneMutation.isPending}
@@ -293,7 +295,7 @@ export default function SignalsPage() {
                   >
                     <Send className="h-4 w-4" />
                     Send {item.signalName}
-                  </button>
+                  </button>}
                 </div>
               </div>
             ))

@@ -5,10 +5,14 @@ import Editor from '@monaco-editor/react'
 import SectionHeader from '../components/SectionHeader'
 import { adminApi, configApi, metaApi } from '../services/api'
 import { useMonacoTheme } from '../hooks/useMonacoTheme'
+import { useAuth } from '../auth/AuthProvider'
 
 export default function SettingsPage() {
   const queryClient = useQueryClient()
   const monacoTheme = useMonacoTheme()
+  const { hasPermission } = useAuth()
+  const canWrite = hasPermission('settings.write')
+  const canRestart = hasPermission('server.restart')
 
   const metaQuery = useQuery({ queryKey: ['meta'], queryFn: metaApi.get })
   const configQuery = useQuery({ queryKey: ['config-raw'], queryFn: configApi.getRaw })
@@ -152,7 +156,7 @@ export default function SettingsPage() {
               {saveError && (
                 <span className="text-xs font-medium text-red-600 dark:text-red-400">{saveError}</span>
               )}
-              <button
+              {canWrite && <button
                 type="button"
                 onClick={() => void queryClient.invalidateQueries({ queryKey: ['config-raw'] })}
                 disabled={configQuery.isFetching}
@@ -160,8 +164,8 @@ export default function SettingsPage() {
                 className="rounded-lg border border-gray-200 p-2 text-gray-500 transition-colors hover:bg-gray-50 disabled:opacity-50 dark:border-slate-700 dark:text-slate-400 dark:hover:bg-slate-800"
               >
                 <RefreshCw className={`h-3.5 w-3.5 ${configQuery.isFetching ? 'animate-spin' : ''}`} />
-              </button>
-              <button
+              </button>}
+              {canRestart && <button
                 type="button"
                 onClick={() => saveMutation.mutate()}
                 disabled={saveMutation.isPending || !isDirty || !configQuery.data}
@@ -169,7 +173,7 @@ export default function SettingsPage() {
               >
                 <Save className="h-3.5 w-3.5" />
                 {saveMutation.isPending ? 'Saving…' : 'Save'}
-              </button>
+              </button>}
               <button
                 type="button"
                 onClick={() => restartMutation.mutate()}
@@ -184,9 +188,9 @@ export default function SettingsPage() {
           </div>
 
           {/* Restart notice */}
-          <div className="border-b border-amber-100 bg-amber-50 px-6 py-2.5 text-xs text-amber-700 dark:border-amber-900/30 dark:bg-amber-950/20 dark:text-amber-300">
+          {canWrite && <div className="border-b border-amber-100 bg-amber-50 px-6 py-2.5 text-xs text-amber-700 dark:border-amber-900/30 dark:bg-amber-950/20 dark:text-amber-300">
             Changes are written to disk immediately but only take effect after a manual server restart.
-          </div>
+          </div>}
 
           {/* Editor */}
           <div className="h-[480px]">
@@ -207,6 +211,7 @@ export default function SettingsPage() {
                   renderLineHighlight: 'line',
                   smoothScrolling: true,
                   tabSize: 2,
+                  readOnly: !canWrite,
                 }}
               />
             ) : configQuery.isLoading ? (

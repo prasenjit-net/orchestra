@@ -72,8 +72,25 @@ scriptMaxSourceBytes    = 16384
 scriptMaxOutputBytes    = 262144
 scriptMaxExecutionSteps = 25000
 
+[auth]
+sessionIdleTimeout     = "30m"
+sessionAbsoluteTimeout = "8h"
+cookieSecure           = "auto" # set "required" behind HTTPS if app.url is not configured
+bootstrapOutputPath    = "data/bootstrap-admin.txt"
+auditRetention         = "2160h" # 90 days
+# Only list reverse proxies that Orchestra connects to directly.
+trustedProxyCIDRs      = []
+
+[auth.apiKeys]
+defaultTTL        = "2160h"
+maximumTTL        = "8760h"
+usageWriteWindow  = "5m"
+requestsPerMinute = 60
+burst             = 20
+
 [webhook]
-enabled = true
+enabled            = true
+authenticationMode = "required" # temporary migration option: "audit"
 # callbackAllowlist = [
 #   "https://your-domain\\.example\\.com/.*",
 #   "http://localhost:.*",
@@ -82,7 +99,8 @@ enabled = true
 # An empty list (default) means no callback URLs are accepted.
 # Set a single ".*" entry to allow any URL (dev/test only).
 
-# External API endpoints (no authentication — plan auth separately):
+# External API endpoints require Authorization: Bearer <API key>.
+# Create keys and workflow grants under Access control in the UI.
 #   POST /ext/webhook/{definitionId}/start   — trigger a workflow (body = JSON input)
 #   POST /ext/webhook/{workflowId}/signal    — deliver a named signal
 #   GET  /ext/signal/{workflowId}            — poll workflow state / pending signals

@@ -4,16 +4,13 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"fmt"
 	"log/slog"
 	"slices"
 	"strings"
 	"time"
 
-	_ "github.com/jackc/pgx/v5/stdlib"
-	_ "modernc.org/sqlite"
-
 	"github.com/prasenjit-net/orchestra/internal/config"
+	appdb "github.com/prasenjit-net/orchestra/internal/database"
 	"github.com/prasenjit-net/orchestra/internal/livebus"
 )
 
@@ -33,6 +30,7 @@ type Service struct {
 	workerID   string
 	live       *livebus.Bus
 	wakeCh     chan struct{}
+	ownsDB     bool
 }
 
 // rebind rewrites ? placeholders to $N for PostgreSQL; identity for SQLite.
@@ -80,54 +78,24 @@ func NewService(cfg config.WorkflowConfig, aiCfg config.AIConfig, logger *slog.L
 		return nil, nil
 	}
 
-	dialect := Dialect(cfg.DatabaseDriver)
-	if dialect == "" {
-		dialect = DialectSQLite
+	db, dialect, err := appdb.Open(context.Background(), cfg)
+	if err != nil {
+		return nil, err
 	}
-
-	var (
-		db  *sql.DB
-		err error
-	)
-
-	switch dialect {
-	case DialectPostgres:
-		if cfg.DatabaseURL == "" {
-			return nil, fmt.Errorf("workflow.databaseURL is required when databaseDriver is postgres")
-		}
-		db, err = sql.Open("pgx", cfg.DatabaseURL)
-		if err != nil {
-			return nil, fmt.Errorf("open postgres workflow database: %w", err)
-		}
-		db.SetMaxOpenConns(25)
-		db.SetMaxIdleConns(5)
-		pingCtx, pingCancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer pingCancel()
-		if err = db.PingContext(pingCtx); err != nil {
-			_ = db.Close()
-			return nil, fmt.Errorf("ping postgres workflow database: %w", err)
-		}
-	default:
-		dialect = DialectSQLite
-		if err = ensureDatabasePath(cfg.DatabasePath); err != nil {
-			return nil, err
-		}
-		db, err = sql.Open("sqlite", cfg.DatabasePath)
-		if err != nil {
-			return nil, fmt.Errorf("open workflow database: %w", err)
-		}
-		db.SetMaxOpenConns(1)
-		for _, pragma := range []string{
-			`PRAGMA journal_mode = WAL`,
-			`PRAGMA busy_timeout = 5000`,
-			`PRAGMA foreign_keys = ON`,
-		} {
-			if _, err := db.Exec(pragma); err != nil {
-				_ = db.Close()
-				return nil, fmt.Errorf("configure workflow database: %w", err)
-			}
-		}
+	svc, err := NewServiceWithDB(cfg, aiCfg, logger, db, dialect, buses...)
+	if err != nil {
+		_ = db.Close()
+		return nil, err
 	}
+	svc.ownsDB = true
+	return svc, nil
+}
+
+func NewServiceWithDB(cfg config.WorkflowConfig, aiCfg config.AIConfig, logger *slog.Logger, db *sql.DB, dbDialect appdb.Dialect, buses ...*livebus.Bus) (*Service, error) {
+	if !cfg.Enabled {
+		return nil, nil
+	}
+	dialect := Dialect(dbDialect)
 
 	live := livebus.New()
 	if len(buses) > 0 && buses[0] != nil {
@@ -158,7 +126,6 @@ func NewService(cfg config.WorkflowConfig, aiCfg config.AIConfig, logger *slog.L
 	// For PostgreSQL the schema must be created manually via `orchestra schema --create`.
 	if !dialect.IsPostgres() {
 		if err := svc.initSchema(context.Background()); err != nil {
-			_ = db.Close()
 			return nil, err
 		}
 	}
@@ -167,7 +134,7 @@ func NewService(cfg config.WorkflowConfig, aiCfg config.AIConfig, logger *slog.L
 }
 
 func (s *Service) Close() error {
-	if s == nil || s.db == nil {
+	if s == nil || s.db == nil || !s.ownsDB {
 		return nil
 	}
 	return s.db.Close()

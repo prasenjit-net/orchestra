@@ -73,17 +73,19 @@ func (s *Service) StartWorkflowWithInput(ctx context.Context, in StartWorkflowIn
 
 	now := time.Now().UTC()
 	instance := WorkflowInstance{
-		ID:                generateID("wf"),
-		DefinitionID:      details.ID,
-		DefinitionVersion: definitionVersion,
-		Status:            StatusRunning,
-		CurrentStepIndex:  -1,
-		LastEventSequence: 0,
-		Context:           buildInitialContext(details.ID, definitionVersion, in.Input),
-		CallbackURL:       in.CallbackURL,
-		TriggerSource:     in.TriggerSource,
-		CreatedAt:         now,
-		UpdatedAt:         now,
+		ID:                   generateID("wf"),
+		DefinitionID:         details.ID,
+		DefinitionVersion:    definitionVersion,
+		Status:               StatusRunning,
+		CurrentStepIndex:     -1,
+		LastEventSequence:    0,
+		Context:              buildInitialContext(details.ID, definitionVersion, in.Input),
+		CallbackURL:          in.CallbackURL,
+		TriggerSource:        in.TriggerSource,
+		TriggerPrincipalType: in.TriggerPrincipalType,
+		TriggerPrincipalID:   in.TriggerPrincipalID,
+		CreatedAt:            now,
+		UpdatedAt:            now,
 	}
 
 	stepName := ""
@@ -110,12 +112,12 @@ func (s *Service) StartWorkflowWithInput(ctx context.Context, in StartWorkflowIn
 		INSERT INTO workflow_instances (
 			id, definition_id, definition_version, status, current_step_index, current_step_name,
 			current_activity, snapshot_json, last_event_sequence, last_error,
-			callback_url, trigger_source, callback_status,
+			callback_url, trigger_source, callback_status, trigger_principal_type, trigger_principal_id,
 			created_at, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, '', ?, ?, '', ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, '', ?, ?, '', ?, ?, ?, ?)
 	`, instance.ID, instance.DefinitionID, instance.DefinitionVersion, instance.Status,
 		instance.CurrentStepIndex, instance.CurrentStepName, instance.CurrentActivity,
-		snapshotJSON, instance.CallbackURL, instance.TriggerSource,
+		snapshotJSON, instance.CallbackURL, instance.TriggerSource, instance.TriggerPrincipalType, instance.TriggerPrincipalID,
 		formatTime(now), formatTime(now)); err != nil {
 		return WorkflowInstance{}, fmt.Errorf("insert workflow instance: %w", err)
 	}
@@ -252,7 +254,7 @@ func (s *Service) ListWorkflows(ctx context.Context, input ListWorkflowsInput) (
 
 	query := `SELECT id, definition_id, definition_version, status, current_step_index, current_step_name,
 		       current_activity, snapshot_json, last_event_sequence, last_error, created_at, updated_at,
-		       callback_url, trigger_source, callback_status
+		       callback_url, trigger_source, callback_status, trigger_principal_type, trigger_principal_id
 		FROM workflow_instances ` + where + ` ORDER BY updated_at DESC, created_at DESC`
 
 	pageArgs := make([]any, len(args))
@@ -288,7 +290,7 @@ func (s *Service) GetWorkflow(ctx context.Context, workflowID string) (WorkflowI
 	row := s.queryRowDB(ctx, `
 		SELECT id, definition_id, definition_version, status, current_step_index, current_step_name,
 		       current_activity, snapshot_json, last_event_sequence, last_error, created_at, updated_at,
-		       callback_url, trigger_source, callback_status
+		       callback_url, trigger_source, callback_status, trigger_principal_type, trigger_principal_id
 		FROM workflow_instances
 		WHERE id = ?
 	`, workflowID)
@@ -636,7 +638,7 @@ func (s *Service) getWorkflowTx(ctx context.Context, tx *sql.Tx, workflowID stri
 	row := s.queryRowTx(ctx, tx, `
 		SELECT id, definition_id, definition_version, status, current_step_index, current_step_name,
 		       current_activity, snapshot_json, last_event_sequence, last_error, created_at, updated_at,
-		       callback_url, trigger_source, callback_status
+		       callback_url, trigger_source, callback_status, trigger_principal_type, trigger_principal_id
 		FROM workflow_instances
 		WHERE id = ?
 	`, workflowID)
@@ -782,14 +784,16 @@ func buildSnapshotJSON(snapshot workflowSnapshot) (string, error) {
 
 func scanWorkflowInstance(scanner interface{ Scan(...any) error }) (WorkflowInstance, error) {
 	var (
-		instance     WorkflowInstance
-		snapshotJSON string
-		lastError    sql.NullString
-		createdAt    string
-		updatedAt    string
-		callbackURL  sql.NullString
-		triggerSrc   sql.NullString
-		callbackSt   sql.NullString
+		instance             WorkflowInstance
+		snapshotJSON         string
+		lastError            sql.NullString
+		createdAt            string
+		updatedAt            string
+		callbackURL          sql.NullString
+		triggerSrc           sql.NullString
+		callbackSt           sql.NullString
+		triggerPrincipalType sql.NullString
+		triggerPrincipalID   sql.NullString
 	)
 	if err := scanner.Scan(
 		&instance.ID,
@@ -807,6 +811,8 @@ func scanWorkflowInstance(scanner interface{ Scan(...any) error }) (WorkflowInst
 		&callbackURL,
 		&triggerSrc,
 		&callbackSt,
+		&triggerPrincipalType,
+		&triggerPrincipalID,
 	); err != nil {
 		return WorkflowInstance{}, fmt.Errorf("scan workflow instance: %w", err)
 	}
@@ -816,6 +822,8 @@ func scanWorkflowInstance(scanner interface{ Scan(...any) error }) (WorkflowInst
 	instance.CallbackURL = callbackURL.String
 	instance.TriggerSource = triggerSrc.String
 	instance.CallbackStatus = callbackSt.String
+	instance.TriggerPrincipalType = triggerPrincipalType.String
+	instance.TriggerPrincipalID = triggerPrincipalID.String
 	if snapshotJSON != "" {
 		var snapshot workflowSnapshot
 		if err := json.Unmarshal([]byte(snapshotJSON), &snapshot); err == nil {

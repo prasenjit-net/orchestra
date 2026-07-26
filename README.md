@@ -54,6 +54,8 @@ make dev-all          # Go server + Vite dev server together
 
 Open `http://localhost:8080`. The API is at `http://localhost:8080/api`.
 
+On the first controller start, Orchestra creates an `admin` user and writes a one-time temporary password to `data/bootstrap-admin.txt` with mode `0600`. Sign in and change it immediately. In deployments, provide `APP_AUTH_INITIAL_ADMIN_PASSWORD_FILE` instead.
+
 ---
 
 ## Common Commands
@@ -112,6 +114,22 @@ scriptMaxSourceBytes   = 16384
 # openaiAPIKey = ""                     # or use APP_WORKFLOW_OPENAI_API_KEY
 # claudeAPIKey = ""                     # or use APP_WORKFLOW_CLAUDE_API_KEY
 # copilotOAuthToken = ""                # or use APP_WORKFLOW_COPILOT_OAUTH_TOKEN
+
+[auth]
+sessionIdleTimeout     = "30m"
+sessionAbsoluteTimeout = "8h"
+cookieSecure           = "auto"
+bootstrapOutputPath    = "data/bootstrap-admin.txt"
+auditRetention         = "2160h"
+trustedProxyCIDRs      = []
+
+[auth.apiKeys]
+defaultTTL        = "2160h"
+maximumTTL        = "8760h"
+requestsPerMinute = 60
+
+[webhook]
+authenticationMode = "required"
 ```
 
 ---
@@ -136,6 +154,38 @@ APP_WORKFLOW_OPENAI_API_KEY=sk-...
 APP_WORKFLOW_CLAUDE_API_KEY=sk-ant-...
 APP_WORKFLOW_COPILOT_OAUTH_TOKEN=gho_...
 APP_WORKFLOW_SCRIPT_ENABLED=true
+APP_AUTH_INITIAL_ADMIN_PASSWORD_FILE=/run/secrets/orchestra_admin_password
+APP_WEBHOOK_AUTHENTICATION_MODE=required
+```
+
+Set `APP_APP_URL` to the exact public origin, including `https://` and any non-default port. Only add the directly connected load balancer networks to `auth.trustedProxyCIDRs`; forwarded client IP headers are ignored from all other peers.
+For containers, `APP_AUTH_TRUSTED_PROXY_CIDRS` accepts a comma-separated CIDR list.
+
+### Authentication and roles
+
+All `/api` routes except health, public metadata, and login require a local user session. Unsafe browser requests use a session-bound CSRF token and exact origin checking.
+
+| Role | Access |
+|---|---|
+| `admin` | User manager, entitlements, audit, all API keys, settings, and all workflow operations |
+| `developer` | Workflow and resource authoring, run control, and personally owned API keys |
+| `observer` | Read-only workflows, runs, resources, operations, cluster state, and personal sessions |
+
+Admins manage users and per-permission allow/deny overrides from **Access control**. Password resets revoke every active session and require a change at the next login. For offline recovery:
+
+```bash
+printf '%s\n' 'new-long-password' | ./build/orchestra users reset-password admin --password-file -
+```
+
+### Webhook API keys
+
+Create an API key from **Access control → API keys** and bind each grant to one workflow definition and action (`start`, `signal`, `status.read`, or `result.read`). Instance scope `own` limits control and result access to runs started by that same key. Secrets are stored as hashes and shown only when created or rotated.
+
+```bash
+curl -H "Authorization: Bearer $ORCHESTRA_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"orderId":"123"}' \
+  "$ORCHESTRA_URL/ext/webhook/order-workflow/start"
 ```
 
 ---

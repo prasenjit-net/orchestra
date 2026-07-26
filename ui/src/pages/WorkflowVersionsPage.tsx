@@ -6,10 +6,14 @@ import PublishVersionModal from '../components/PublishVersionModal'
 import SectionHeader from '../components/SectionHeader'
 import { workflowApi } from '../services/api'
 import { formatDate, statusClasses } from './workflowUi'
+import { useAuth } from '../auth/AuthProvider'
 
 export default function WorkflowVersionsPage() {
   const { definitionId = '' } = useParams<{ definitionId: string }>()
   const queryClient = useQueryClient()
+  const { hasPermission } = useAuth()
+  const canWrite = hasPermission('workflow.definition.write')
+  const canPublish = hasPermission('workflow.definition.publish')
   const [publishTarget, setPublishTarget] = useState<number | null>(null)
   const [activateTarget, setActivateTarget] = useState<number | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
@@ -80,10 +84,10 @@ export default function WorkflowVersionsPage() {
         title={`${definition.name} versions`}
         description={`Version ${definition.activeVersion} is active. New runs use the active version; existing runs remain pinned.`}
         action={
-          <Link to={`/workflows/${definition.id}/designer?version=${definition.activeVersion}`} className="inline-flex items-center gap-2 rounded-lg bg-primary-600 px-4 py-2 text-sm font-semibold text-white hover:bg-primary-700">
+          canWrite ? <Link to={`/workflows/${definition.id}/designer?version=${definition.activeVersion}`} className="inline-flex items-center gap-2 rounded-lg bg-primary-600 px-4 py-2 text-sm font-semibold text-white hover:bg-primary-700">
             <GitBranch className="h-4 w-4" />
             Open designer
-          </Link>
+          </Link> : null
         }
       />
 
@@ -135,17 +139,17 @@ export default function WorkflowVersionsPage() {
                             {copiedWebhookVersion === version.version ? <Check className="h-3.5 w-3.5 text-emerald-500" /> : <Copy className="h-3.5 w-3.5" />}
                           </button>
                         ) : null}
-                        <Link to={`/workflows/${definition.id}/designer?version=${version.version}`} className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 px-3 py-1.5 text-xs font-semibold text-gray-700 hover:bg-gray-50 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800">
+                        {canWrite && <Link to={`/workflows/${definition.id}/designer?version=${version.version}`} className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 px-3 py-1.5 text-xs font-semibold text-gray-700 hover:bg-gray-50 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800">
                           <GitBranch className="h-3.5 w-3.5" />
                           Open
-                        </Link>
-                        {version.status === 'draft' ? (
+                        </Link>}
+                        {canPublish && version.status === 'draft' ? (
                           <button type="button" onClick={() => { setPageError(null); setPublishTarget(version.version) }} className="inline-flex items-center gap-1.5 rounded-lg border border-amber-200 px-3 py-1.5 text-xs font-semibold text-amber-700 hover:bg-amber-50 dark:border-amber-800/50 dark:text-amber-300 dark:hover:bg-amber-950/20">
                             <Send className="h-3.5 w-3.5" />
                             Publish
                           </button>
                         ) : null}
-                        {version.status === 'published' && !isActive ? (
+                        {canPublish && version.status === 'published' && !isActive ? (
                           <button type="button" onClick={() => { setPageError(null); setActivateTarget(version.version) }} className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-200 px-3 py-1.5 text-xs font-semibold text-emerald-700 hover:bg-emerald-50 dark:border-emerald-800/50 dark:text-emerald-300 dark:hover:bg-emerald-950/20">
                             <Play className="h-3.5 w-3.5" />
                             Activate
@@ -161,7 +165,7 @@ export default function WorkflowVersionsPage() {
         </div>
       </section>
 
-      {publishTarget !== null ? (
+      {canPublish && publishTarget !== null ? (
         <PublishVersionModal
           version={publishTarget}
           activeVersion={definition.activeVersion}
@@ -172,7 +176,7 @@ export default function WorkflowVersionsPage() {
         />
       ) : null}
 
-      {activateTarget !== null ? (
+      {canPublish && activateTarget !== null ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/55 p-4">
           <dialog open aria-modal="true" aria-labelledby="activate-version-title" className="m-0 w-full max-w-md rounded-lg border border-gray-200 bg-white p-0 shadow-xl dark:border-slate-700 dark:bg-slate-900">
             <div className="px-5 py-4">

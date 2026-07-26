@@ -4,6 +4,7 @@ import { Activity, AlertTriangle, BookOpen, CheckCircle2, Clock, Layers, PlayCir
 import { healthApi, metaApi, workflowApi } from '../services/api'
 import { statusClasses, formatDate, availableTaskActions } from './workflowUi'
 import type { WorkflowTask } from '../types'
+import { useAuth } from '../auth/AuthProvider'
 
 function StatTile({
   label,
@@ -44,7 +45,7 @@ function RelativeTime({ value }: { value?: string }) {
   return <span title={formatDate(value)}>{label}</span>
 }
 
-function TaskRow({ task, onAction }: { task: WorkflowTask; onAction: (id: number, action: string) => void }) {
+function TaskRow({ task, onAction, canControl }: { task: WorkflowTask; onAction: (id: number, action: string) => void; canControl: boolean }) {
   const actions = availableTaskActions(task)
   return (
     <div className="flex items-center gap-3 py-3 text-sm">
@@ -63,7 +64,7 @@ function TaskRow({ task, onAction }: { task: WorkflowTask; onAction: (id: number
       <span className="shrink-0 text-xs text-gray-400 dark:text-slate-500">
         <RelativeTime value={task.updatedAt} />
       </span>
-      <div className="flex shrink-0 gap-1">
+      {canControl && <div className="flex shrink-0 gap-1">
         {actions.slice(0, 2).map((action) => (
           <button
             key={action}
@@ -73,13 +74,14 @@ function TaskRow({ task, onAction }: { task: WorkflowTask; onAction: (id: number
             {action}
           </button>
         ))}
-      </div>
+      </div>}
     </div>
   )
 }
 
 export default function DashboardPage() {
   const queryClient = useQueryClient()
+  const { hasPermission } = useAuth()
 
   const healthQuery = useQuery({ queryKey: ['health'], queryFn: healthApi.get, refetchInterval: 30_000 })
   const metaQuery = useQuery({ queryKey: ['meta'], queryFn: metaApi.get, staleTime: 60_000 })
@@ -245,6 +247,7 @@ export default function DashboardPage() {
                   key={task.id}
                   task={task}
                   onAction={(id, action) => taskActionMutation.mutate({ id, action })}
+                  canControl={hasPermission('workflow.task.control')}
                 />
               ))
             )}
@@ -341,12 +344,12 @@ export default function DashboardPage() {
             {definitions.slice(0, 6).map((def) => (
               <div key={def.id} className="bg-white px-5 py-4 dark:bg-slate-900">
                 <div className="flex items-start justify-between gap-2">
-                  <Link
+                  {hasPermission('workflow.definition.write') ? <Link
                     to={`/workflows/${def.id}/designer`}
                     className="font-medium text-gray-900 hover:underline dark:text-slate-100"
                   >
                     {def.name}
-                  </Link>
+                  </Link> : <span className="font-medium text-gray-900 dark:text-slate-100">{def.name}</span>}
                   <span className={`shrink-0 rounded-full px-2 py-0.5 text-xs font-semibold ${statusClasses(def.status)}`}>
                     {def.status}
                   </span>

@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useState } from 'react'
-import { NavLink, Outlet } from 'react-router-dom'
+import { NavLink, Outlet, useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
-import { BellRing, BookOpen, Bot, Braces, Code2, LayoutDashboard, Menu, Moon, Monitor, Network, Radio, Server, Settings, Sun, Workflow, X, ListChecks, Play } from 'lucide-react'
+import { BellRing, BookOpen, Bot, Braces, Code2, KeyRound, LayoutDashboard, LogOut, Menu, Moon, Monitor, Network, Radio, Server, Settings, ShieldCheck, Sun, Workflow, X, ListChecks, Play } from 'lucide-react'
 import clsx from 'clsx'
 import { LogoFull } from './Logo'
 import { metaApi } from '../services/api'
+import { useAuth } from '../auth/AuthProvider'
 
 type ThemeMode = 'light' | 'dark' | 'system'
 
@@ -53,6 +54,8 @@ const applyTheme = (mode: ThemeMode) => {
 }
 
 export default function Layout() {
+  const navigate = useNavigate()
+  const { session, hasPermission, logout } = useAuth()
   const [themeMode, setThemeMode] = useState<ThemeMode>(getInitialTheme)
   const [isDrawerOpen, setIsDrawerOpen] = useState(false)
   const { data: meta } = useQuery({
@@ -90,6 +93,19 @@ export default function Layout() {
     [],
   )
 
+  const visibleNavItems = useMemo(() => {
+    const items = [...navItems]
+    if (hasPermission('user.read') || hasPermission('api_key.read') || hasPermission('audit.read') || hasPermission('session.manage_own')) {
+      items.push({ to: '/security', label: 'Access control', icon: ShieldCheck })
+    }
+    return items
+  }, [hasPermission])
+
+  const signOut = async () => {
+    await logout()
+    navigate('/login', { replace: true })
+  }
+
   return (
     <div className="flex h-screen overflow-hidden bg-gray-50 text-gray-900 dark:bg-slate-950 dark:text-slate-100">
       <aside className="hidden h-screen w-64 flex-col border-r border-gray-200 bg-white lg:flex dark:border-slate-800 dark:bg-slate-900">
@@ -99,7 +115,7 @@ export default function Layout() {
 
         <nav className="flex-1 overflow-y-auto px-4 py-6">
           <ul className="space-y-1">
-            {navItems.map((item) => (
+            {visibleNavItems.map((item) => (
               <li key={item.to}>
                 <NavLink
                   to={item.to}
@@ -157,9 +173,15 @@ export default function Layout() {
           </div>
 
           <div className="border-t border-gray-200 p-4 dark:border-slate-800">
-            <div className="text-xs text-gray-500 dark:text-slate-400">
-              <p className="font-medium">{meta?.name ?? 'Orchestra'}</p>
-              <p>{meta?.description ?? 'Durable workflow engine with embedded UI'}</p>
+            <div className="flex items-center justify-between gap-2">
+              <div className="min-w-0 text-xs">
+                <p className="truncate font-semibold text-gray-900 dark:text-slate-100">{session?.user.displayName || session?.user.username}</p>
+                <p className="truncate capitalize text-gray-500 dark:text-slate-400">{session?.user.role}</p>
+              </div>
+              <div className="flex shrink-0">
+                <NavLink to="/change-password" title="Change password" aria-label="Change password" className="flex h-8 w-8 items-center justify-center rounded-md text-gray-500 hover:bg-gray-100 hover:text-gray-900 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-slate-100"><KeyRound className="h-4 w-4" /></NavLink>
+                <button type="button" onClick={() => void signOut()} title="Sign out" aria-label="Sign out" className="flex h-8 w-8 items-center justify-center rounded-md text-gray-500 hover:bg-gray-100 hover:text-gray-900 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-slate-100"><LogOut className="h-4 w-4" /></button>
+              </div>
             </div>
           </div>
         </div>
@@ -231,7 +253,7 @@ export default function Layout() {
 
           <nav className="flex-1 overflow-y-auto px-4 py-6">
             <ul className="space-y-1">
-              {navItems.map((item) => (
+              {visibleNavItems.map((item) => (
                 <li key={item.to}>
                   <NavLink
                     to={item.to}
@@ -265,9 +287,11 @@ export default function Layout() {
             </ul>
           </nav>
 
-          <div className="border-t border-gray-200 p-4 text-xs text-gray-500 dark:border-slate-800 dark:text-slate-400">
-            <p className="font-medium">{meta?.name ?? 'Orchestra'}</p>
-            <p>{meta?.description ?? 'Durable workflow engine with embedded UI'}</p>
+          <div className="border-t border-gray-200 p-4 dark:border-slate-800">
+            <div className="flex items-center justify-between gap-2">
+              <div className="min-w-0 text-xs"><p className="truncate font-semibold text-gray-900 dark:text-slate-100">{session?.user.displayName || session?.user.username}</p><p className="capitalize text-gray-500 dark:text-slate-400">{session?.user.role}</p></div>
+              <button type="button" onClick={() => void signOut()} title="Sign out" aria-label="Sign out" className="flex h-9 w-9 items-center justify-center rounded-md text-gray-500 hover:bg-gray-100 dark:hover:bg-slate-800"><LogOut className="h-4 w-4" /></button>
+            </div>
           </div>
         </aside>
 

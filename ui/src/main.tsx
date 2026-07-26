@@ -5,7 +5,7 @@ import { BrowserRouter } from 'react-router-dom'
 import '@xyflow/react/dist/style.css'
 import App from './App'
 import './index.css'
-import { WorkflowLiveProvider } from './live/WorkflowLiveProvider'
+import { AuthProvider } from './auth/AuthProvider'
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -19,11 +19,11 @@ const queryClient = new QueryClient({
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
     <QueryClientProvider client={queryClient}>
-      <WorkflowLiveProvider>
-        <BrowserRouter>
+      <BrowserRouter>
+        <AuthProvider>
           <App />
-        </BrowserRouter>
-      </WorkflowLiveProvider>
+        </AuthProvider>
+      </BrowserRouter>
     </QueryClientProvider>
   </React.StrictMode>,
 )

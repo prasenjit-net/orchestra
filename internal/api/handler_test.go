@@ -13,14 +13,51 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/prasenjit-net/orchestra/internal/auth"
 	"github.com/prasenjit-net/orchestra/internal/config"
+	appdb "github.com/prasenjit-net/orchestra/internal/database"
 	"github.com/prasenjit-net/orchestra/internal/livebus"
 	"github.com/prasenjit-net/orchestra/internal/version"
 	"github.com/prasenjit-net/orchestra/internal/workflow"
 )
 
+func newAuthenticatedTestRouter(t *testing.T, cfg config.Config, live *livebus.Bus, service *workflow.Service) (http.Handler, func(*http.Request)) {
+	t.Helper()
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	db, dialect, err := appdb.Open(context.Background(), cfg.Workflow)
+	if err != nil {
+		t.Fatalf("open auth test database: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	identity, err := auth.NewService(context.Background(), db, dialect, cfg.Auth, logger)
+	if err != nil {
+		t.Fatalf("create auth service: %v", err)
+	}
+	t.Setenv("APP_AUTH_INITIAL_ADMIN_PASSWORD", "test-admin-password")
+	if _, err := identity.BootstrapInitialAdmin(context.Background()); err != nil {
+		t.Fatalf("bootstrap auth test user: %v", err)
+	}
+	session, err := identity.Login(context.Background(), auth.LoginInput{Username: "admin", Password: "test-admin-password", SourceIP: "127.0.0.1"})
+	if err != nil {
+		t.Fatalf("login auth test user: %v", err)
+	}
+	session, err = identity.ChangePassword(context.Background(), session.Principal, "test-admin-password", "test-admin-password-updated", "127.0.0.1", "test")
+	if err != nil {
+		t.Fatalf("complete auth test password change: %v", err)
+	}
+	router := NewRouter(cfg, logger, version.Current(), live, service, identity, nil, false)
+	authorize := func(req *http.Request) {
+		req.AddCookie(&http.Cookie{Name: auth.SessionCookieName, Value: session.Token})
+		if isUnsafeMethod(req.Method) {
+			req.Header.Set("X-CSRF-Token", session.Principal.CSRFToken)
+			req.Header.Set("Origin", cfg.App.URL)
+		}
+	}
+	return router, authorize
+}
+
 func TestHealthEndpoint(t *testing.T) {
-	router := NewRouter(config.Default(), slog.New(slog.NewTextHandler(io.Discard, nil)), version.Current(), nil, nil, nil, false)
+	router := NewRouter(config.Default(), slog.New(slog.NewTextHandler(io.Discard, nil)), version.Current(), nil, nil, nil, nil, false)
 	req := httptest.NewRequest(http.MethodGet, "/health", nil)
 	res := httptest.NewRecorder()
 
@@ -43,8 +80,9 @@ func TestWorkflowActivitiesEndpoint(t *testing.T) {
 	}
 	defer service.Close()
 
-	router := NewRouter(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), version.Current(), livebus.New(), service, nil, false)
+	router, authorize := newAuthenticatedTestRouter(t, cfg, livebus.New(), service)
 	req := httptest.NewRequest(http.MethodGet, "/workflows/activities", nil)
+	authorize(req)
 	res := httptest.NewRecorder()
 
 	router.ServeHTTP(res, req)
@@ -67,8 +105,9 @@ func TestWorkflowActivitiesEndpointIncludesScriptWhenEnabled(t *testing.T) {
 	}
 	defer service.Close()
 
-	router := NewRouter(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), version.Current(), livebus.New(), service, nil, false)
+	router, authorize := newAuthenticatedTestRouter(t, cfg, livebus.New(), service)
 	req := httptest.NewRequest(http.MethodGet, "/workflows/activities", nil)
+	authorize(req)
 	res := httptest.NewRecorder()
 
 	router.ServeHTTP(res, req)
@@ -90,7 +129,7 @@ func TestCreateWorkflowDefinitionEndpoint(t *testing.T) {
 	}
 	defer service.Close()
 
-	router := NewRouter(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), version.Current(), livebus.New(), service, nil, false)
+	router, authorize := newAuthenticatedTestRouter(t, cfg, livebus.New(), service)
 	payload, err := json.Marshal(map[string]any{
 		"name":        "Hello workflow",
 		"description": "Logs once",
@@ -111,6 +150,7 @@ func TestCreateWorkflowDefinitionEndpoint(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodPost, "/workflow-definitions", bytes.NewReader(payload))
 	req.Header.Set("Content-Type", "application/json")
+	authorize(req)
 	res := httptest.NewRecorder()
 
 	router.ServeHTTP(res, req)
@@ -142,8 +182,9 @@ func TestListWorkflowDefinitionsEndpoint(t *testing.T) {
 		t.Fatalf("CreateDefinition returned error: %v", err)
 	}
 
-	router := NewRouter(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), version.Current(), livebus.New(), service, nil, false)
+	router, authorize := newAuthenticatedTestRouter(t, cfg, livebus.New(), service)
 	req := httptest.NewRequest(http.MethodGet, "/workflow-definitions", nil)
+	authorize(req)
 	res := httptest.NewRecorder()
 
 	router.ServeHTTP(res, req)
@@ -200,8 +241,9 @@ func TestRetryWorkflowTaskEndpoint(t *testing.T) {
 		t.Fatal("expected failed task to exist")
 	}
 
-	router := NewRouter(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), version.Current(), livebus.New(), service, nil, false)
+	router, authorize := newAuthenticatedTestRouter(t, cfg, livebus.New(), service)
 	req := httptest.NewRequest(http.MethodPost, "/workflows/tasks/"+strconv.FormatInt(tasksResult.Tasks[0].ID, 10)+"/retry", nil)
+	authorize(req)
 	res := httptest.NewRecorder()
 
 	router.ServeHTTP(res, req)
@@ -251,8 +293,9 @@ func TestWorkflowOperationsEndpoint(t *testing.T) {
 		t.Fatalf("PauseTask returned error: %v", err)
 	}
 
-	router := NewRouter(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), version.Current(), livebus.New(), service, nil, false)
+	router, authorize := newAuthenticatedTestRouter(t, cfg, livebus.New(), service)
 	req := httptest.NewRequest(http.MethodGet, "/workflows/events?limit=2", nil)
+	authorize(req)
 	res := httptest.NewRecorder()
 
 	router.ServeHTTP(res, req)
@@ -302,10 +345,11 @@ func TestWorkflowVersionReadPublishAndActivateEndpoints(t *testing.T) {
 		t.Fatalf("CreateDefinitionVersion returned error: %v", err)
 	}
 
-	router := NewRouter(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), version.Current(), livebus.New(), service, nil, false)
+	router, authorize := newAuthenticatedTestRouter(t, cfg, livebus.New(), service)
 	basePath := "/workflow-definitions/" + definition.ID + "/versions/2"
 
 	getReq := httptest.NewRequest(http.MethodGet, basePath, nil)
+	authorize(getReq)
 	getRes := httptest.NewRecorder()
 	router.ServeHTTP(getRes, getReq)
 	if getRes.Code != http.StatusOK || !strings.Contains(getRes.Body.String(), `"basedOnVersion":1`) {
@@ -314,6 +358,7 @@ func TestWorkflowVersionReadPublishAndActivateEndpoints(t *testing.T) {
 
 	publishReq := httptest.NewRequest(http.MethodPost, basePath+"/publish", strings.NewReader(`{"activate":false}`))
 	publishReq.Header.Set("Content-Type", "application/json")
+	authorize(publishReq)
 	publishRes := httptest.NewRecorder()
 	router.ServeHTTP(publishRes, publishReq)
 	if publishRes.Code != http.StatusOK || !strings.Contains(publishRes.Body.String(), `"activeVersion":1`) {
@@ -322,13 +367,15 @@ func TestWorkflowVersionReadPublishAndActivateEndpoints(t *testing.T) {
 
 	startReq := httptest.NewRequest(http.MethodPost, "/workflow-definitions/"+definition.ID+"/start", strings.NewReader(`{"version":2,"input":{}}`))
 	startReq.Header.Set("Content-Type", "application/json")
+	authorize(startReq)
 	startRes := httptest.NewRecorder()
 	router.ServeHTTP(startRes, startReq)
 	if startRes.Code != http.StatusCreated || !strings.Contains(startRes.Body.String(), `"definitionVersion":2`) {
 		t.Fatalf("expected UI start to pin inactive published v2, got status=%d body=%s", startRes.Code, startRes.Body.String())
 	}
 
-	extRouter, err := NewExtRouter(cfg, service)
+	cfg.Webhook.AuthenticationMode = "audit"
+	extRouter, err := NewExtRouter(cfg, service, nil)
 	if err != nil {
 		t.Fatalf("NewExtRouter returned error: %v", err)
 	}
@@ -341,6 +388,7 @@ func TestWorkflowVersionReadPublishAndActivateEndpoints(t *testing.T) {
 	}
 
 	activateReq := httptest.NewRequest(http.MethodPost, basePath+"/activate", nil)
+	authorize(activateReq)
 	activateRes := httptest.NewRecorder()
 	router.ServeHTTP(activateRes, activateReq)
 	if activateRes.Code != http.StatusOK || !strings.Contains(activateRes.Body.String(), `"activeVersion":2`) {

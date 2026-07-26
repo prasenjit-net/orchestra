@@ -2,8 +2,10 @@ package config
 
 import (
 	"fmt"
+	"net/netip"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/go-viper/mapstructure/v2"
@@ -17,6 +19,7 @@ type Config struct {
 	UI       UIConfig       `mapstructure:"ui" yaml:"ui"`
 	AI       AIConfig       `mapstructure:"ai" yaml:"ai"`
 	Workflow WorkflowConfig `mapstructure:"workflow" yaml:"workflow"`
+	Auth     AuthConfig     `mapstructure:"auth" yaml:"auth"`
 	Webhook  WebhookConfig  `mapstructure:"webhook" yaml:"webhook"`
 	Node     NodeConfig     `mapstructure:"node" yaml:"node"`
 
@@ -67,8 +70,27 @@ type NodeHealthConfig struct {
 }
 
 type WebhookConfig struct {
-	Enabled           bool     `mapstructure:"enabled" yaml:"enabled"`
-	CallbackAllowlist []string `mapstructure:"callbackAllowlist" yaml:"callbackAllowlist"`
+	Enabled            bool     `mapstructure:"enabled" yaml:"enabled"`
+	AuthenticationMode string   `mapstructure:"authenticationMode" yaml:"authenticationMode"`
+	CallbackAllowlist  []string `mapstructure:"callbackAllowlist" yaml:"callbackAllowlist"`
+}
+
+type AuthConfig struct {
+	SessionIdleTimeout     time.Duration    `mapstructure:"sessionIdleTimeout" yaml:"sessionIdleTimeout"`
+	SessionAbsoluteTimeout time.Duration    `mapstructure:"sessionAbsoluteTimeout" yaml:"sessionAbsoluteTimeout"`
+	CookieSecure           string           `mapstructure:"cookieSecure" yaml:"cookieSecure"`
+	BootstrapOutputPath    string           `mapstructure:"bootstrapOutputPath" yaml:"bootstrapOutputPath"`
+	AuditRetention         time.Duration    `mapstructure:"auditRetention" yaml:"auditRetention"`
+	TrustedProxyCIDRs      []string         `mapstructure:"trustedProxyCIDRs" yaml:"trustedProxyCIDRs"`
+	APIKeys                APIKeyAuthConfig `mapstructure:"apiKeys" yaml:"apiKeys"`
+}
+
+type APIKeyAuthConfig struct {
+	DefaultTTL        time.Duration `mapstructure:"defaultTTL" yaml:"defaultTTL"`
+	MaximumTTL        time.Duration `mapstructure:"maximumTTL" yaml:"maximumTTL"`
+	UsageWriteWindow  time.Duration `mapstructure:"usageWriteWindow" yaml:"usageWriteWindow"`
+	RequestsPerMinute int           `mapstructure:"requestsPerMinute" yaml:"requestsPerMinute"`
+	Burst             int           `mapstructure:"burst" yaml:"burst"`
 }
 
 type AppConfig struct {
@@ -153,9 +175,25 @@ func Default() Config {
 			ScriptMaxOutputBytes:    256 * 1024,
 			ScriptMaxExecutionSteps: 25_000,
 		},
+		Auth: AuthConfig{
+			SessionIdleTimeout:     30 * time.Minute,
+			SessionAbsoluteTimeout: 8 * time.Hour,
+			CookieSecure:           "auto",
+			BootstrapOutputPath:    "data/bootstrap-admin.txt",
+			AuditRetention:         90 * 24 * time.Hour,
+			TrustedProxyCIDRs:      []string{},
+			APIKeys: APIKeyAuthConfig{
+				DefaultTTL:        90 * 24 * time.Hour,
+				MaximumTTL:        365 * 24 * time.Hour,
+				UsageWriteWindow:  5 * time.Minute,
+				RequestsPerMinute: 60,
+				Burst:             20,
+			},
+		},
 		Webhook: WebhookConfig{
-			Enabled:           true,
-			CallbackAllowlist: []string{},
+			Enabled:            true,
+			AuthenticationMode: "required",
+			CallbackAllowlist:  []string{},
 		},
 		Node: NodeConfig{
 			ID:                 "",
@@ -206,12 +244,24 @@ func SetDefaults(v *viper.Viper) {
 	v.SetDefault("workflow.scriptMaxSourceBytes", defaults.Workflow.ScriptMaxSourceBytes)
 	v.SetDefault("workflow.scriptMaxOutputBytes", defaults.Workflow.ScriptMaxOutputBytes)
 	v.SetDefault("workflow.scriptMaxExecutionSteps", defaults.Workflow.ScriptMaxExecutionSteps)
+	v.SetDefault("auth.sessionIdleTimeout", defaults.Auth.SessionIdleTimeout)
+	v.SetDefault("auth.sessionAbsoluteTimeout", defaults.Auth.SessionAbsoluteTimeout)
+	v.SetDefault("auth.cookieSecure", defaults.Auth.CookieSecure)
+	v.SetDefault("auth.bootstrapOutputPath", defaults.Auth.BootstrapOutputPath)
+	v.SetDefault("auth.auditRetention", defaults.Auth.AuditRetention)
+	v.SetDefault("auth.trustedProxyCIDRs", defaults.Auth.TrustedProxyCIDRs)
+	v.SetDefault("auth.apiKeys.defaultTTL", defaults.Auth.APIKeys.DefaultTTL)
+	v.SetDefault("auth.apiKeys.maximumTTL", defaults.Auth.APIKeys.MaximumTTL)
+	v.SetDefault("auth.apiKeys.usageWriteWindow", defaults.Auth.APIKeys.UsageWriteWindow)
+	v.SetDefault("auth.apiKeys.requestsPerMinute", defaults.Auth.APIKeys.RequestsPerMinute)
+	v.SetDefault("auth.apiKeys.burst", defaults.Auth.APIKeys.Burst)
 	v.SetDefault("ai.claudeAPIVersion", defaults.AI.ClaudeAPIVersion)
 	v.SetDefault("ai.copilotEditorVersion", defaults.AI.CopilotEditorVersion)
 	v.SetDefault("ai.copilotEditorPluginVersion", defaults.AI.CopilotEditorPluginVersion)
 	v.SetDefault("ai.copilotIntegrationID", defaults.AI.CopilotIntegrationID)
 	v.SetDefault("ai.copilotOpenAIIntent", defaults.AI.CopilotOpenAIIntent)
 	v.SetDefault("webhook.enabled", defaults.Webhook.Enabled)
+	v.SetDefault("webhook.authenticationMode", defaults.Webhook.AuthenticationMode)
 	v.SetDefault("webhook.callbackAllowlist", defaults.Webhook.CallbackAllowlist)
 	v.SetDefault("node.id", defaults.Node.ID)
 	v.SetDefault("node.controller", defaults.Node.Controller)
@@ -225,6 +275,17 @@ func SetDefaults(v *viper.Viper) {
 	// camelCase→env mapping produces hard-to-type names.  Each BindEnv call
 	// below also keeps the auto-mapped name working, so users can use either.
 	_ = v.BindEnv("workflow.databaseURL", "APP_WORKFLOW_DATABASE_URL", "APP_WORKFLOW_DATABASEURL")
+	_ = v.BindEnv("auth.sessionIdleTimeout", "APP_AUTH_SESSION_IDLE_TIMEOUT")
+	_ = v.BindEnv("auth.sessionAbsoluteTimeout", "APP_AUTH_SESSION_ABSOLUTE_TIMEOUT")
+	_ = v.BindEnv("auth.cookieSecure", "APP_AUTH_COOKIE_SECURE")
+	_ = v.BindEnv("auth.bootstrapOutputPath", "APP_AUTH_BOOTSTRAP_OUTPUT_PATH")
+	_ = v.BindEnv("auth.auditRetention", "APP_AUTH_AUDIT_RETENTION")
+	_ = v.BindEnv("auth.apiKeys.defaultTTL", "APP_AUTH_API_KEYS_DEFAULT_TTL")
+	_ = v.BindEnv("auth.apiKeys.maximumTTL", "APP_AUTH_API_KEYS_MAXIMUM_TTL")
+	_ = v.BindEnv("auth.apiKeys.usageWriteWindow", "APP_AUTH_API_KEYS_USAGE_WRITE_WINDOW")
+	_ = v.BindEnv("auth.apiKeys.requestsPerMinute", "APP_AUTH_API_KEYS_REQUESTS_PER_MINUTE")
+	_ = v.BindEnv("auth.apiKeys.burst", "APP_AUTH_API_KEYS_BURST")
+	_ = v.BindEnv("webhook.authenticationMode", "APP_WEBHOOK_AUTHENTICATION_MODE")
 	_ = v.BindEnv("ai.httpProxy", "APP_AI_HTTP_PROXY")
 	_ = v.BindEnv("ai.openaiAPIKey", "APP_AI_OPENAI_API_KEY")
 	_ = v.BindEnv("ai.openaiBaseURL", "APP_AI_OPENAI_BASE_URL")
@@ -249,8 +310,47 @@ func Load(v *viper.Viper) (Config, error) {
 	if err := v.Unmarshal(&cfg, viper.DecodeHook(mapstructure.StringToTimeDurationHookFunc())); err != nil {
 		return Config{}, fmt.Errorf("decode config: %w", err)
 	}
+	if raw := strings.TrimSpace(os.Getenv("APP_AUTH_TRUSTED_PROXY_CIDRS")); raw != "" {
+		cfg.Auth.TrustedProxyCIDRs = strings.Split(raw, ",")
+	}
+	if err := validateAuthConfig(cfg); err != nil {
+		return Config{}, err
+	}
 
 	return cfg, nil
+}
+
+func validateAuthConfig(cfg Config) error {
+	if cfg.Auth.SessionIdleTimeout <= 0 || cfg.Auth.SessionAbsoluteTimeout <= 0 || cfg.Auth.SessionAbsoluteTimeout < cfg.Auth.SessionIdleTimeout {
+		return errorsConfig("auth session timeouts must be positive and absolute timeout must be at least the idle timeout")
+	}
+	switch strings.ToLower(cfg.Auth.CookieSecure) {
+	case "auto", "true", "required", "false", "disabled":
+	default:
+		return errorsConfig("auth.cookieSecure must be auto, required, or disabled")
+	}
+	if cfg.Auth.AuditRetention < 0 {
+		return errorsConfig("auth.auditRetention cannot be negative")
+	}
+	if cfg.Auth.APIKeys.DefaultTTL <= 0 || cfg.Auth.APIKeys.MaximumTTL < cfg.Auth.APIKeys.DefaultTTL || cfg.Auth.APIKeys.UsageWriteWindow <= 0 {
+		return errorsConfig("auth API key durations are invalid")
+	}
+	if cfg.Auth.APIKeys.RequestsPerMinute <= 0 || cfg.Auth.APIKeys.Burst <= 0 {
+		return errorsConfig("auth API key rate limits must be positive")
+	}
+	for _, raw := range cfg.Auth.TrustedProxyCIDRs {
+		if _, err := netip.ParsePrefix(strings.TrimSpace(raw)); err != nil {
+			return fmt.Errorf("invalid auth.trustedProxyCIDRs entry %q: %w", raw, err)
+		}
+	}
+	if cfg.Webhook.AuthenticationMode != "required" && cfg.Webhook.AuthenticationMode != "audit" {
+		return errorsConfig("webhook.authenticationMode must be required or audit")
+	}
+	return nil
+}
+
+func errorsConfig(message string) error {
+	return fmt.Errorf("invalid config: %s", message)
 }
 
 func InitProject(dir string, force bool) error {
@@ -352,8 +452,24 @@ scriptMaxSourceBytes    = 16384
 scriptMaxOutputBytes    = 262144
 scriptMaxExecutionSteps = 25000
 
+[auth]
+sessionIdleTimeout     = "30m"
+sessionAbsoluteTimeout = "8h"
+cookieSecure           = "auto"
+bootstrapOutputPath    = "data/bootstrap-admin.txt"
+auditRetention         = "2160h"
+trustedProxyCIDRs      = []
+
+[auth.apiKeys]
+defaultTTL        = "2160h"
+maximumTTL        = "8760h"
+usageWriteWindow  = "5m"
+requestsPerMinute = 60
+burst             = 20
+
 [webhook]
-enabled = true
+enabled            = true
+authenticationMode = "required"
 # callbackAllowlist = [
 #   "https://your-domain\\.example\\.com/.*",
 #   "http://localhost:.*",
@@ -378,6 +494,21 @@ APP_WORKFLOW_SCRIPT_TIMEOUT=250ms
 APP_WORKFLOW_SCRIPT_MAX_SOURCE_BYTES=16384
 APP_WORKFLOW_SCRIPT_MAX_OUTPUT_BYTES=262144
 APP_WORKFLOW_SCRIPT_MAX_EXECUTION_STEPS=25000
+APP_AUTH_SESSION_IDLE_TIMEOUT=30m
+APP_AUTH_SESSION_ABSOLUTE_TIMEOUT=8h
+APP_AUTH_COOKIE_SECURE=auto
+APP_AUTH_BOOTSTRAP_OUTPUT_PATH=data/bootstrap-admin.txt
+APP_AUTH_AUDIT_RETENTION=2160h
+APP_AUTH_TRUSTED_PROXY_CIDRS=
+APP_AUTH_API_KEYS_DEFAULT_TTL=2160h
+APP_AUTH_API_KEYS_MAXIMUM_TTL=8760h
+APP_AUTH_API_KEYS_USAGE_WRITE_WINDOW=5m
+APP_AUTH_API_KEYS_REQUESTS_PER_MINUTE=60
+APP_AUTH_API_KEYS_BURST=20
+APP_AUTH_INITIAL_ADMIN_USERNAME=admin
+# Prefer APP_AUTH_INITIAL_ADMIN_PASSWORD_FILE in production.
+APP_AUTH_INITIAL_ADMIN_PASSWORD_FILE=
+APP_WEBHOOK_AUTHENTICATION_MODE=required
 APP_AI_OPENAI_API_KEY=
 APP_AI_CLAUDE_API_KEY=
 APP_AI_COPILOT_OAUTH_TOKEN=

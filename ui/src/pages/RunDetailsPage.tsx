@@ -21,6 +21,7 @@ import {
   formatEventType,
   statusClasses,
 } from './workflowUi'
+import { useAuth } from '../auth/AuthProvider'
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
 
@@ -92,7 +93,7 @@ function TaskActionButton({ action, onClick, disabled }: { action: WorkflowTaskA
   )
 }
 
-function ActiveTaskCard({ task, onAction, isPending }: { task: WorkflowTask; onAction: (id: number, action: WorkflowTaskAction) => void; isPending: boolean }) {
+function ActiveTaskCard({ task, onAction, isPending, canControl }: { task: WorkflowTask; onAction: (id: number, action: WorkflowTaskAction) => void; isPending: boolean; canControl: boolean }) {
   return (
     <div className="rounded-xl border border-primary-200 bg-primary-50/60 p-4 dark:border-primary-800/50 dark:bg-slate-800">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
@@ -118,11 +119,11 @@ function ActiveTaskCard({ task, onAction, isPending }: { task: WorkflowTask; onA
             </div>
           )}
         </div>
-        <div className="flex shrink-0 flex-wrap gap-2">
+        {canControl && <div className="flex shrink-0 flex-wrap gap-2">
           {availableTaskActions(task).map((action) => (
             <TaskActionButton key={action} action={action} onClick={() => onAction(task.id, action)} disabled={isPending} />
           ))}
-        </div>
+        </div>}
       </div>
     </div>
   )
@@ -163,6 +164,7 @@ function EventRow({ event }: { event: WorkflowEvent }) {
 export default function RunDetailsPage() {
   const { workflowId = '' } = useParams()
   const queryClient = useQueryClient()
+  const { hasPermission } = useAuth()
   const [eventFilter, setEventFilter] = useState<'all' | 'lifecycle' | 'failure' | 'queue'>('all')
   const [showTaskHistory, setShowTaskHistory] = useState(false)
   const [historyLimit, setHistoryLimit] = useState(50)
@@ -345,6 +347,7 @@ export default function RunDetailsPage() {
               task={task}
               onAction={(id, action) => taskActionMutation.mutate({ taskId: id, action })}
               isPending={taskActionMutation.isPending}
+              canControl={hasPermission('workflow.task.control')}
             />
           ))}
         </div>

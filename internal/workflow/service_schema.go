@@ -39,6 +39,8 @@ func (s *Service) initSchema(ctx context.Context) error {
 			snapshot_json TEXT NOT NULL,
 			last_event_sequence INTEGER NOT NULL,
 			last_error TEXT NOT NULL,
+			trigger_principal_type TEXT NOT NULL DEFAULT '',
+			trigger_principal_id TEXT NOT NULL DEFAULT '',
 			created_at TEXT NOT NULL,
 			updated_at TEXT NOT NULL
 		)`,
@@ -356,6 +358,8 @@ func ensureWorkflowInstanceColumns(ctx context.Context, db *sql.DB) error {
 		{"callback_url", `ALTER TABLE workflow_instances ADD COLUMN callback_url TEXT NOT NULL DEFAULT ''`},
 		{"trigger_source", `ALTER TABLE workflow_instances ADD COLUMN trigger_source TEXT NOT NULL DEFAULT 'ui'`},
 		{"callback_status", `ALTER TABLE workflow_instances ADD COLUMN callback_status TEXT NOT NULL DEFAULT ''`},
+		{"trigger_principal_type", `ALTER TABLE workflow_instances ADD COLUMN trigger_principal_type TEXT NOT NULL DEFAULT ''`},
+		{"trigger_principal_id", `ALTER TABLE workflow_instances ADD COLUMN trigger_principal_id TEXT NOT NULL DEFAULT ''`},
 	}
 	for _, m := range migrations {
 		if existing[m.column] {
