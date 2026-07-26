@@ -60,7 +60,7 @@ func (s *Service) ListTasks(ctx context.Context, input ListTasksInput) (ListTask
 		where = "WHERE " + strings.Join(conds, " AND ")
 	}
 	var total int
-	if err := s.db.QueryRowContext(ctx, s.rebind("SELECT COUNT(*) FROM workflow_tasks "+where), filterArgs...).Scan(&total); err != nil {
+	if err := s.queryRowDB(ctx, "SELECT COUNT(*) FROM workflow_tasks "+where, filterArgs...).Scan(&total); err != nil {
 		return ListTasksResult{}, fmt.Errorf("count workflow tasks: %w", err)
 	}
 
@@ -83,7 +83,7 @@ func (s *Service) ListTasks(ctx context.Context, input ListTasksInput) (ListTask
 		pageArgs = append(pageArgs, input.Limit, input.Offset)
 	}
 
-	rows, err := s.db.QueryContext(ctx, s.rebind(query), pageArgs...)
+	rows, err := s.queryDB(ctx, query, pageArgs...)
 	if err != nil {
 		return ListTasksResult{}, fmt.Errorf("query workflow tasks: %w", err)
 	}
@@ -276,7 +276,7 @@ func (s *Service) applyTaskAction(ctx context.Context, taskID int64, action stri
 	instance.CurrentStepName = task.StepName
 	instance.CurrentActivity = task.ActivityName
 
-	sequence, err = appendEventTx(ctx, tx, s.rebind, instance.ID, sequence, eventType, map[string]any{
+	sequence, err = s.appendEventTx(ctx, tx, instance.ID, sequence, eventType, map[string]any{
 		"taskId":       task.ID,
 		"stepIndex":    task.StepIndex,
 		"stepName":     task.StepName,
@@ -288,7 +288,7 @@ func (s *Service) applyTaskAction(ctx context.Context, taskID int64, action stri
 	}
 
 	if action == "cancel" {
-		sequence, err = appendEventTx(ctx, tx, s.rebind, instance.ID, sequence, "WorkflowCanceled", map[string]any{
+		sequence, err = s.appendEventTx(ctx, tx, instance.ID, sequence, "WorkflowCanceled", map[string]any{
 			"taskId":    task.ID,
 			"stepIndex": task.StepIndex,
 			"stepName":  task.StepName,
@@ -298,11 +298,11 @@ func (s *Service) applyTaskAction(ctx context.Context, taskID int64, action stri
 		}
 	}
 
-	if _, err := tx.ExecContext(ctx, s.rebind(`
+	if _, err := s.execTxQuery(ctx, tx, `
 		UPDATE workflow_tasks
 		SET status = ?, attempts = ?, run_at = ?, last_error = ?, lease_owner = ?, lease_expires_at = ?, state_json = ?, updated_at = ?
 		WHERE id = ?
-	`), task.Status, task.Attempts, formatTime(task.RunAt), task.LastError, task.LeaseOwner, nullableTime(task.LeaseExpiresAt), rawJSONString(task.State), formatTime(task.UpdatedAt), task.ID); err != nil {
+	`, task.Status, task.Attempts, formatTime(task.RunAt), task.LastError, task.LeaseOwner, nullableTime(task.LeaseExpiresAt), rawJSONString(task.State), formatTime(task.UpdatedAt), task.ID); err != nil {
 		return WorkflowTask{}, fmt.Errorf("update workflow task action: %w", err)
 	}
 
@@ -356,7 +356,7 @@ func (s *Service) completeTask(ctx context.Context, task WorkflowTask, definitio
 	instance.LastOutput = output
 	instance.NextRunAt = nil
 
-	sequence, err = appendEventTx(ctx, tx, s.rebind, instance.ID, sequence, "ActivityCompleted", map[string]any{
+	sequence, err = s.appendEventTx(ctx, tx, instance.ID, sequence, "ActivityCompleted", map[string]any{
 		"taskId":    task.ID,
 		"stepIndex": task.StepIndex,
 		"stepName":  step.Name,
@@ -369,11 +369,11 @@ func (s *Service) completeTask(ctx context.Context, task WorkflowTask, definitio
 		return err
 	}
 
-	if _, err := tx.ExecContext(ctx, s.rebind(`
+	if _, err := s.execTxQuery(ctx, tx, `
 		UPDATE workflow_tasks
 		SET status = ?, lease_owner = '', lease_expires_at = NULL, state_json = '', updated_at = ?
 		WHERE id = ?
-	`), StatusCompleted, formatTime(now), task.ID); err != nil {
+	`, StatusCompleted, formatTime(now), task.ID); err != nil {
 		return fmt.Errorf("mark workflow task complete: %w", err)
 	}
 
@@ -394,7 +394,7 @@ func (s *Service) completeTask(ctx context.Context, task WorkflowTask, definitio
 			output = mappedOutput
 			instance.LastOutput = mappedOutput
 		}
-		sequence, err = appendEventTx(ctx, tx, s.rebind, instance.ID, sequence, "WorkflowCompleted", map[string]any{
+		sequence, err = s.appendEventTx(ctx, tx, instance.ID, sequence, "WorkflowCompleted", map[string]any{
 			"completedAt": formatTime(now),
 			"output":      decodePayloadForEvent(output),
 		})
@@ -412,7 +412,7 @@ func (s *Service) completeTask(ctx context.Context, task WorkflowTask, definitio
 	} else {
 		nextStep := definition.Document.Steps[nextStepIndex]
 		if selectedTransition != nil {
-			sequence, err = appendEventTx(ctx, tx, s.rebind, instance.ID, sequence, "TransitionSelected", map[string]any{
+			sequence, err = s.appendEventTx(ctx, tx, instance.ID, sequence, "TransitionSelected", map[string]any{
 				"fromStep": task.StepName,
 				"toStep":   nextStep.Name,
 				"label":    selectedTransition.Label,
@@ -421,7 +421,7 @@ func (s *Service) completeTask(ctx context.Context, task WorkflowTask, definitio
 				return err
 			}
 		}
-		sequence, err = appendEventTx(ctx, tx, s.rebind, instance.ID, sequence, "ActivityScheduled", map[string]any{
+		sequence, err = s.appendEventTx(ctx, tx, instance.ID, sequence, "ActivityScheduled", map[string]any{
 			"stepIndex":   nextStepIndex,
 			"stepName":    nextStep.Name,
 			"activity":    nextStep.Activity,
@@ -430,7 +430,7 @@ func (s *Service) completeTask(ctx context.Context, task WorkflowTask, definitio
 		if err != nil {
 			return err
 		}
-		if err := insertTaskTx(ctx, tx, s.rebind, instance.ID, nextStepIndex, nextStep, now); err != nil {
+		if err := s.insertTaskTx(ctx, tx, instance.ID, nextStepIndex, nextStep, now); err != nil {
 			return err
 		}
 		instance.Status = StatusRunning
@@ -512,7 +512,7 @@ func (s *Service) delayTask(ctx context.Context, task WorkflowTask, step StepDef
 
 	now := time.Now().UTC()
 	sequence := instance.LastEventSequence
-	sequence, err = appendEventTx(ctx, tx, s.rebind, instance.ID, sequence, "ActivityWaiting", map[string]any{
+	sequence, err = s.appendEventTx(ctx, tx, instance.ID, sequence, "ActivityWaiting", map[string]any{
 		"taskId":    task.ID,
 		"stepIndex": task.StepIndex,
 		"stepName":  step.Name,
@@ -528,11 +528,11 @@ func (s *Service) delayTask(ctx context.Context, task WorkflowTask, step StepDef
 		attempts--
 	}
 
-	if _, err := tx.ExecContext(ctx, s.rebind(`
+	if _, err := s.execTxQuery(ctx, tx, `
 		UPDATE workflow_tasks
 		SET status = ?, attempts = ?, run_at = ?, last_error = '', lease_owner = '', lease_expires_at = NULL, state_json = ?, updated_at = ?
 		WHERE id = ?
-	`), StatusPending, attempts, formatTime(runAt), rawJSONString(state), formatTime(now), task.ID); err != nil {
+	`, StatusPending, attempts, formatTime(runAt), rawJSONString(state), formatTime(now), task.ID); err != nil {
 		return fmt.Errorf("delay workflow task: %w", err)
 	}
 
@@ -594,7 +594,7 @@ func (s *Service) waitTaskForSignal(ctx context.Context, task WorkflowTask, step
 	if wait.TimeoutAt != nil {
 		payload["timeoutAt"] = formatTime(*wait.TimeoutAt)
 	}
-	sequence, err = appendEventTx(ctx, tx, s.rebind, instance.ID, sequence, "ActivityWaitingForSignal", payload)
+	sequence, err = s.appendEventTx(ctx, tx, instance.ID, sequence, "ActivityWaitingForSignal", payload)
 	if err != nil {
 		return err
 	}
@@ -604,11 +604,11 @@ func (s *Service) waitTaskForSignal(ctx context.Context, task WorkflowTask, step
 		attempts--
 	}
 	waitRunAt := parkedSignalRunAt(wait.TimeoutAt)
-	if _, err := tx.ExecContext(ctx, s.rebind(`
+	if _, err := s.execTxQuery(ctx, tx, `
 		UPDATE workflow_tasks
 		SET status = ?, attempts = ?, run_at = ?, last_error = '', lease_owner = '', lease_expires_at = NULL, state_json = ?, updated_at = ?
 		WHERE id = ?
-	`), StatusWaiting, attempts, formatTime(waitRunAt), rawJSONString(wait.State), formatTime(now), task.ID); err != nil {
+	`, StatusWaiting, attempts, formatTime(waitRunAt), rawJSONString(wait.State), formatTime(now), task.ID); err != nil {
 		return fmt.Errorf("park workflow task for signal: %w", err)
 	}
 
@@ -660,7 +660,7 @@ func (s *Service) handleTaskFailure(ctx context.Context, task WorkflowTask, step
 
 	if task.Attempts < task.MaxAttempts {
 		nextRunAt := now.Add(time.Duration(step.Retry.BackoffSeconds) * time.Second)
-		sequence, err = appendEventTx(ctx, tx, s.rebind, instance.ID, sequence, "ActivityRetryScheduled", map[string]any{
+		sequence, err = s.appendEventTx(ctx, tx, instance.ID, sequence, "ActivityRetryScheduled", map[string]any{
 			"taskId":      task.ID,
 			"stepIndex":   task.StepIndex,
 			"stepName":    step.Name,
@@ -674,11 +674,11 @@ func (s *Service) handleTaskFailure(ctx context.Context, task WorkflowTask, step
 			return err
 		}
 
-		if _, err := tx.ExecContext(ctx, s.rebind(`
+		if _, err := s.execTxQuery(ctx, tx, `
 			UPDATE workflow_tasks
 			SET status = ?, run_at = ?, last_error = ?, lease_owner = '', lease_expires_at = NULL, state_json = '', updated_at = ?
 			WHERE id = ?
-		`), StatusPending, formatTime(nextRunAt), execErr.Error(), formatTime(now), task.ID); err != nil {
+		`, StatusPending, formatTime(nextRunAt), execErr.Error(), formatTime(now), task.ID); err != nil {
 			return fmt.Errorf("requeue workflow task: %w", err)
 		}
 
@@ -691,7 +691,7 @@ func (s *Service) handleTaskFailure(ctx context.Context, task WorkflowTask, step
 			return err
 		}
 	} else {
-		sequence, err = appendEventTx(ctx, tx, s.rebind, instance.ID, sequence, "ActivityFailed", map[string]any{
+		sequence, err = s.appendEventTx(ctx, tx, instance.ID, sequence, "ActivityFailed", map[string]any{
 			"taskId":      task.ID,
 			"stepIndex":   task.StepIndex,
 			"stepName":    step.Name,
@@ -703,7 +703,7 @@ func (s *Service) handleTaskFailure(ctx context.Context, task WorkflowTask, step
 		if err != nil {
 			return err
 		}
-		sequence, err = appendEventTx(ctx, tx, s.rebind, instance.ID, sequence, "WorkflowFailed", map[string]any{
+		sequence, err = s.appendEventTx(ctx, tx, instance.ID, sequence, "WorkflowFailed", map[string]any{
 			"stepIndex": task.StepIndex,
 			"stepName":  step.Name,
 			"error":     execErr.Error(),
@@ -712,11 +712,11 @@ func (s *Service) handleTaskFailure(ctx context.Context, task WorkflowTask, step
 			return err
 		}
 
-		if _, err := tx.ExecContext(ctx, s.rebind(`
+		if _, err := s.execTxQuery(ctx, tx, `
 			UPDATE workflow_tasks
 			SET status = ?, last_error = ?, lease_owner = '', lease_expires_at = NULL, state_json = '', updated_at = ?
 			WHERE id = ?
-		`), StatusFailed, execErr.Error(), formatTime(now), task.ID); err != nil {
+		`, StatusFailed, execErr.Error(), formatTime(now), task.ID); err != nil {
 			return fmt.Errorf("mark workflow task failed: %w", err)
 		}
 
@@ -791,7 +791,7 @@ func (s *Service) failTaskNow(ctx context.Context, task WorkflowTask, cause erro
 
 	now := time.Now().UTC()
 	sequence := instance.LastEventSequence
-	sequence, err = appendEventTx(ctx, tx, s.rebind, instance.ID, sequence, "WorkflowFailed", map[string]any{
+	sequence, err = s.appendEventTx(ctx, tx, instance.ID, sequence, "WorkflowFailed", map[string]any{
 		"stepIndex": task.StepIndex,
 		"stepName":  task.StepName,
 		"error":     cause.Error(),
@@ -800,11 +800,11 @@ func (s *Service) failTaskNow(ctx context.Context, task WorkflowTask, cause erro
 		return err
 	}
 
-	if _, err := tx.ExecContext(ctx, s.rebind(`
+	if _, err := s.execTxQuery(ctx, tx, `
 		UPDATE workflow_tasks
 		SET status = ?, last_error = ?, lease_owner = '', lease_expires_at = NULL, state_json = '', updated_at = ?
 		WHERE id = ?
-	`), StatusFailed, cause.Error(), formatTime(now), task.ID); err != nil {
+	`, StatusFailed, cause.Error(), formatTime(now), task.ID); err != nil {
 		return fmt.Errorf("mark task failed immediately: %w", err)
 	}
 
@@ -848,14 +848,14 @@ func (s *Service) claimNextTask(ctx context.Context) (WorkflowTask, bool, error)
 	defer tx.Rollback()
 
 	now := time.Now().UTC()
-	rows, err := tx.QueryContext(ctx, s.rebind(`
+	rows, err := s.queryTx(ctx, tx, `
 		SELECT id, workflow_id, step_index, step_name, activity_name, status, attempts, max_attempts,
 		       run_at, last_error, lease_owner, lease_expires_at, state_json, executed_by, created_at, updated_at
 		FROM workflow_tasks
 		WHERE (status = ? AND run_at <= ?) OR (status = ? AND run_at <= ?)
 		ORDER BY run_at ASC, id ASC
 		LIMIT 1
-	`), StatusPending, formatTime(now), StatusWaiting, formatTime(now))
+	`, StatusPending, formatTime(now), StatusWaiting, formatTime(now))
 	if err != nil {
 		return WorkflowTask{}, false, fmt.Errorf("select runnable workflow task: %w", err)
 	}
@@ -876,11 +876,11 @@ func (s *Service) claimNextTask(ctx context.Context) (WorkflowTask, bool, error)
 	}
 
 	leaseExpiresAt := now.Add(s.cfg.LeaseDuration)
-	result, err := tx.ExecContext(ctx, s.rebind(`
+	result, err := s.execTxQuery(ctx, tx, `
 		UPDATE workflow_tasks
 		SET status = ?, attempts = attempts + 1, lease_owner = ?, lease_expires_at = ?, executed_by = ?, updated_at = ?
 		WHERE id = ? AND status = ?
-	`), StatusRunning, s.workerID, formatTime(leaseExpiresAt), s.workerID, formatTime(now), task.ID, StatusPending)
+	`, StatusRunning, s.workerID, formatTime(leaseExpiresAt), s.workerID, formatTime(now), task.ID, StatusPending)
 	if err != nil {
 		return WorkflowTask{}, false, fmt.Errorf("claim workflow task: %w", err)
 	}
@@ -906,12 +906,12 @@ func (s *Service) claimNextTask(ctx context.Context) (WorkflowTask, bool, error)
 }
 
 func (s *Service) GetTask(ctx context.Context, taskID int64) (WorkflowTask, error) {
-	row := s.db.QueryRowContext(ctx, s.rebind(`
+	row := s.queryRowDB(ctx, `
 		SELECT id, workflow_id, step_index, step_name, activity_name, status, attempts, max_attempts,
 		       run_at, last_error, lease_owner, lease_expires_at, state_json, executed_by, created_at, updated_at
 		FROM workflow_tasks
 		WHERE id = ?
-	`), taskID)
+	`, taskID)
 	task, err := scanWorkflowTask(row)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -924,11 +924,11 @@ func (s *Service) GetTask(ctx context.Context, taskID int64) (WorkflowTask, erro
 
 func (s *Service) requeueExpiredTasks(ctx context.Context) error {
 	now := time.Now().UTC()
-	result, err := s.db.ExecContext(ctx, s.rebind(`
+	result, err := s.execDBQuery(ctx, `
 		UPDATE workflow_tasks
 		SET status = ?, lease_owner = '', lease_expires_at = NULL, updated_at = ?
 		WHERE status = ? AND lease_expires_at IS NOT NULL AND lease_expires_at <= ?
-	`), StatusPending, formatTime(now), StatusRunning, formatTime(now))
+	`, StatusPending, formatTime(now), StatusRunning, formatTime(now))
 	if err != nil {
 		return fmt.Errorf("requeue expired workflow tasks: %w", err)
 	}
@@ -950,12 +950,12 @@ func (s *Service) requeueExpiredTasks(ctx context.Context) error {
 }
 
 func (s *Service) getTaskTx(ctx context.Context, tx *sql.Tx, taskID int64) (WorkflowTask, error) {
-	row := tx.QueryRowContext(ctx, s.rebind(`
+	row := s.queryRowTx(ctx, tx, `
 		SELECT id, workflow_id, step_index, step_name, activity_name, status, attempts, max_attempts,
 		       run_at, last_error, lease_owner, lease_expires_at, state_json, executed_by, created_at, updated_at
 		FROM workflow_tasks
 		WHERE id = ?
-	`), taskID)
+	`, taskID)
 	task, err := scanWorkflowTask(row)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -966,30 +966,30 @@ func (s *Service) getTaskTx(ctx context.Context, tx *sql.Tx, taskID int64) (Work
 	return task, nil
 }
 
-func insertTaskTx(ctx context.Context, tx *sql.Tx, rebind func(string) string, workflowID string, stepIndex int, step StepDefinition, now time.Time) error {
-	_, err := tx.ExecContext(ctx, rebind(`
+func (s *Service) insertTaskTx(ctx context.Context, tx *sql.Tx, workflowID string, stepIndex int, step StepDefinition, now time.Time) error {
+	_, err := s.execTxQuery(ctx, tx, `
 		INSERT INTO workflow_tasks (
 			workflow_id, step_index, step_name, activity_name, status, attempts, max_attempts,
 			run_at, lease_owner, lease_expires_at, last_error, state_json, executed_by, created_at, updated_at
 		) VALUES (?, ?, ?, ?, ?, 0, ?, ?, '', NULL, '', '', '', ?, ?)
-	`), workflowID, stepIndex, step.Name, step.Activity, StatusPending, step.Retry.MaxAttempts, formatTime(now), formatTime(now), formatTime(now))
+	`, workflowID, stepIndex, step.Name, step.Activity, StatusPending, step.Retry.MaxAttempts, formatTime(now), formatTime(now), formatTime(now))
 	if err != nil {
 		return fmt.Errorf("insert workflow task: %w", err)
 	}
 	return nil
 }
 
-func appendEventTx(ctx context.Context, tx *sql.Tx, rebind func(string) string, workflowID string, sequence int, eventType string, payload any) (int, error) {
+func (s *Service) appendEventTx(ctx context.Context, tx *sql.Tx, workflowID string, sequence int, eventType string, payload any) (int, error) {
 	nextSequence := sequence + 1
 	payloadJSON, err := json.Marshal(payload)
 	if err != nil {
 		return sequence, fmt.Errorf("encode workflow event %s: %w", eventType, err)
 	}
 
-	if _, err := tx.ExecContext(ctx, rebind(`
+	if _, err := s.execTxQuery(ctx, tx, `
 		INSERT INTO workflow_events (workflow_id, sequence, event_type, payload, created_at)
 		VALUES (?, ?, ?, ?, ?)
-	`), workflowID, nextSequence, eventType, string(payloadJSON), formatTime(time.Now().UTC())); err != nil {
+	`, workflowID, nextSequence, eventType, string(payloadJSON), formatTime(time.Now().UTC())); err != nil {
 		return sequence, fmt.Errorf("insert workflow event %s: %w", eventType, err)
 	}
 

@@ -41,7 +41,7 @@ func (s *Service) RegisterNode(ctx context.Context, info NodeInfo) error {
 		return fmt.Errorf("marshal node capabilities: %w", err)
 	}
 	now := formatTime(time.Now())
-	_, err = s.db.ExecContext(ctx, s.rebind(`
+	_, err = s.execDBQuery(ctx, `
 		INSERT INTO nodes (id, role, address, capabilities, max_concurrent, version, hostname, last_seen_at, registered_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
@@ -52,7 +52,7 @@ func (s *Service) RegisterNode(ctx context.Context, info NodeInfo) error {
 			version        = excluded.version,
 			hostname       = excluded.hostname,
 			last_seen_at   = excluded.last_seen_at
-	`),
+	`,
 		info.ID, info.Role, info.Address, string(caps),
 		info.MaxConcurrent, info.Version, info.Hostname,
 		now, now,
@@ -65,7 +65,7 @@ func (s *Service) RegisterNode(ctx context.Context, info NodeInfo) error {
 
 // DeregisterNode removes this node's row from the nodes table on graceful shutdown.
 func (s *Service) DeregisterNode(ctx context.Context, nodeID string) error {
-	_, err := s.db.ExecContext(ctx, s.rebind(`DELETE FROM nodes WHERE id = ?`), nodeID)
+	_, err := s.execDBQuery(ctx, `DELETE FROM nodes WHERE id = ?`, nodeID)
 	if err != nil {
 		return fmt.Errorf("deregister node: %w", err)
 	}
@@ -74,7 +74,7 @@ func (s *Service) DeregisterNode(ctx context.Context, nodeID string) error {
 
 // HeartbeatNode updates last_seen_at for this node and publishes a live event.
 func (s *Service) HeartbeatNode(ctx context.Context, nodeID string) error {
-	_, err := s.db.ExecContext(ctx, s.rebind(`UPDATE nodes SET last_seen_at = ? WHERE id = ?`),
+	_, err := s.execDBQuery(ctx, `UPDATE nodes SET last_seen_at = ? WHERE id = ?`,
 		formatTime(time.Now()), nodeID,
 	)
 	if err != nil {

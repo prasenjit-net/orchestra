@@ -106,14 +106,14 @@ func (s *Service) StartWorkflowWithInput(ctx context.Context, in StartWorkflowIn
 		return WorkflowInstance{}, err
 	}
 
-	if _, err := tx.ExecContext(ctx, s.rebind(`
+	if _, err := s.execTxQuery(ctx, tx, `
 		INSERT INTO workflow_instances (
 			id, definition_id, definition_version, status, current_step_index, current_step_name,
 			current_activity, snapshot_json, last_event_sequence, last_error,
 			callback_url, trigger_source, callback_status,
 			created_at, updated_at
 		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, '', ?, ?, '', ?, ?)
-	`), instance.ID, instance.DefinitionID, instance.DefinitionVersion, instance.Status,
+	`, instance.ID, instance.DefinitionID, instance.DefinitionVersion, instance.Status,
 		instance.CurrentStepIndex, instance.CurrentStepName, instance.CurrentActivity,
 		snapshotJSON, instance.CallbackURL, instance.TriggerSource,
 		formatTime(now), formatTime(now)); err != nil {
@@ -121,7 +121,7 @@ func (s *Service) StartWorkflowWithInput(ctx context.Context, in StartWorkflowIn
 	}
 
 	sequence := 0
-	sequence, err = appendEventTx(ctx, tx, s.rebind, instance.ID, sequence, "WorkflowStarted", map[string]any{
+	sequence, err = s.appendEventTx(ctx, tx, instance.ID, sequence, "WorkflowStarted", map[string]any{
 		"definitionId":      instance.DefinitionID,
 		"definitionVersion": instance.DefinitionVersion,
 	})
@@ -130,7 +130,7 @@ func (s *Service) StartWorkflowWithInput(ctx context.Context, in StartWorkflowIn
 	}
 
 	if len(details.Document.Steps) == 0 {
-		sequence, err = appendEventTx(ctx, tx, s.rebind, instance.ID, sequence, "WorkflowCompleted", map[string]any{
+		sequence, err = s.appendEventTx(ctx, tx, instance.ID, sequence, "WorkflowCompleted", map[string]any{
 			"reason": "workflow has no steps",
 		})
 		if err != nil {
@@ -146,7 +146,7 @@ func (s *Service) StartWorkflowWithInput(ctx context.Context, in StartWorkflowIn
 		}
 	} else {
 		firstStep := details.Document.Steps[0]
-		sequence, err = appendEventTx(ctx, tx, s.rebind, instance.ID, sequence, "ActivityScheduled", map[string]any{
+		sequence, err = s.appendEventTx(ctx, tx, instance.ID, sequence, "ActivityScheduled", map[string]any{
 			"stepIndex":   0,
 			"stepName":    firstStep.Name,
 			"activity":    firstStep.Activity,
@@ -157,7 +157,7 @@ func (s *Service) StartWorkflowWithInput(ctx context.Context, in StartWorkflowIn
 		}
 		instance.LastEventSequence = sequence
 		instance.NextRunAt = &now
-		if err := insertTaskTx(ctx, tx, s.rebind, instance.ID, 0, firstStep, now); err != nil {
+		if err := s.insertTaskTx(ctx, tx, instance.ID, 0, firstStep, now); err != nil {
 			return WorkflowInstance{}, err
 		}
 		if err := s.updateInstanceTx(ctx, tx, instance, snapshotFromInstance(instance), nil); err != nil {
@@ -220,7 +220,7 @@ func (s *Service) ListWorkflows(ctx context.Context, input ListWorkflowsInput) (
 
 	// Total count.
 	var total int
-	if err := s.db.QueryRowContext(ctx, s.rebind("SELECT COUNT(*) FROM workflow_instances "+where), args...).Scan(&total); err != nil {
+	if err := s.queryRowDB(ctx, "SELECT COUNT(*) FROM workflow_instances "+where, args...).Scan(&total); err != nil {
 		return ListWorkflowsResult{}, fmt.Errorf("count workflow instances: %w", err)
 	}
 
@@ -230,8 +230,8 @@ func (s *Service) ListWorkflows(ctx context.Context, input ListWorkflowsInput) (
 		activityCounts = make(map[string]int)
 		countArgs := make([]any, 0, len(args))
 		countArgs = append(countArgs, args...)
-		countRows, err := s.db.QueryContext(ctx,
-			s.rebind("SELECT current_activity, COUNT(*) FROM workflow_instances "+where+" GROUP BY current_activity"),
+		countRows, err := s.queryDB(ctx,
+			"SELECT current_activity, COUNT(*) FROM workflow_instances "+where+" GROUP BY current_activity",
 			countArgs...)
 		if err != nil {
 			return ListWorkflowsResult{}, fmt.Errorf("count workflow activities: %w", err)
@@ -262,7 +262,7 @@ func (s *Service) ListWorkflows(ctx context.Context, input ListWorkflowsInput) (
 		pageArgs = append(pageArgs, input.Limit, input.Offset)
 	}
 
-	rows, err := s.db.QueryContext(ctx, s.rebind(query), pageArgs...)
+	rows, err := s.queryDB(ctx, query, pageArgs...)
 	if err != nil {
 		return ListWorkflowsResult{}, fmt.Errorf("query workflow instances: %w", err)
 	}
@@ -285,13 +285,13 @@ func (s *Service) ListWorkflows(ctx context.Context, input ListWorkflowsInput) (
 }
 
 func (s *Service) GetWorkflow(ctx context.Context, workflowID string) (WorkflowInstance, error) {
-	row := s.db.QueryRowContext(ctx, s.rebind(`
+	row := s.queryRowDB(ctx, `
 		SELECT id, definition_id, definition_version, status, current_step_index, current_step_name,
 		       current_activity, snapshot_json, last_event_sequence, last_error, created_at, updated_at,
 		       callback_url, trigger_source, callback_status
 		FROM workflow_instances
 		WHERE id = ?
-	`), workflowID)
+	`, workflowID)
 
 	instance, err := scanWorkflowInstance(row)
 	if err != nil {
@@ -320,9 +320,9 @@ type WorkflowHistoryResult struct {
 
 func (s *Service) GetWorkflowHistory(ctx context.Context, workflowID string, input WorkflowHistoryInput) (WorkflowHistoryResult, error) {
 	var total int
-	if err := s.db.QueryRowContext(ctx, s.rebind(`
+	if err := s.queryRowDB(ctx, `
 		SELECT COUNT(*) FROM workflow_events WHERE workflow_id = ?
-	`), workflowID).Scan(&total); err != nil {
+	`, workflowID).Scan(&total); err != nil {
 		return WorkflowHistoryResult{}, fmt.Errorf("count workflow events: %w", err)
 	}
 
@@ -340,7 +340,7 @@ func (s *Service) GetWorkflowHistory(ctx context.Context, workflowID string, inp
 		args = append(args, input.Offset)
 	}
 
-	rows, err := s.db.QueryContext(ctx, s.rebind(query), args...)
+	rows, err := s.queryDB(ctx, query, args...)
 	if err != nil {
 		return WorkflowHistoryResult{}, fmt.Errorf("query workflow events: %w", err)
 	}
@@ -404,14 +404,14 @@ func (s *Service) SignalWorkflow(ctx context.Context, workflowID string, input S
 		return WorkflowInstance{}, err
 	}
 
-	if _, err := tx.ExecContext(ctx, s.rebind(`
+	if _, err := s.execTxQuery(ctx, tx, `
 		INSERT INTO workflow_signals (workflow_id, signal_name, payload, status, created_at, processed_at)
 		VALUES (?, ?, ?, 'processed', ?, ?)
-	`), workflowID, name, string(payload), formatTime(now), formatTime(now)); err != nil {
+	`, workflowID, name, string(payload), formatTime(now), formatTime(now)); err != nil {
 		return WorkflowInstance{}, fmt.Errorf("insert workflow signal: %w", err)
 	}
 
-	sequence, err := appendEventTx(ctx, tx, s.rebind, workflowID, instance.LastEventSequence, "WorkflowSignaled", map[string]any{
+	sequence, err := s.appendEventTx(ctx, tx, workflowID, instance.LastEventSequence, "WorkflowSignaled", map[string]any{
 		"name":    name,
 		"payload": decodePayloadForEvent(payload),
 	})
@@ -483,17 +483,17 @@ func (s *Service) CancelWorkflow(ctx context.Context, workflowID string) (Workfl
 	}
 
 	now := time.Now().UTC()
-	sequence, err := appendEventTx(ctx, tx, s.rebind, workflowID, instance.LastEventSequence, "WorkflowCanceled", map[string]any{
+	sequence, err := s.appendEventTx(ctx, tx, workflowID, instance.LastEventSequence, "WorkflowCanceled", map[string]any{
 		"canceledAt": formatTime(now),
 	})
 	if err != nil {
 		return WorkflowInstance{}, err
 	}
-	if _, err := tx.ExecContext(ctx, s.rebind(`
+	if _, err := s.execTxQuery(ctx, tx, `
 		UPDATE workflow_tasks
 		SET status = ?, lease_owner = '', lease_expires_at = NULL, updated_at = ?
 		WHERE workflow_id = ? AND status NOT IN (?, ?)
-	`), StatusCanceled, formatTime(now), workflowID, StatusCompleted, StatusCanceled); err != nil {
+	`, StatusCanceled, formatTime(now), workflowID, StatusCompleted, StatusCanceled); err != nil {
 		return WorkflowInstance{}, fmt.Errorf("cancel workflow tasks: %w", err)
 	}
 
@@ -543,16 +543,16 @@ func (s *Service) ListRecentEvents(ctx context.Context, input ListRecentEventsIn
 	}
 
 	var total int
-	if err := s.db.QueryRowContext(ctx, s.rebind("SELECT COUNT(*) FROM workflow_events")).Scan(&total); err != nil {
+	if err := s.queryRowDB(ctx, "SELECT COUNT(*) FROM workflow_events").Scan(&total); err != nil {
 		return ListRecentEventsResult{}, fmt.Errorf("count workflow events: %w", err)
 	}
 
-	rows, err := s.db.QueryContext(ctx, s.rebind(`
+	rows, err := s.queryDB(ctx, `
 		SELECT workflow_id, sequence, event_type, payload, created_at
 		FROM workflow_events
 		ORDER BY id DESC
 		LIMIT ? OFFSET ?
-	`), input.Limit, input.Offset)
+	`, input.Limit, input.Offset)
 	if err != nil {
 		return ListRecentEventsResult{}, fmt.Errorf("query recent workflow events: %w", err)
 	}
@@ -581,13 +581,13 @@ func (s *Service) ListRecentEvents(ctx context.Context, input ListRecentEventsIn
 }
 
 func (s *Service) wakeTasksWaitingForSignalTx(ctx context.Context, tx *sql.Tx, workflowID string, signalName string, now time.Time) ([]int64, error) {
-	rows, err := tx.QueryContext(ctx, s.rebind(`
+	rows, err := s.queryTx(ctx, tx, `
 		SELECT id, workflow_id, step_index, step_name, activity_name, status, attempts, max_attempts,
 		       run_at, last_error, lease_owner, lease_expires_at, state_json, executed_by, created_at, updated_at
 		FROM workflow_tasks
 		WHERE workflow_id = ? AND status = ?
 		ORDER BY id ASC
-	`), workflowID, StatusWaiting)
+	`, workflowID, StatusWaiting)
 	if err != nil {
 		return nil, fmt.Errorf("query signal-waiting tasks: %w", err)
 	}
@@ -621,11 +621,11 @@ func (s *Service) wakeTasksWaitingForSignalTx(ctx context.Context, tx *sql.Tx, w
 	}
 
 	for _, id := range idsToWake {
-		if _, err := tx.ExecContext(ctx, s.rebind(`
+		if _, err := s.execTxQuery(ctx, tx, `
 			UPDATE workflow_tasks
 			SET status = ?, run_at = ?, lease_owner = '', lease_expires_at = NULL, updated_at = ?
 			WHERE id = ?
-		`), StatusPending, formatTime(now), formatTime(now), id); err != nil {
+		`, StatusPending, formatTime(now), formatTime(now), id); err != nil {
 			return nil, fmt.Errorf("wake signal-waiting task %d: %w", id, err)
 		}
 	}
@@ -633,13 +633,13 @@ func (s *Service) wakeTasksWaitingForSignalTx(ctx context.Context, tx *sql.Tx, w
 }
 
 func (s *Service) getWorkflowTx(ctx context.Context, tx *sql.Tx, workflowID string) (WorkflowInstance, error) {
-	row := tx.QueryRowContext(ctx, s.rebind(`
+	row := s.queryRowTx(ctx, tx, `
 		SELECT id, definition_id, definition_version, status, current_step_index, current_step_name,
 		       current_activity, snapshot_json, last_event_sequence, last_error, created_at, updated_at,
 		       callback_url, trigger_source, callback_status
 		FROM workflow_instances
 		WHERE id = ?
-	`), workflowID)
+	`, workflowID)
 
 	instance, err := scanWorkflowInstance(row)
 	if err != nil {
@@ -661,12 +661,12 @@ func (s *Service) updateInstanceTx(ctx context.Context, tx *sql.Tx, instance Wor
 		return err
 	}
 
-	if _, err := tx.ExecContext(ctx, s.rebind(`
+	if _, err := s.execTxQuery(ctx, tx, `
 		UPDATE workflow_instances
 		SET status = ?, current_step_index = ?, current_step_name = ?, current_activity = ?,
 		    snapshot_json = ?, last_event_sequence = ?, last_error = ?, updated_at = ?
 		WHERE id = ?
-	`), instance.Status, instance.CurrentStepIndex, instance.CurrentStepName, instance.CurrentActivity, snapshotJSON, instance.LastEventSequence, instance.LastError, formatTime(instance.UpdatedAt), instance.ID); err != nil {
+	`, instance.Status, instance.CurrentStepIndex, instance.CurrentStepName, instance.CurrentActivity, snapshotJSON, instance.LastEventSequence, instance.LastError, formatTime(instance.UpdatedAt), instance.ID); err != nil {
 		return fmt.Errorf("update workflow instance: %w", err)
 	}
 
@@ -734,8 +734,8 @@ func (s *Service) doCallbackAttempt(callbackURL, workflowID string, payload []by
 func (s *Service) setCallbackStatus(workflowID, status string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	if _, err := s.db.ExecContext(ctx,
-		s.rebind(`UPDATE workflow_instances SET callback_status = ? WHERE id = ?`),
+	if _, err := s.execDBQuery(ctx,
+		`UPDATE workflow_instances SET callback_status = ? WHERE id = ?`,
 		status, workflowID,
 	); err != nil {
 		s.logger.Error("update callback_status", "workflowId", workflowID, "error", err)

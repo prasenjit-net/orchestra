@@ -3,7 +3,7 @@ name: orchestra
 # ─── Common environment shared by every orchestra service ─────────────────────
 x-db-env: &db-env
   APP_WORKFLOW_DATABASEDRIVER: postgres
-  APP_WORKFLOW_DATABASEURL: postgres://orchestra:${POSTGRES_PASSWORD:-orchestra_secret}@postgres:5432/orchestra?sslmode=disable
+  APP_WORKFLOW_DATABASEURL: postgres://orchestra:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@postgres:5432/orchestra?sslmode=disable
 
 x-orchestra-build: &orchestra-build
   build:
@@ -27,7 +27,7 @@ services:
     environment:
       POSTGRES_DB: orchestra
       POSTGRES_USER: orchestra
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-orchestra_secret}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
