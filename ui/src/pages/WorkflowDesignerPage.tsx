@@ -880,12 +880,12 @@ function AgentActivityFields({
   payload,
   setField,
   onUpdate,
-}: {
+}: Readonly<{
   node: ActivityFlowNode
   payload: unknown
   setField: (key: string, value: string, options?: { removeWhenBlank?: boolean }) => void
   onUpdate: (updater: (data: ActivityNodeData) => ActivityNodeData) => void
-}) {
+}>) {
   const agentsQuery = useQuery({
     queryKey: ['agents'],
     queryFn: agentsApi.list,
@@ -1658,7 +1658,7 @@ function BoundarySettingsModal({
   onEndSchemaChange,
   onEndOutputRowsChange,
   onClose,
-}: {
+}: Readonly<{
   kind: BoundaryNodeKind
   schemas: JSONSchemaDocument[]
   startSchemaId: string
@@ -1668,7 +1668,7 @@ function BoundarySettingsModal({
   onEndSchemaChange: (schemaId: string) => void
   onEndOutputRowsChange: (rows: InputRow[]) => void
   onClose: () => void
-}) {
+}>) {
   const selectedEndSchema = schemas.find((schema) => schema.id === endSchemaId)
   const endSchemaProperties = schemaPropertyNames(selectedEndSchema)
   const isStart = kind === 'start'

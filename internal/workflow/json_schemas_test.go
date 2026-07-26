@@ -32,65 +32,72 @@ func TestJSONSchemaCRUDAndImportExport(t *testing.T) {
 		t.Fatal("expected generated schema ID")
 	}
 
-	var bundle ImportBundle
-	t.Run("list and update", func(t *testing.T) {
-		list, err := service.ListJSONSchemas(ctx)
-		if err != nil {
-			t.Fatalf("ListJSONSchemas returned error: %v", err)
-		}
-		if len(list) != 1 || list[0].Name != "Customer" {
-			t.Fatalf("expected created schema in list, got %#v", list)
-		}
+	assertJSONSchemaListAndUpdate(t, service, ctx, created.ID)
+	bundle := assertJSONSchemaExportAndAnalysis(t, service, ctx, created.ID)
+	assertJSONSchemaDeleteAndImport(t, service, ctx, created.ID, bundle)
+}
 
-		updated, err := service.UpdateJSONSchema(ctx, created.ID, CreateJSONSchemaInput{
-			Name:        "Customer v2",
-			Description: "Updated customer payload",
-			Schema:      []byte(`{"type":"object","properties":{"id":{"type":"string"},"email":{"type":"string","format":"email"}},"required":["id","email"]}`),
-		})
-		if err != nil {
-			t.Fatalf("UpdateJSONSchema returned error: %v", err)
-		}
-		if updated.Name != "Customer v2" {
-			t.Fatalf("expected updated name, got %q", updated.Name)
-		}
+func assertJSONSchemaListAndUpdate(t *testing.T, service *Service, ctx context.Context, schemaID string) {
+	t.Helper()
+	list, err := service.ListJSONSchemas(ctx)
+	if err != nil {
+		t.Fatalf("ListJSONSchemas returned error: %v", err)
+	}
+	if len(list) != 1 || list[0].Name != "Customer" {
+		t.Fatalf("expected created schema in list, got %#v", list)
+	}
+
+	updated, err := service.UpdateJSONSchema(ctx, schemaID, CreateJSONSchemaInput{
+		Name:        "Customer v2",
+		Description: "Updated customer payload",
+		Schema:      []byte(`{"type":"object","properties":{"id":{"type":"string"},"email":{"type":"string","format":"email"}},"required":["id","email"]}`),
 	})
+	if err != nil {
+		t.Fatalf("UpdateJSONSchema returned error: %v", err)
+	}
+	if updated.Name != "Customer v2" {
+		t.Fatalf("expected updated name, got %q", updated.Name)
+	}
+}
 
-	t.Run("export and analyze", func(t *testing.T) {
-		bundle, err = service.ExportJSONSchema(ctx, created.ID)
-		if err != nil {
-			t.Fatalf("ExportJSONSchema returned error: %v", err)
-		}
-		if bundle.BundleType != jsonSchemaBundleType || len(bundle.JSONSchemas) != 1 {
-			t.Fatalf("expected JSON schema bundle, got %#v", bundle)
-		}
+func assertJSONSchemaExportAndAnalysis(t *testing.T, service *Service, ctx context.Context, schemaID string) ImportBundle {
+	t.Helper()
+	bundle, err := service.ExportJSONSchema(ctx, schemaID)
+	if err != nil {
+		t.Fatalf("ExportJSONSchema returned error: %v", err)
+	}
+	if bundle.BundleType != jsonSchemaBundleType || len(bundle.JSONSchemas) != 1 {
+		t.Fatalf("expected JSON schema bundle, got %#v", bundle)
+	}
 
-		allSchemasBundle, err := service.ExportJSONSchemas(ctx)
-		if err != nil {
-			t.Fatalf("ExportJSONSchemas returned error: %v", err)
-		}
-		if len(allSchemasBundle.JSONSchemas) != 1 {
-			t.Fatalf("expected all schema bundle to include one schema, got %#v", allSchemasBundle)
-		}
+	allSchemasBundle, err := service.ExportJSONSchemas(ctx)
+	if err != nil {
+		t.Fatalf("ExportJSONSchemas returned error: %v", err)
+	}
+	if len(allSchemasBundle.JSONSchemas) != 1 {
+		t.Fatalf("expected all schema bundle to include one schema, got %#v", allSchemasBundle)
+	}
 
-		analysis, err := service.AnalyzeImport(ctx, bundle)
-		if err != nil {
-			t.Fatalf("AnalyzeImport returned error: %v", err)
-		}
-		if len(analysis.Conflicts) != 1 || analysis.Conflicts[0].Type != jsonSchemaBundleType {
-			t.Fatalf("expected schema conflict, got %#v", analysis)
-		}
-	})
+	analysis, err := service.AnalyzeImport(ctx, bundle)
+	if err != nil {
+		t.Fatalf("AnalyzeImport returned error: %v", err)
+	}
+	if len(analysis.Conflicts) != 1 || analysis.Conflicts[0].Type != jsonSchemaBundleType {
+		t.Fatalf("expected schema conflict, got %#v", analysis)
+	}
+	return bundle
+}
 
-	t.Run("delete and import", func(t *testing.T) {
-		if err := service.DeleteJSONSchema(ctx, created.ID); err != nil {
-			t.Fatalf("DeleteJSONSchema returned error: %v", err)
-		}
-		imported, err := service.ApplyImport(ctx, bundle, nil)
-		if err != nil {
-			t.Fatalf("ApplyImport returned error: %v", err)
-		}
-		if imported != 1 {
-			t.Fatalf("expected one imported schema, got %d", imported)
-		}
-	})
+func assertJSONSchemaDeleteAndImport(t *testing.T, service *Service, ctx context.Context, schemaID string, bundle ImportBundle) {
+	t.Helper()
+	if err := service.DeleteJSONSchema(ctx, schemaID); err != nil {
+		t.Fatalf("DeleteJSONSchema returned error: %v", err)
+	}
+	imported, err := service.ApplyImport(ctx, bundle, nil)
+	if err != nil {
+		t.Fatalf("ApplyImport returned error: %v", err)
+	}
+	if imported != 1 {
+		t.Fatalf("expected one imported schema, got %d", imported)
+	}
 }

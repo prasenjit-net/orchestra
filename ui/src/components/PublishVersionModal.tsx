@@ -34,13 +34,13 @@ export default function PublishVersionModal({ version, activeVersion, isPending,
         </div>
 
         <div className="space-y-4 px-5 py-4">
-          <label htmlFor="activate-published-version" className="flex cursor-pointer items-start gap-3 rounded-lg border border-gray-200 p-3 dark:border-slate-700">
-            <input id="activate-published-version" type="checkbox" checked={activate} onChange={(event) => setActivate(event.target.checked)} className="mt-0.5 h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500" />
-            <span>
-              <span className="block text-sm font-semibold text-gray-900 dark:text-slate-100">Activate after publishing</span>
-              <span className="mt-0.5 block text-xs text-gray-500 dark:text-slate-400">New workflow runs will start on version {version}. Existing runs are unchanged.</span>
-            </span>
-          </label>
+          <div className="flex items-start gap-3 rounded-lg border border-gray-200 p-3 dark:border-slate-700">
+            <input id="activate-published-version" type="checkbox" checked={activate} onChange={(event) => setActivate(event.target.checked)} aria-describedby="activate-published-version-description" className="mt-0.5 h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500" />
+            <div>
+              <label htmlFor="activate-published-version" className="block cursor-pointer text-sm font-semibold text-gray-900 dark:text-slate-100">Activate after publishing</label>
+              <p id="activate-published-version-description" className="mt-0.5 text-xs text-gray-500 dark:text-slate-400">New workflow runs will start on version {version}. Existing runs are unchanged.</p>
+            </div>
+          </div>
           {error ? <p className="text-sm text-red-600 dark:text-red-300">{error}</p> : null}
         </div>
 
