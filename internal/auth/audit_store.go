@@ -51,6 +51,15 @@ type ListAuditInput struct {
 	Outcome string
 }
 
+const (
+	auditCountQuery = `SELECT COUNT(*) FROM security_audit_events
+		WHERE (? = '' OR actor_id = ?) AND (? = '' OR action = ?) AND (? = '' OR outcome = ?)`
+	auditListQuery = `SELECT id, occurred_at, request_id, actor_type, actor_id, action, resource_type, resource_id, outcome, source_ip, user_agent, metadata_json
+		FROM security_audit_events
+		WHERE (? = '' OR actor_id = ?) AND (? = '' OR action = ?) AND (? = '' OR outcome = ?)
+		ORDER BY occurred_at DESC, id DESC LIMIT ? OFFSET ?`
+)
+
 func (s *Store) ListAuditEvents(ctx context.Context, input ListAuditInput) ([]AuditEvent, int, error) {
 	if input.Limit <= 0 || input.Limit > 200 {
 		input.Limit = 50
@@ -58,30 +67,13 @@ func (s *Store) ListAuditEvents(ctx context.Context, input ListAuditInput) ([]Au
 	if input.Offset < 0 {
 		input.Offset = 0
 	}
-	conditions := make([]string, 0, 3)
-	args := make([]any, 0, 5)
-	if input.ActorID != "" {
-		conditions = append(conditions, "actor_id = ?")
-		args = append(args, input.ActorID)
-	}
-	if input.Action != "" {
-		conditions = append(conditions, "action = ?")
-		args = append(args, input.Action)
-	}
-	if input.Outcome != "" {
-		conditions = append(conditions, "outcome = ?")
-		args = append(args, input.Outcome)
-	}
-	where := ""
-	if len(conditions) > 0 {
-		where = " WHERE " + strings.Join(conditions, " AND ")
-	}
+	filterArgs := []any{input.ActorID, input.ActorID, input.Action, input.Action, input.Outcome, input.Outcome}
 	var total int
-	if err := s.queryRow(ctx, `SELECT COUNT(*) FROM security_audit_events`+where, args...).Scan(&total); err != nil {
+	if err := s.queryRow(ctx, auditCountQuery, filterArgs...).Scan(&total); err != nil {
 		return nil, 0, err
 	}
-	args = append(args, input.Limit, input.Offset)
-	rows, err := s.query(ctx, `SELECT id, occurred_at, request_id, actor_type, actor_id, action, resource_type, resource_id, outcome, source_ip, user_agent, metadata_json FROM security_audit_events`+where+` ORDER BY occurred_at DESC, id DESC LIMIT ? OFFSET ?`, args...)
+	listArgs := append(filterArgs, input.Limit, input.Offset)
+	rows, err := s.query(ctx, auditListQuery, listArgs...)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -126,57 +118,79 @@ func (s *Store) ConsumeRateLimit(ctx context.Context, bucketHash, bucketType str
 		return false, time.Time{}, err
 	}
 	defer tx.Rollback()
-	query := `SELECT window_started_at, attempt_count, blocked_until FROM security_rate_limits WHERE bucket_key_hash = ?`
-	if s.dialect.IsPostgres() {
-		query += ` FOR UPDATE`
-	}
-	var windowStartedRaw string
-	var count int
-	var blockedRaw sql.NullString
-	err = tx.QueryRowContext(ctx, s.rebind(query), bucketHash).Scan(&windowStartedRaw, &count, &blockedRaw)
+	state, err := s.loadRateLimitState(ctx, tx, bucketHash)
 	if errorsIsNoRows(err) {
-		expires := now.Add(2 * window)
-		_, err = tx.ExecContext(ctx, s.rebind(`INSERT INTO security_rate_limits (bucket_key_hash, bucket_type, window_started_at, attempt_count, expires_at) VALUES (?, ?, ?, 1, ?)`), bucketHash, bucketType, formatTime(now), formatTime(expires))
-		if err != nil {
-			return false, time.Time{}, err
-		}
-		return true, time.Time{}, tx.Commit()
+		return s.createRateLimitWindow(ctx, tx, bucketHash, bucketType, now, window)
 	}
 	if err != nil {
 		return false, time.Time{}, err
 	}
-	blockedUntil, err := parseOptionalTime(blockedRaw)
-	if err != nil {
-		return false, time.Time{}, err
+	if state.blockedUntil != nil && now.Before(*state.blockedUntil) {
+		return commitRateLimit(tx, false, *state.blockedUntil)
 	}
-	if blockedUntil != nil && now.Before(*blockedUntil) {
-		return false, *blockedUntil, tx.Commit()
+	if now.Sub(state.windowStarted) >= window {
+		return s.resetRateLimitWindow(ctx, tx, bucketHash, bucketType, now, window)
 	}
-	windowStarted, err := parseTime(windowStartedRaw)
-	if err != nil {
-		return false, time.Time{}, err
-	}
-	if now.Sub(windowStarted) >= window {
-		_, err = tx.ExecContext(ctx, s.rebind(`UPDATE security_rate_limits SET bucket_type = ?, window_started_at = ?, attempt_count = 1, blocked_until = NULL, expires_at = ? WHERE bucket_key_hash = ?`), bucketType, formatTime(now), formatTime(now.Add(2*window)), bucketHash)
-		if err != nil {
-			return false, time.Time{}, err
-		}
-		return true, time.Time{}, tx.Commit()
-	}
-	count++
+	count := state.attemptCount + 1
 	var block any
-	retryAt := windowStarted.Add(window)
+	retryAt := state.windowStarted.Add(window)
 	if count > limit {
 		block = formatTime(retryAt)
 	}
-	_, err = tx.ExecContext(ctx, s.rebind(`UPDATE security_rate_limits SET attempt_count = ?, blocked_until = ?, expires_at = ? WHERE bucket_key_hash = ?`), count, block, formatTime(now.Add(2*window)), bucketHash)
+	_, err = s.txExec(ctx, tx, `UPDATE security_rate_limits SET attempt_count = ?, blocked_until = ?, expires_at = ? WHERE bucket_key_hash = ?`, count, block, formatTime(now.Add(2*window)), bucketHash)
 	if err != nil {
 		return false, time.Time{}, err
 	}
+	return commitRateLimit(tx, count <= limit, retryAt)
+}
+
+type rateLimitState struct {
+	windowStarted time.Time
+	attemptCount  int
+	blockedUntil  *time.Time
+}
+
+func (s *Store) loadRateLimitState(ctx context.Context, tx *sql.Tx, bucketHash string) (rateLimitState, error) {
+	query := `SELECT window_started_at, attempt_count, blocked_until FROM security_rate_limits WHERE bucket_key_hash = ?`
+	if s.dialect.IsPostgres() {
+		query = `SELECT window_started_at, attempt_count, blocked_until FROM security_rate_limits WHERE bucket_key_hash = ? FOR UPDATE`
+	}
+	var state rateLimitState
+	var windowStartedRaw string
+	var blockedRaw sql.NullString
+	if err := s.txQueryRow(ctx, tx, query, bucketHash).Scan(&windowStartedRaw, &state.attemptCount, &blockedRaw); err != nil {
+		return rateLimitState{}, err
+	}
+	var err error
+	state.windowStarted, err = parseTime(windowStartedRaw)
+	if err != nil {
+		return rateLimitState{}, err
+	}
+	state.blockedUntil, err = parseOptionalTime(blockedRaw)
+	return state, err
+}
+
+func (s *Store) createRateLimitWindow(ctx context.Context, tx *sql.Tx, bucketHash, bucketType string, now time.Time, window time.Duration) (bool, time.Time, error) {
+	_, err := s.txExec(ctx, tx, `INSERT INTO security_rate_limits (bucket_key_hash, bucket_type, window_started_at, attempt_count, expires_at) VALUES (?, ?, ?, 1, ?)`, bucketHash, bucketType, formatTime(now), formatTime(now.Add(2*window)))
+	if err != nil {
+		return false, time.Time{}, err
+	}
+	return commitRateLimit(tx, true, time.Time{})
+}
+
+func (s *Store) resetRateLimitWindow(ctx context.Context, tx *sql.Tx, bucketHash, bucketType string, now time.Time, window time.Duration) (bool, time.Time, error) {
+	_, err := s.txExec(ctx, tx, `UPDATE security_rate_limits SET bucket_type = ?, window_started_at = ?, attempt_count = 1, blocked_until = NULL, expires_at = ? WHERE bucket_key_hash = ?`, bucketType, formatTime(now), formatTime(now.Add(2*window)), bucketHash)
+	if err != nil {
+		return false, time.Time{}, err
+	}
+	return commitRateLimit(tx, true, time.Time{})
+}
+
+func commitRateLimit(tx *sql.Tx, allowed bool, retryAt time.Time) (bool, time.Time, error) {
 	if err := tx.Commit(); err != nil {
 		return false, time.Time{}, err
 	}
-	return count <= limit, retryAt, nil
+	return allowed, retryAt, nil
 }
 
 func errorsIsNoRows(err error) bool { return err == sql.ErrNoRows }

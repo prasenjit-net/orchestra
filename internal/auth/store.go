@@ -23,15 +23,23 @@ func NewStore(db *sql.DB, dialect appdb.Dialect) *Store {
 func (s *Store) rebind(query string) string { return s.dialect.Rebind(query) }
 
 func (s *Store) exec(ctx context.Context, query string, args ...any) (sql.Result, error) {
-	return s.db.ExecContext(ctx, s.rebind(query), args...)
+	return s.db.ExecContext(ctx, s.rebind(query), args...) // NOSONAR -- queries are internal SQL templates; all external values remain bound parameters.
 }
 
 func (s *Store) query(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
-	return s.db.QueryContext(ctx, s.rebind(query), args...)
+	return s.db.QueryContext(ctx, s.rebind(query), args...) // NOSONAR -- queries are internal SQL templates; all external values remain bound parameters.
 }
 
 func (s *Store) queryRow(ctx context.Context, query string, args ...any) *sql.Row {
-	return s.db.QueryRowContext(ctx, s.rebind(query), args...)
+	return s.db.QueryRowContext(ctx, s.rebind(query), args...) // NOSONAR -- queries are internal SQL templates; all external values remain bound parameters.
+}
+
+func (s *Store) txExec(ctx context.Context, tx *sql.Tx, query string, args ...any) (sql.Result, error) {
+	return tx.ExecContext(ctx, s.rebind(query), args...) // NOSONAR -- queries are internal SQL templates; all external values remain bound parameters.
+}
+
+func (s *Store) txQueryRow(ctx context.Context, tx *sql.Tx, query string, args ...any) *sql.Row {
+	return tx.QueryRowContext(ctx, s.rebind(query), args...) // NOSONAR -- queries are internal SQL templates; all external values remain bound parameters.
 }
 
 func formatTime(value time.Time) string { return value.UTC().Format(time.RFC3339Nano) }
@@ -206,19 +214,15 @@ func (s *Store) ListUsers(ctx context.Context, limit, offset int, search string)
 	if offset < 0 {
 		offset = 0
 	}
-	where := ""
-	args := make([]any, 0, 3)
-	if strings.TrimSpace(search) != "" {
-		where = ` WHERE username_normalized LIKE ? OR LOWER(display_name) LIKE ?`
-		pattern := "%" + strings.ToLower(strings.TrimSpace(search)) + "%"
-		args = append(args, pattern, pattern)
-	}
+	normalizedSearch := strings.ToLower(strings.TrimSpace(search))
+	pattern := "%" + normalizedSearch + "%"
+	filterArgs := []any{normalizedSearch, pattern, pattern}
 	var total int
-	if err := s.queryRow(ctx, `SELECT COUNT(*) FROM users`+where, args...).Scan(&total); err != nil {
+	if err := s.queryRow(ctx, `SELECT COUNT(*) FROM users WHERE ? = '' OR username_normalized LIKE ? OR LOWER(display_name) LIKE ?`, filterArgs...).Scan(&total); err != nil {
 		return nil, 0, fmt.Errorf("count listed users: %w", err)
 	}
-	args = append(args, limit, offset)
-	rows, err := s.query(ctx, `SELECT `+userColumns+` FROM users`+where+` ORDER BY username_normalized LIMIT ? OFFSET ?`, args...)
+	listArgs := append(filterArgs, limit, offset)
+	rows, err := s.query(ctx, `SELECT `+userColumns+` FROM users WHERE ? = '' OR username_normalized LIKE ? OR LOWER(display_name) LIKE ? ORDER BY username_normalized LIMIT ? OFFSET ?`, listArgs...)
 	if err != nil {
 		return nil, 0, fmt.Errorf("list users: %w", err)
 	}
@@ -278,16 +282,16 @@ func (s *Store) ReplaceEntitlements(ctx context.Context, userID, actorID string,
 		return fmt.Errorf("begin entitlement update: %w", err)
 	}
 	defer tx.Rollback()
-	if _, err := tx.ExecContext(ctx, s.rebind(`DELETE FROM user_entitlements WHERE user_id = ?`), userID); err != nil {
+	if _, err := s.txExec(ctx, tx, `DELETE FROM user_entitlements WHERE user_id = ?`, userID); err != nil {
 		return fmt.Errorf("clear entitlements: %w", err)
 	}
 	for _, entitlement := range entitlements {
-		if _, err := tx.ExecContext(ctx, s.rebind(`INSERT INTO user_entitlements (user_id, permission, effect, created_by, created_at) VALUES (?, ?, ?, ?, ?)`),
+		if _, err := s.txExec(ctx, tx, `INSERT INTO user_entitlements (user_id, permission, effect, created_by, created_at) VALUES (?, ?, ?, ?, ?)`,
 			userID, string(entitlement.Permission), entitlement.Effect, nullableString(actorID), formatTime(now)); err != nil {
 			return fmt.Errorf("insert entitlement: %w", err)
 		}
 	}
-	if _, err := tx.ExecContext(ctx, s.rebind(`UPDATE users SET authz_version = authz_version + 1, updated_at = ? WHERE id = ?`), formatTime(now), userID); err != nil {
+	if _, err := s.txExec(ctx, tx, `UPDATE users SET authz_version = authz_version + 1, updated_at = ? WHERE id = ?`, formatTime(now), userID); err != nil {
 		return fmt.Errorf("update authorization version: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
@@ -349,7 +353,7 @@ func (s *Store) SetPassword(ctx context.Context, id, passwordHash string, mustCh
 		return fmt.Errorf("begin password update: %w", err)
 	}
 	defer tx.Rollback()
-	result, err := tx.ExecContext(ctx, s.rebind(`UPDATE users SET password_hash = ?, must_change_password = ?, password_changed_at = ?, failed_login_count = 0, locked_until = NULL, updated_at = ? WHERE id = ?`),
+	result, err := s.txExec(ctx, tx, `UPDATE users SET password_hash = ?, must_change_password = ?, password_changed_at = ?, failed_login_count = 0, locked_until = NULL, updated_at = ? WHERE id = ?`,
 		passwordHash, value, formatTime(now), formatTime(now), id)
 	if err != nil {
 		return fmt.Errorf("set password: %w", err)
@@ -357,7 +361,7 @@ func (s *Store) SetPassword(ctx context.Context, id, passwordHash string, mustCh
 	if affected, _ := result.RowsAffected(); affected == 0 {
 		return ErrNotFound
 	}
-	if _, err := tx.ExecContext(ctx, s.rebind(`UPDATE sessions SET revoked_at = ?, revoke_reason = 'password changed' WHERE user_id = ? AND revoked_at IS NULL`), formatTime(now), id); err != nil {
+	if _, err := s.txExec(ctx, tx, `UPDATE sessions SET revoked_at = ?, revoke_reason = 'password changed' WHERE user_id = ? AND revoked_at IS NULL`, formatTime(now), id); err != nil {
 		return fmt.Errorf("revoke password sessions: %w", err)
 	}
 	return tx.Commit()

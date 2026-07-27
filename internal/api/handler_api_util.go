@@ -11,6 +11,25 @@ import (
 	"github.com/prasenjit-net/orchestra/internal/workflow"
 )
 
+const (
+	authUnauthenticatedCode       = "AUTH_UNAUTHENTICATED"
+	authenticationRequiredMessage = "authentication required"
+	invalidJSONBodyMessage        = "invalid JSON body"
+	validAPIKeyRequiredMessage    = "valid API key required"
+	authorizationDeniedAction     = "authorization.denied"
+	workflowNotFoundMessage       = "workflow not found"
+	cacheControlHeader            = "Cache-Control"
+	noStoreDirective              = "no-store"
+)
+
+func preventCaching(w http.ResponseWriter) {
+	w.Header().Set(cacheControlHeader, noStoreDirective)
+}
+
+func writeAuthenticationRequired(w http.ResponseWriter) {
+	writeAPIError(w, http.StatusUnauthorized, authUnauthenticatedCode, authenticationRequiredMessage)
+}
+
 func respondJSON(w http.ResponseWriter, status int, payload any) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(status)
@@ -57,7 +76,7 @@ func decodeJSON(r *http.Request, target any) error {
 	if err := decoder.Decode(target); err != nil {
 		return err
 	}
-	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+	if decoder.Decode(&struct{}{}) != io.EOF {
 		return errors.New("JSON body must contain a single value")
 	}
 	return nil

@@ -56,7 +56,10 @@ func (a *App) Handler() http.Handler {
 	r.Use(limitRequestBody(4 << 20))
 	r.Use(requestLogger(a.logger))
 
-	r.Mount("/api", api.NewRouter(a.cfg, a.logger, a.build, a.options.Live, a.options.Workflow, a.options.Auth, a.options.RestartCh, a.options.ConfigEditable))
+	r.Mount("/api", api.NewRouter(a.cfg, a.logger, a.build, api.RouterOptions{
+		Live: a.options.Live, Workflow: a.options.Workflow, Auth: a.options.Auth,
+		RestartCh: a.options.RestartCh, ConfigEditable: a.options.ConfigEditable,
+	}))
 
 	if extRouter, err := api.NewExtRouter(a.cfg, a.options.Workflow, a.options.Auth); err != nil {
 		a.logger.Error("failed to create ext router", "error", err)
@@ -117,6 +120,21 @@ func limitRequestBody(maxBytes int64) func(http.Handler) http.Handler {
 }
 
 func trustedRealIP(cidrs []string, logger *slog.Logger) func(http.Handler) http.Handler {
+	prefixes := parseTrustedPrefixes(cidrs, logger)
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			peer, ok := parseRemoteAddress(r.RemoteAddr)
+			if !ok || !isTrustedAddress(prefixes, peer) {
+				next.ServeHTTP(w, r)
+				return
+			}
+			r.RemoteAddr = clientAddress(forwardedAddressChain(r, peer), prefixes).String()
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
+func parseTrustedPrefixes(cidrs []string, logger *slog.Logger) []netip.Prefix {
 	prefixes := make([]netip.Prefix, 0, len(cidrs))
 	for _, raw := range cidrs {
 		prefix, err := netip.ParsePrefix(strings.TrimSpace(raw))
@@ -126,42 +144,40 @@ func trustedRealIP(cidrs []string, logger *slog.Logger) func(http.Handler) http.
 		}
 		prefixes = append(prefixes, prefix)
 	}
-	isTrusted := func(address netip.Addr) bool {
-		for _, prefix := range prefixes {
-			if prefix.Contains(address.Unmap()) {
-				return true
-			}
+	return prefixes
+}
+
+func isTrustedAddress(prefixes []netip.Prefix, address netip.Addr) bool {
+	for _, prefix := range prefixes {
+		if prefix.Contains(address.Unmap()) {
+			return true
 		}
-		return false
 	}
-	return func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			peer, ok := parseRemoteAddress(r.RemoteAddr)
-			if !ok || !isTrusted(peer) {
-				next.ServeHTTP(w, r)
-				return
-			}
-			chain := make([]netip.Addr, 0, 4)
-			for _, raw := range strings.Split(r.Header.Get("X-Forwarded-For"), ",") {
-				if address, err := netip.ParseAddr(strings.TrimSpace(raw)); err == nil {
-					chain = append(chain, address.Unmap())
-				}
-			}
-			if len(chain) == 0 {
-				if address, err := netip.ParseAddr(strings.TrimSpace(r.Header.Get("X-Real-IP"))); err == nil {
-					chain = append(chain, address.Unmap())
-				}
-			}
-			chain = append(chain, peer.Unmap())
-			for index := len(chain) - 1; index >= 0; index-- {
-				if index == 0 || !isTrusted(chain[index]) {
-					r.RemoteAddr = chain[index].String()
-					break
-				}
-			}
-			next.ServeHTTP(w, r)
-		})
+	return false
+}
+
+func forwardedAddressChain(r *http.Request, peer netip.Addr) []netip.Addr {
+	chain := make([]netip.Addr, 0, 4)
+	for _, raw := range strings.Split(r.Header.Get("X-Forwarded-For"), ",") {
+		if address, err := netip.ParseAddr(strings.TrimSpace(raw)); err == nil {
+			chain = append(chain, address.Unmap())
+		}
 	}
+	if len(chain) == 0 {
+		if address, err := netip.ParseAddr(strings.TrimSpace(r.Header.Get("X-Real-IP"))); err == nil {
+			chain = append(chain, address.Unmap())
+		}
+	}
+	return append(chain, peer.Unmap())
+}
+
+func clientAddress(chain []netip.Addr, trustedPrefixes []netip.Prefix) netip.Addr {
+	for index := len(chain) - 1; index > 0; index-- {
+		if !isTrustedAddress(trustedPrefixes, chain[index]) {
+			return chain[index]
+		}
+	}
+	return chain[0]
 }
 
 func parseRemoteAddress(raw string) (netip.Addr, bool) {

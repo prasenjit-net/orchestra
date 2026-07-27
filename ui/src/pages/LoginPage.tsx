@@ -50,7 +50,7 @@ export default function LoginPage() {
           <h1 className="text-xl font-semibold text-gray-900 dark:text-slate-100">Sign in</h1>
           <div className="mt-6 space-y-4">
             <label className="block text-sm font-medium text-gray-700 dark:text-slate-300">
-              Username
+              <span>Username</span>
               <input
                 autoFocus
                 autoComplete="username"
@@ -61,7 +61,7 @@ export default function LoginPage() {
               />
             </label>
             <label className="block text-sm font-medium text-gray-700 dark:text-slate-300">
-              Password
+              <span>Password</span>
               <span className="relative mt-1.5 block">
                 <input
                   type={showPassword ? 'text' : 'password'}

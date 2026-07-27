@@ -1,9 +1,10 @@
 import { useMemo, useState, type FormEvent } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { KeyRound, Plus, Search, X } from 'lucide-react'
+import { KeyRound, Plus, Search } from 'lucide-react'
 import { usersApi } from '../../services/api'
 import type { AuthUser, EntitlementEffect, UserRole } from '../../types'
 import { useAuth } from '../../auth/AuthProvider'
+import SecurityDialog from './SecurityDialog'
 
 const roles: UserRole[] = ['admin', 'developer', 'observer']
 
@@ -15,20 +16,6 @@ interface CreateDraft {
 }
 
 const emptyCreate: CreateDraft = { username: '', displayName: '', role: 'observer', password: '' }
-
-function Dialog({ title, children, onClose }: { title: string; children: React.ReactNode; onClose: () => void }) {
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 p-4" role="dialog" aria-modal="true" aria-label={title}>
-      <div className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-lg border border-gray-200 bg-white shadow-xl dark:border-slate-700 dark:bg-slate-900">
-        <div className="sticky top-0 flex items-center justify-between border-b border-gray-200 bg-white px-5 py-4 dark:border-slate-700 dark:bg-slate-900">
-          <h2 className="text-base font-semibold text-gray-900 dark:text-slate-100">{title}</h2>
-          <button type="button" onClick={onClose} className="flex h-8 w-8 items-center justify-center rounded-md text-gray-500 hover:bg-gray-100 dark:text-slate-400 dark:hover:bg-slate-800" aria-label="Close"><X className="h-4 w-4" /></button>
-        </div>
-        {children}
-      </div>
-    </div>
-  )
-}
 
 export default function UserManagementPanel() {
   const { hasPermission } = useAuth()
@@ -158,7 +145,7 @@ export default function UserManagementPanel() {
       </div>
 
       {createOpen && (
-        <Dialog title="Add user" onClose={() => setCreateOpen(false)}>
+        <SecurityDialog title="Add user" onClose={() => setCreateOpen(false)}>
           <form onSubmit={createUser} className="space-y-4 p-5">
             <div className="grid gap-4 sm:grid-cols-2">
               <label className="text-sm font-medium">Username<input autoFocus value={createDraft.username} onChange={(event) => setCreateDraft({ ...createDraft, username: event.target.value })} required className="mt-1.5 w-full rounded-md border border-gray-300 bg-white px-3 py-2 dark:border-slate-700 dark:bg-slate-950" /></label>
@@ -167,13 +154,13 @@ export default function UserManagementPanel() {
             <label className="block text-sm font-medium">Role<select value={createDraft.role} onChange={(event) => setCreateDraft({ ...createDraft, role: event.target.value as UserRole })} className="mt-1.5 w-full rounded-md border border-gray-300 bg-white px-3 py-2 capitalize dark:border-slate-700 dark:bg-slate-950">{roles.map((role) => <option key={role}>{role}</option>)}</select></label>
             <label className="block text-sm font-medium">Temporary password<input type="password" minLength={12} maxLength={128} value={createDraft.password} onChange={(event) => setCreateDraft({ ...createDraft, password: event.target.value })} placeholder="Generate automatically" className="mt-1.5 w-full rounded-md border border-gray-300 bg-white px-3 py-2 dark:border-slate-700 dark:bg-slate-950" /></label>
             {error && <p className="text-sm text-red-600 dark:text-red-300">{error}</p>}
-            <div className="flex justify-end gap-2"><button type="button" onClick={() => setCreateOpen(false)} className="rounded-md border border-gray-300 px-3.5 py-2 text-sm dark:border-slate-700">Cancel</button><button disabled={saving} className="rounded-md bg-primary-600 px-3.5 py-2 text-sm font-semibold text-white disabled:opacity-60">Create user</button></div>
+            <div className="flex justify-end gap-2"><button type="button" onClick={() => setCreateOpen(false)} className="rounded-md border border-gray-300 px-3.5 py-2 text-sm dark:border-slate-700">Cancel</button><button type="submit" disabled={saving} className="rounded-md bg-primary-600 px-3.5 py-2 text-sm font-semibold text-white disabled:opacity-60">Create user</button></div>
           </form>
-        </Dialog>
+        </SecurityDialog>
       )}
 
       {editing && (
-        <Dialog title={editing.username} onClose={() => setEditing(null)}>
+        <SecurityDialog title={editing.username} onClose={() => setEditing(null)}>
           <form onSubmit={saveUser} className="space-y-5 p-5">
             <div className="grid gap-4 sm:grid-cols-3">
               <label className="text-sm font-medium sm:col-span-1">Display name<input disabled={!canManageUsers} value={editDisplayName} onChange={(event) => setEditDisplayName(event.target.value)} className="mt-1.5 w-full rounded-md border border-gray-300 bg-white px-3 py-2 disabled:opacity-60 dark:border-slate-700 dark:bg-slate-950" /></label>
@@ -194,16 +181,16 @@ export default function UserManagementPanel() {
             {error && <p className="text-sm text-red-600 dark:text-red-300">{error}</p>}
             <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-between">
               {canManageUsers ? <button type="button" onClick={() => void resetPassword()} disabled={saving} className="inline-flex items-center justify-center gap-2 rounded-md border border-gray-300 px-3.5 py-2 text-sm dark:border-slate-700"><KeyRound className="h-4 w-4" /> Reset password</button> : <span />}
-              <div className="flex justify-end gap-2"><button type="button" onClick={() => setEditing(null)} className="rounded-md border border-gray-300 px-3.5 py-2 text-sm dark:border-slate-700">Cancel</button><button disabled={saving} className="rounded-md bg-primary-600 px-3.5 py-2 text-sm font-semibold text-white disabled:opacity-60">Save changes</button></div>
+              <div className="flex justify-end gap-2"><button type="button" onClick={() => setEditing(null)} className="rounded-md border border-gray-300 px-3.5 py-2 text-sm dark:border-slate-700">Cancel</button><button type="submit" disabled={saving} className="rounded-md bg-primary-600 px-3.5 py-2 text-sm font-semibold text-white disabled:opacity-60">Save changes</button></div>
             </div>
           </form>
-        </Dialog>
+        </SecurityDialog>
       )}
 
       {temporaryPassword && (
-        <Dialog title="Temporary password" onClose={() => setTemporaryPassword('')}>
+        <SecurityDialog title="Temporary password" onClose={() => setTemporaryPassword('')}>
           <div className="p-5"><div className="break-all rounded-md bg-gray-100 p-4 font-mono text-sm text-gray-900 dark:bg-slate-950 dark:text-slate-100">{temporaryPassword}</div><button type="button" onClick={() => void navigator.clipboard.writeText(temporaryPassword)} className="mt-4 rounded-md bg-primary-600 px-3.5 py-2 text-sm font-semibold text-white">Copy password</button></div>
-        </Dialog>
+        </SecurityDialog>
       )}
     </div>
   )

@@ -19,13 +19,13 @@ func authenticateSession(identity *auth.Service, cfg config.Config) func(http.Ha
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			cookie, err := r.Cookie(auth.SessionCookieName)
 			if err != nil || cookie.Value == "" {
-				writeAPIError(w, http.StatusUnauthorized, "AUTH_UNAUTHENTICATED", "authentication required")
+				writeAuthenticationRequired(w)
 				return
 			}
 			principal, _, err := identity.AuthenticateSession(r.Context(), cookie.Value)
 			if err != nil {
 				clearSessionCookie(w, cookieSecureConfig(cfg))
-				writeAPIError(w, http.StatusUnauthorized, "AUTH_UNAUTHENTICATED", "authentication required")
+				writeAuthenticationRequired(w)
 				return
 			}
 			next.ServeHTTP(w, r.WithContext(auth.WithPrincipal(r.Context(), principal)))
@@ -38,7 +38,7 @@ func (h *Handler) requirePermission(permission auth.Permission) func(http.Handle
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			principal, ok := auth.PrincipalFromContext(r.Context())
 			if !ok {
-				writeAPIError(w, http.StatusUnauthorized, "AUTH_UNAUTHENTICATED", "authentication required")
+				writeAuthenticationRequired(w)
 				return
 			}
 			if principal.User != nil && principal.User.MustChangePassword {
@@ -65,7 +65,7 @@ func (h *Handler) auditAuthorizationDenied(r *http.Request, principal auth.Princ
 	})
 	_ = h.auth.Audit(r.Context(), auth.AuditEvent{
 		RequestID: middleware.GetReqID(r.Context()), ActorType: principal.Type, ActorID: principal.ID,
-		Action: "authorization.denied", Outcome: "denied", SourceIP: r.RemoteAddr,
+		Action: authorizationDeniedAction, Outcome: "denied", SourceIP: r.RemoteAddr,
 		UserAgent: r.UserAgent(), Metadata: metadata,
 	})
 }

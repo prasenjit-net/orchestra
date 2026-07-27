@@ -12,13 +12,13 @@ function StatTile({
   icon: Icon,
   tone,
   to,
-}: {
+}: Readonly<{
   label: string
   value: number | string
   icon: typeof Activity
   tone: string
   to?: string
-}) {
+}>) {
   const inner = (
     <div className={`rounded-xl border bg-white p-5 shadow-sm transition-colors dark:bg-slate-900 ${tone}`}>
       <div className="flex items-center justify-between">
@@ -31,7 +31,7 @@ function StatTile({
   return to ? <Link to={to}>{inner}</Link> : inner
 }
 
-function RelativeTime({ value }: { value?: string }) {
+function RelativeTime({ value }: Readonly<{ value?: string }>) {
   if (!value) return <span className="text-gray-400">—</span>
   const diff = Date.now() - new Date(value).getTime()
   const mins = Math.floor(diff / 60_000)
@@ -45,7 +45,7 @@ function RelativeTime({ value }: { value?: string }) {
   return <span title={formatDate(value)}>{label}</span>
 }
 
-function TaskRow({ task, onAction, canControl }: { task: WorkflowTask; onAction: (id: number, action: string) => void; canControl: boolean }) {
+function TaskRow({ task, onAction, canControl }: Readonly<{ task: WorkflowTask; onAction: (id: number, action: string) => void; canControl: boolean }>) {
   const actions = availableTaskActions(task)
   return (
     <div className="flex items-center gap-3 py-3 text-sm">

@@ -66,7 +66,7 @@ func (h *WebhookHandler) StartWorkflow(w http.ResponseWriter, r *http.Request) {
 	}
 	principal, key, err := externalPrincipalFromRequest(r)
 	if err != nil {
-		writeAPIError(w, http.StatusUnauthorized, "AUTH_UNAUTHENTICATED", "valid API key required")
+		writeAPIError(w, http.StatusUnauthorized, authUnauthenticatedCode, validAPIKeyRequiredMessage)
 		return
 	}
 	if key != nil {
@@ -74,7 +74,7 @@ func (h *WebhookHandler) StartWorkflow(w http.ResponseWriter, r *http.Request) {
 			DefinitionID: definitionID, Action: "start", PinnedVersion: definitionVersion > 0,
 			HasCallbackURL: callbackURL != "",
 		}); err != nil {
-			h.auditExternal(r, principal, "authorization.denied", "workflow_definition", definitionID, "denied")
+			h.auditExternal(r, principal, authorizationDeniedAction, "workflow_definition", definitionID, "denied")
 			writeAPIError(w, http.StatusForbidden, "AUTH_FORBIDDEN", "API key is not authorized for this workflow action")
 			return
 		}
@@ -130,7 +130,7 @@ func (h *WebhookHandler) SendSignal(w http.ResponseWriter, r *http.Request) {
 	}
 	principal, key, err := externalPrincipalFromRequest(r)
 	if err != nil {
-		writeAPIError(w, http.StatusUnauthorized, "AUTH_UNAUTHENTICATED", "valid API key required")
+		writeAPIError(w, http.StatusUnauthorized, authUnauthenticatedCode, validAPIKeyRequiredMessage)
 		return
 	}
 	if key != nil {
@@ -138,8 +138,8 @@ func (h *WebhookHandler) SendSignal(w http.ResponseWriter, r *http.Request) {
 			DefinitionID: instanceBefore.DefinitionID, Action: "signal", SignalName: body.Name,
 			WorkflowTriggerType: instanceBefore.TriggerPrincipalType, WorkflowTriggerID: instanceBefore.TriggerPrincipalID,
 		}); err != nil {
-			h.auditExternal(r, principal, "authorization.denied", "workflow", workflowID, "denied")
-			writeAPIError(w, http.StatusNotFound, "RESOURCE_NOT_FOUND", "workflow not found")
+			h.auditExternal(r, principal, authorizationDeniedAction, "workflow", workflowID, "denied")
+			writeAPIError(w, http.StatusNotFound, "RESOURCE_NOT_FOUND", workflowNotFoundMessage)
 			return
 		}
 	}
@@ -150,7 +150,7 @@ func (h *WebhookHandler) SendSignal(w http.ResponseWriter, r *http.Request) {
 	})
 	if err != nil {
 		if errors.Is(err, workflow.ErrNotFound) {
-			writeError(w, http.StatusNotFound, "workflow not found")
+			writeError(w, http.StatusNotFound, workflowNotFoundMessage)
 			return
 		}
 		writeWorkflowError(w, err)
@@ -174,7 +174,7 @@ func (h *WebhookHandler) ListSignals(w http.ResponseWriter, r *http.Request) {
 	instance, err := h.workflow.GetWorkflow(r.Context(), workflowID)
 	if err != nil {
 		if errors.Is(err, workflow.ErrNotFound) {
-			writeError(w, http.StatusNotFound, "workflow not found")
+			writeError(w, http.StatusNotFound, workflowNotFoundMessage)
 			return
 		}
 		writeWorkflowError(w, err)
@@ -182,7 +182,7 @@ func (h *WebhookHandler) ListSignals(w http.ResponseWriter, r *http.Request) {
 	}
 	principal, key, authErr := externalPrincipalFromRequest(r)
 	if authErr != nil {
-		writeAPIError(w, http.StatusUnauthorized, "AUTH_UNAUTHENTICATED", "valid API key required")
+		writeAPIError(w, http.StatusUnauthorized, authUnauthenticatedCode, validAPIKeyRequiredMessage)
 		return
 	}
 	if key != nil {
@@ -190,8 +190,8 @@ func (h *WebhookHandler) ListSignals(w http.ResponseWriter, r *http.Request) {
 			DefinitionID: instance.DefinitionID, Action: "status.read",
 			WorkflowTriggerType: instance.TriggerPrincipalType, WorkflowTriggerID: instance.TriggerPrincipalID,
 		}); err != nil {
-			h.auditExternal(r, principal, "authorization.denied", "workflow", workflowID, "denied")
-			writeAPIError(w, http.StatusNotFound, "RESOURCE_NOT_FOUND", "workflow not found")
+			h.auditExternal(r, principal, authorizationDeniedAction, "workflow", workflowID, "denied")
+			writeAPIError(w, http.StatusNotFound, "RESOURCE_NOT_FOUND", workflowNotFoundMessage)
 			return
 		}
 	}
@@ -216,7 +216,7 @@ func (h *WebhookHandler) GetResult(w http.ResponseWriter, r *http.Request) {
 	instance, err := h.workflow.GetWorkflow(r.Context(), workflowID)
 	if err != nil {
 		if errors.Is(err, workflow.ErrNotFound) {
-			writeError(w, http.StatusNotFound, "workflow not found")
+			writeError(w, http.StatusNotFound, workflowNotFoundMessage)
 			return
 		}
 		writeWorkflowError(w, err)
@@ -224,7 +224,7 @@ func (h *WebhookHandler) GetResult(w http.ResponseWriter, r *http.Request) {
 	}
 	principal, key, authErr := externalPrincipalFromRequest(r)
 	if authErr != nil {
-		writeAPIError(w, http.StatusUnauthorized, "AUTH_UNAUTHENTICATED", "valid API key required")
+		writeAPIError(w, http.StatusUnauthorized, authUnauthenticatedCode, validAPIKeyRequiredMessage)
 		return
 	}
 	if key != nil {
@@ -232,8 +232,8 @@ func (h *WebhookHandler) GetResult(w http.ResponseWriter, r *http.Request) {
 			DefinitionID: instance.DefinitionID, Action: "result.read",
 			WorkflowTriggerType: instance.TriggerPrincipalType, WorkflowTriggerID: instance.TriggerPrincipalID,
 		}); err != nil {
-			h.auditExternal(r, principal, "authorization.denied", "workflow", workflowID, "denied")
-			writeAPIError(w, http.StatusNotFound, "RESOURCE_NOT_FOUND", "workflow not found")
+			h.auditExternal(r, principal, authorizationDeniedAction, "workflow", workflowID, "denied")
+			writeAPIError(w, http.StatusNotFound, "RESOURCE_NOT_FOUND", workflowNotFoundMessage)
 			return
 		}
 	}
@@ -286,7 +286,7 @@ func externalAPIKeyAuthentication(cfg config.Config, identity *auth.Service) fun
 			if identity == nil || !strings.HasPrefix(header, "Bearer ") || strings.Contains(header[7:], " ") {
 				w.Header().Set("WWW-Authenticate", `Bearer realm="orchestra-webhooks"`)
 				auditExternalAuthenticationFailure(r, identity, "invalid_or_missing_key")
-				writeAPIError(w, http.StatusUnauthorized, "AUTH_UNAUTHENTICATED", "valid API key required")
+				writeAPIError(w, http.StatusUnauthorized, authUnauthenticatedCode, validAPIKeyRequiredMessage)
 				return
 			}
 			principal, key, err := identity.AuthenticateAPIKey(r.Context(), strings.TrimSpace(header[7:]), r.RemoteAddr)
@@ -294,8 +294,8 @@ func externalAPIKeyAuthentication(cfg config.Config, identity *auth.Service) fun
 				w.Header().Set("WWW-Authenticate", `Bearer realm="orchestra-webhooks"`)
 				auditExternalAuthenticationFailure(r, identity, "invalid_key")
 				status := http.StatusUnauthorized
-				code := "AUTH_UNAUTHENTICATED"
-				message := "valid API key required"
+				code := authUnauthenticatedCode
+				message := validAPIKeyRequiredMessage
 				if errors.Is(err, auth.ErrForbidden) {
 					status = http.StatusTooManyRequests
 					code = "RATE_LIMITED"

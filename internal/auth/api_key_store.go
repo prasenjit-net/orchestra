@@ -44,17 +44,25 @@ func (s *Store) insertAPIKeyTx(ctx context.Context, tx *sql.Tx, input CreateAPIK
 		expires = formatTime(*input.ExpiresAt)
 	}
 	now := formatTime(input.Now)
-	_, err := tx.ExecContext(ctx, s.rebind(`INSERT INTO api_keys (
+	_, err := s.txExec(ctx, tx, `INSERT INTO api_keys (
 		id, name, description, key_prefix, secret_hash, created_by_user_id, status,
 		expires_at, created_at, updated_at, rotated_from_id
-	) VALUES (?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?)`),
+	) VALUES (?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?)`,
 		input.ID, input.Name, input.Description, input.KeyPrefix, input.SecretHash,
 		input.CreatedByUserID, expires, now, now, nullableString(input.RotatedFromID),
 	)
 	if err != nil {
 		return fmt.Errorf("insert api key: %w", err)
 	}
-	for _, grant := range input.Grants {
+	if err := s.insertAPIKeyGrantsTx(ctx, tx, input.ID, input.Grants, input.Now); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (s *Store) insertAPIKeyGrantsTx(ctx context.Context, tx *sql.Tx, keyID string, grants []APIKeyGrant, now time.Time) error {
+	createdAt := formatTime(now)
+	for _, grant := range grants {
 		var signalNames any
 		if grant.SignalNames != nil {
 			encoded, err := json.Marshal(grant.SignalNames)
@@ -70,12 +78,12 @@ func (s *Store) insertAPIKeyTx(ctx context.Context, tx *sql.Tx, input CreateAPIK
 		if grant.AllowCallbackURL {
 			callback = 1
 		}
-		_, err := tx.ExecContext(ctx, s.rebind(`INSERT INTO api_key_workflow_grants (
+		_, err := s.txExec(ctx, tx, `INSERT INTO api_key_workflow_grants (
 			api_key_id, workflow_definition_id, action, instance_scope,
 			allow_pinned_versions, allow_callback_url, signal_names_json, created_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`),
-			input.ID, grant.WorkflowDefinitionID, grant.Action, grant.InstanceScope,
-			pinned, callback, signalNames, now,
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+			keyID, grant.WorkflowDefinitionID, grant.Action, grant.InstanceScope,
+			pinned, callback, signalNames, createdAt,
 		)
 		if err != nil {
 			return fmt.Errorf("insert api key grant: %w", err)
@@ -163,20 +171,22 @@ func (s *Store) ListAPIKeys(ctx context.Context, ownerID string, includeAll bool
 	if offset < 0 {
 		offset = 0
 	}
-	where := ""
-	args := make([]any, 0, 3)
-	if !includeAll {
-		where = ` WHERE created_by_user_id = ?`
-		args = append(args, ownerID)
-	}
 	var total int
-	if err := s.queryRow(ctx, `SELECT COUNT(*) FROM api_keys`+where, args...).Scan(&total); err != nil {
-		return nil, 0, fmt.Errorf("count api keys: %w", err)
+	var rows *sql.Rows
+	var err error
+	if includeAll {
+		err = s.queryRow(ctx, `SELECT COUNT(*) FROM api_keys`).Scan(&total)
+		if err == nil {
+			rows, err = s.query(ctx, `SELECT `+apiKeyColumns+` FROM api_keys ORDER BY created_at DESC LIMIT ? OFFSET ?`, limit, offset)
+		}
+	} else {
+		err = s.queryRow(ctx, `SELECT COUNT(*) FROM api_keys WHERE created_by_user_id = ?`, ownerID).Scan(&total)
+		if err == nil {
+			rows, err = s.query(ctx, `SELECT `+apiKeyColumns+` FROM api_keys WHERE created_by_user_id = ? ORDER BY created_at DESC LIMIT ? OFFSET ?`, ownerID, limit, offset)
+		}
 	}
-	args = append(args, limit, offset)
-	rows, err := s.query(ctx, `SELECT `+apiKeyColumns+` FROM api_keys`+where+` ORDER BY created_at DESC LIMIT ? OFFSET ?`, args...)
 	if err != nil {
-		return nil, 0, fmt.Errorf("list api keys: %w", err)
+		return nil, 0, fmt.Errorf("count api keys: %w", err)
 	}
 	result := make([]APIKey, 0)
 	for rows.Next() {
@@ -242,7 +252,7 @@ func (s *Store) UpdateAPIKey(ctx context.Context, id, name, description string, 
 	if expiresAt != nil {
 		expires = formatTime(*expiresAt)
 	}
-	result, err := tx.ExecContext(ctx, s.rebind(`UPDATE api_keys SET name = ?, description = ?, expires_at = ?, updated_at = ? WHERE id = ? AND status = 'active'`),
+	result, err := s.txExec(ctx, tx, `UPDATE api_keys SET name = ?, description = ?, expires_at = ?, updated_at = ? WHERE id = ? AND status = 'active'`,
 		name, description, expires, formatTime(now), id)
 	if err != nil {
 		return APIKey{}, fmt.Errorf("update api key: %w", err)
@@ -250,30 +260,11 @@ func (s *Store) UpdateAPIKey(ctx context.Context, id, name, description string, 
 	if affected, _ := result.RowsAffected(); affected == 0 {
 		return APIKey{}, ErrNotFound
 	}
-	if _, err := tx.ExecContext(ctx, s.rebind(`DELETE FROM api_key_workflow_grants WHERE api_key_id = ?`), id); err != nil {
+	if _, err := s.txExec(ctx, tx, `DELETE FROM api_key_workflow_grants WHERE api_key_id = ?`, id); err != nil {
 		return APIKey{}, err
 	}
-	copyInput := CreateAPIKeyInput{ID: id, Grants: grants, Now: now}
-	for _, grant := range copyInput.Grants {
-		var signalNames any
-		if grant.SignalNames != nil {
-			encoded, marshalErr := json.Marshal(grant.SignalNames)
-			if marshalErr != nil {
-				return APIKey{}, marshalErr
-			}
-			signalNames = string(encoded)
-		}
-		pinned, callback := 0, 0
-		if grant.AllowPinnedVersions {
-			pinned = 1
-		}
-		if grant.AllowCallbackURL {
-			callback = 1
-		}
-		if _, err := tx.ExecContext(ctx, s.rebind(`INSERT INTO api_key_workflow_grants (api_key_id, workflow_definition_id, action, instance_scope, allow_pinned_versions, allow_callback_url, signal_names_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`),
-			id, grant.WorkflowDefinitionID, grant.Action, grant.InstanceScope, pinned, callback, signalNames, formatTime(now)); err != nil {
-			return APIKey{}, err
-		}
+	if err := s.insertAPIKeyGrantsTx(ctx, tx, id, grants, now); err != nil {
+		return APIKey{}, err
 	}
 	if err := tx.Commit(); err != nil {
 		return APIKey{}, err
@@ -299,7 +290,7 @@ func (s *Store) RotateAPIKey(ctx context.Context, oldID, actorID string, input C
 		return APIKey{}, err
 	}
 	defer tx.Rollback()
-	result, err := tx.ExecContext(ctx, s.rebind(`UPDATE api_keys SET status = 'revoked', revoked_at = ?, revoked_by = ?, updated_at = ? WHERE id = ? AND status = 'active'`),
+	result, err := s.txExec(ctx, tx, `UPDATE api_keys SET status = 'revoked', revoked_at = ?, revoked_by = ?, updated_at = ? WHERE id = ? AND status = 'active'`,
 		formatTime(input.Now), actorID, formatTime(input.Now), oldID)
 	if err != nil {
 		return APIKey{}, err

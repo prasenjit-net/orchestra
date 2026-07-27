@@ -221,8 +221,9 @@ export const auditApi = {
     if (filters?.action) params.set('action', filters.action)
     if (filters?.outcome) params.set('outcome', filters.outcome)
     const query = params.toString()
+    const path = query ? `/audit-events?${query}` : '/audit-events'
     return handleResponse<AuditEventsResponse>(
-      await apiFetch(buildApiUrl(`/audit-events${query ? `?${query}` : ''}`)),
+      await apiFetch(buildApiUrl(path)),
     )
   },
 }

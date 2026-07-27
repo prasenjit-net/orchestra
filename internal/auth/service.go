@@ -68,22 +68,11 @@ type BootstrapResult struct {
 }
 
 func (s *Service) BootstrapInitialAdmin(ctx context.Context) (BootstrapResult, error) {
-	bootstrapMu.Lock()
-	defer bootstrapMu.Unlock()
-
-	var lockConn *sql.Conn
-	if s.dialect.IsPostgres() {
-		var err error
-		lockConn, err = s.store.db.Conn(ctx)
-		if err != nil {
-			return BootstrapResult{}, fmt.Errorf("open bootstrap lock connection: %w", err)
-		}
-		defer lockConn.Close()
-		if _, err := lockConn.ExecContext(ctx, `SELECT pg_advisory_lock(7349723410821)`); err != nil {
-			return BootstrapResult{}, fmt.Errorf("acquire bootstrap lock: %w", err)
-		}
-		defer func() { _, _ = lockConn.ExecContext(context.Background(), `SELECT pg_advisory_unlock(7349723410821)`) }()
+	release, err := s.acquireBootstrapLock(ctx)
+	if err != nil {
+		return BootstrapResult{}, err
 	}
+	defer release()
 
 	count, err := s.store.CountUsers(ctx)
 	if err != nil {
@@ -93,51 +82,25 @@ func (s *Service) BootstrapInitialAdmin(ctx context.Context) (BootstrapResult, e
 		return BootstrapResult{}, nil
 	}
 
-	username := strings.TrimSpace(os.Getenv("APP_AUTH_INITIAL_ADMIN_USERNAME"))
-	if username == "" {
-		username = "admin"
-	}
-	normalized, err := NormalizeUsername(username)
-	if err != nil {
-		return BootstrapResult{}, fmt.Errorf("invalid initial admin username: %w", err)
-	}
-
-	password, generated, err := s.bootstrapPassword()
+	credential, err := s.prepareBootstrapAdmin()
 	if err != nil {
 		return BootstrapResult{}, err
-	}
-	passwordHash, err := HashPassword(password)
-	if err != nil {
-		return BootstrapResult{}, fmt.Errorf("invalid initial admin password: %w", err)
-	}
-
-	outputPath := ""
-	if generated {
-		outputPath = s.cfg.BootstrapOutputPath
-		if outputPath == "" {
-			return BootstrapResult{}, errors.New("auth.bootstrapOutputPath is required when generating an initial password")
-		}
-		if err := writeBootstrapCredential(outputPath, username, password); err != nil {
-			return BootstrapResult{}, err
-		}
 	}
 
 	now := s.now()
 	user, err := s.store.CreateUser(ctx, CreateUserInput{
 		ID:                 newID("usr"),
-		Username:           username,
-		UsernameNormalized: normalized,
+		Username:           credential.username,
+		UsernameNormalized: credential.normalizedUsername,
 		DisplayName:        "Administrator",
-		PasswordHash:       passwordHash,
+		PasswordHash:       credential.passwordHash,
 		Role:               RoleAdmin,
 		Status:             "active",
 		MustChangePassword: true,
 		Now:                now,
 	})
 	if err != nil {
-		if generated {
-			_ = os.Remove(outputPath)
-		}
+		credential.removeOutput()
 		if errors.Is(err, ErrConflict) {
 			return BootstrapResult{}, nil
 		}
@@ -151,7 +114,73 @@ func (s *Service) BootstrapInitialAdmin(ctx context.Context) (BootstrapResult, e
 		ResourceID:   user.ID,
 		Outcome:      "success",
 	})
-	return BootstrapResult{Created: true, Username: username, OutputPath: outputPath}, nil
+	return BootstrapResult{Created: true, Username: credential.username, OutputPath: credential.outputPath}, nil
+}
+
+func (s *Service) acquireBootstrapLock(ctx context.Context) (func(), error) {
+	bootstrapMu.Lock()
+	if !s.dialect.IsPostgres() {
+		return bootstrapMu.Unlock, nil
+	}
+	conn, err := s.store.db.Conn(ctx)
+	if err != nil {
+		bootstrapMu.Unlock()
+		return nil, fmt.Errorf("open bootstrap lock connection: %w", err)
+	}
+	if _, err := conn.ExecContext(ctx, `SELECT pg_advisory_lock(7349723410821)`); err != nil {
+		_ = conn.Close()
+		bootstrapMu.Unlock()
+		return nil, fmt.Errorf("acquire bootstrap lock: %w", err)
+	}
+	return func() {
+		_, _ = conn.ExecContext(context.Background(), `SELECT pg_advisory_unlock(7349723410821)`)
+		_ = conn.Close()
+		bootstrapMu.Unlock()
+	}, nil
+}
+
+type bootstrapAdminCredential struct {
+	username           string
+	normalizedUsername string
+	passwordHash       string
+	outputPath         string
+}
+
+func (s *Service) prepareBootstrapAdmin() (bootstrapAdminCredential, error) {
+	username := strings.TrimSpace(os.Getenv("APP_AUTH_INITIAL_ADMIN_USERNAME"))
+	if username == "" {
+		username = "admin"
+	}
+	normalized, err := NormalizeUsername(username)
+	if err != nil {
+		return bootstrapAdminCredential{}, fmt.Errorf("invalid initial admin username: %w", err)
+	}
+	password, generated, err := s.bootstrapPassword()
+	if err != nil {
+		return bootstrapAdminCredential{}, err
+	}
+	passwordHash, err := HashPassword(password)
+	if err != nil {
+		return bootstrapAdminCredential{}, fmt.Errorf("invalid initial admin password: %w", err)
+	}
+	credential := bootstrapAdminCredential{username: username, normalizedUsername: normalized, passwordHash: passwordHash}
+	if !generated {
+		return credential, nil
+	}
+	credential.outputPath = s.cfg.BootstrapOutputPath
+	if credential.outputPath == "" {
+		return bootstrapAdminCredential{}, errors.New("auth.bootstrapOutputPath is required when generating an initial password")
+	}
+	if err := writeBootstrapCredential(credential.outputPath, username, password); err != nil {
+		return bootstrapAdminCredential{}, err
+	}
+	return credential, nil
+}
+
+func (c bootstrapAdminCredential) removeOutput() {
+	if c.outputPath != "" {
+		_ = os.Remove(c.outputPath)
+	}
 }
 
 func (s *Service) bootstrapPassword() (string, bool, error) {
@@ -259,59 +288,21 @@ type SessionResult struct {
 func (s *Service) Login(ctx context.Context, input LoginInput) (SessionResult, error) {
 	now := s.now()
 	normalized, normalizeErr := NormalizeUsername(input.Username)
-	accountBucket := hashValue("login-account:" + normalized)
 	ip := normalizeIP(input.SourceIP)
-	ipBucket := hashValue("login-ip:" + ip)
-	if allowed, _, err := s.store.ConsumeRateLimit(ctx, accountBucket, "login_account", now, time.Minute, 10); err != nil {
+	if err := s.checkLoginRateLimits(ctx, input, normalized, ip, now); err != nil {
 		return SessionResult{}, err
-	} else if !allowed {
-		s.auditLogin(ctx, input, "denied", "rate_limited")
-		return SessionResult{}, ErrInvalidCredentials
 	}
-	if allowed, _, err := s.store.ConsumeRateLimit(ctx, ipBucket, "login_ip", now, time.Minute, 60); err != nil {
-		return SessionResult{}, err
-	} else if !allowed {
-		s.auditLogin(ctx, input, "denied", "rate_limited")
-		return SessionResult{}, ErrInvalidCredentials
-	}
-
-	if normalizeErr != nil {
-		VerifyPassword(s.dummyHash, input.Password)
-		s.auditLogin(ctx, input, "failure", "invalid_credentials")
-		return SessionResult{}, ErrInvalidCredentials
-	}
-	record, err := s.store.userRecordByUsername(ctx, normalized)
+	record, err := s.loginRecord(ctx, input, normalized, normalizeErr, now)
 	if err != nil {
-		if errors.Is(err, ErrNotFound) {
-			VerifyPassword(s.dummyHash, input.Password)
-			s.auditLogin(ctx, input, "failure", "invalid_credentials")
-			return SessionResult{}, ErrInvalidCredentials
-		}
 		return SessionResult{}, err
-	}
-	if record.Status != "active" || (record.LockedUntil != nil && now.Before(*record.LockedUntil)) {
-		VerifyPassword(s.dummyHash, input.Password)
-		s.auditLogin(ctx, input, "failure", "invalid_credentials")
-		return SessionResult{}, ErrInvalidCredentials
 	}
 	valid, needsRehash := VerifyPassword(record.PasswordHash, input.Password)
 	if !valid {
-		failed := record.FailedLoginCount + 1
-		var lockedUntil *time.Time
-		if failed >= 10 {
-			locked := now.Add(15 * time.Minute)
-			lockedUntil = &locked
-		}
-		_ = s.store.UpdateLoginFailure(ctx, record.ID, failed, lockedUntil, now)
-		s.auditLogin(ctx, input, "failure", "invalid_credentials")
-		return SessionResult{}, ErrInvalidCredentials
+		return SessionResult{}, s.recordFailedLogin(ctx, input, record, now)
 	}
-	newHash := ""
-	if needsRehash {
-		newHash, err = HashPassword(input.Password)
-		if err != nil {
-			return SessionResult{}, err
-		}
+	newHash, err := updatedPasswordHash(input.Password, needsRehash)
+	if err != nil {
+		return SessionResult{}, err
 	}
 	if err := s.store.UpdateLoginSuccess(ctx, record.ID, newHash, now); err != nil {
 		return SessionResult{}, err
@@ -337,6 +328,70 @@ func (s *Service) Login(ctx context.Context, input LoginInput) (SessionResult, e
 		UserAgent:    input.UserAgent,
 	})
 	return result, nil
+}
+
+func (s *Service) checkLoginRateLimits(ctx context.Context, input LoginInput, normalizedUsername, ip string, now time.Time) error {
+	buckets := []struct {
+		hash       string
+		bucketType string
+		limit      int
+	}{
+		{hashValue("login-account:" + normalizedUsername), "login_account", 10},
+		{hashValue("login-ip:" + ip), "login_ip", 60},
+	}
+	for _, bucket := range buckets {
+		allowed, _, err := s.store.ConsumeRateLimit(ctx, bucket.hash, bucket.bucketType, now, time.Minute, bucket.limit)
+		if err != nil {
+			return err
+		}
+		if !allowed {
+			s.auditLogin(ctx, input, "denied", "rate_limited")
+			return ErrInvalidCredentials
+		}
+	}
+	return nil
+}
+
+func (s *Service) loginRecord(ctx context.Context, input LoginInput, normalized string, normalizeErr error, now time.Time) (userRecord, error) {
+	if normalizeErr != nil {
+		return s.rejectUnknownLogin(ctx, input)
+	}
+	record, err := s.store.userRecordByUsername(ctx, normalized)
+	if errors.Is(err, ErrNotFound) {
+		return s.rejectUnknownLogin(ctx, input)
+	}
+	if err != nil {
+		return userRecord{}, err
+	}
+	if record.Status != "active" || (record.LockedUntil != nil && now.Before(*record.LockedUntil)) {
+		return s.rejectUnknownLogin(ctx, input)
+	}
+	return record, nil
+}
+
+func (s *Service) rejectUnknownLogin(ctx context.Context, input LoginInput) (userRecord, error) {
+	VerifyPassword(s.dummyHash, input.Password)
+	s.auditLogin(ctx, input, "failure", "invalid_credentials")
+	return userRecord{}, ErrInvalidCredentials
+}
+
+func (s *Service) recordFailedLogin(ctx context.Context, input LoginInput, record userRecord, now time.Time) error {
+	failed := record.FailedLoginCount + 1
+	var lockedUntil *time.Time
+	if failed >= 10 {
+		locked := now.Add(15 * time.Minute)
+		lockedUntil = &locked
+	}
+	_ = s.store.UpdateLoginFailure(ctx, record.ID, failed, lockedUntil, now)
+	s.auditLogin(ctx, input, "failure", "invalid_credentials")
+	return ErrInvalidCredentials
+}
+
+func updatedPasswordHash(password string, needsRehash bool) (string, error) {
+	if !needsRehash {
+		return "", nil
+	}
+	return HashPassword(password)
 }
 
 func (s *Service) auditLogin(ctx context.Context, input LoginInput, outcome, reason string) {
@@ -618,27 +673,12 @@ func (s *Service) UpdateUser(ctx context.Context, actor Principal, id string, in
 	if err != nil {
 		return User{}, err
 	}
-	if !ValidRole(input.Role) {
-		return User{}, errors.New("invalid role")
-	}
-	if input.Status != "active" && input.Status != "disabled" {
-		return User{}, errors.New("invalid user status")
-	}
-	normalized, err := NormalizeUsername(input.Username)
+	normalized, err := validateManagedUserUpdate(input)
 	if err != nil {
 		return User{}, err
 	}
-	beforeManager := EffectivePermissions(current.Role, current.Status, current.Entitlements).Has(PermissionUserManage) && EffectivePermissions(current.Role, current.Status, current.Entitlements).Has(PermissionEntitlementManage)
-	afterPermissions := EffectivePermissions(input.Role, input.Status, current.Entitlements)
-	afterManager := afterPermissions.Has(PermissionUserManage) && afterPermissions.Has(PermissionEntitlementManage)
-	if beforeManager && !afterManager {
-		managers, err := s.store.ActiveUserManagers(ctx)
-		if err != nil {
-			return User{}, err
-		}
-		if managers <= 1 {
-			return User{}, fmt.Errorf("%w: cannot remove the final active administrator", ErrConflict)
-		}
+	if err := s.ensureUserManagerRemains(ctx, isUserManager(current.Role, current.Status, current.Entitlements), isUserManager(input.Role, input.Status, current.Entitlements)); err != nil {
+		return User{}, err
 	}
 	now := s.now()
 	updated, err := s.store.UpdateUser(ctx, id, UpdateUserInput{
@@ -654,6 +694,35 @@ func (s *Service) UpdateUser(ctx context.Context, actor Principal, id string, in
 	metadata, _ := json.Marshal(map[string]any{"beforeRole": current.Role, "afterRole": input.Role, "beforeStatus": current.Status, "afterStatus": input.Status})
 	_ = s.Audit(ctx, AuditEvent{OccurredAt: now, ActorType: PrincipalUser, ActorID: actor.ID, Action: "user.update", ResourceType: "user", ResourceID: id, Outcome: "success", Metadata: metadata})
 	return updated, nil
+}
+
+func validateManagedUserUpdate(input UpdateManagedUserInput) (string, error) {
+	if !ValidRole(input.Role) {
+		return "", errors.New("invalid role")
+	}
+	if input.Status != "active" && input.Status != "disabled" {
+		return "", errors.New("invalid user status")
+	}
+	return NormalizeUsername(input.Username)
+}
+
+func isUserManager(role Role, status string, entitlements []Entitlement) bool {
+	permissions := EffectivePermissions(role, status, entitlements)
+	return permissions.Has(PermissionUserManage) && permissions.Has(PermissionEntitlementManage)
+}
+
+func (s *Service) ensureUserManagerRemains(ctx context.Context, beforeManager, afterManager bool) error {
+	if !beforeManager || afterManager {
+		return nil
+	}
+	managers, err := s.store.ActiveUserManagers(ctx)
+	if err != nil {
+		return err
+	}
+	if managers <= 1 {
+		return fmt.Errorf("%w: cannot remove the final active administrator", ErrConflict)
+	}
+	return nil
 }
 
 func (s *Service) ReplaceEntitlements(ctx context.Context, actor Principal, userID string, entitlements []Entitlement) (User, error) {
@@ -672,18 +741,8 @@ func (s *Service) ReplaceEntitlements(ctx context.Context, actor Principal, user
 	if err != nil {
 		return User{}, err
 	}
-	before := EffectivePermissions(current.Role, current.Status, current.Entitlements)
-	after := EffectivePermissions(current.Role, current.Status, entitlements)
-	beforeManager := before.Has(PermissionUserManage) && before.Has(PermissionEntitlementManage)
-	afterManager := after.Has(PermissionUserManage) && after.Has(PermissionEntitlementManage)
-	if beforeManager && !afterManager {
-		managers, err := s.store.ActiveUserManagers(ctx)
-		if err != nil {
-			return User{}, err
-		}
-		if managers <= 1 {
-			return User{}, fmt.Errorf("%w: cannot remove the final active administrator", ErrConflict)
-		}
+	if err := s.ensureUserManagerRemains(ctx, isUserManager(current.Role, current.Status, current.Entitlements), isUserManager(current.Role, current.Status, entitlements)); err != nil {
+		return User{}, err
 	}
 	now := s.now()
 	if err := s.store.ReplaceEntitlements(ctx, userID, actor.ID, entitlements, now); err != nil {
@@ -795,29 +854,39 @@ func validateAPIKeyGrants(grants []APIKeyGrant) error {
 	}
 	seen := make(map[string]struct{}, len(grants))
 	for index := range grants {
-		grant := &grants[index]
-		grant.WorkflowDefinitionID = strings.TrimSpace(grant.WorkflowDefinitionID)
-		if grant.WorkflowDefinitionID == "" {
-			return errors.New("workflow definition id is required")
+		if err := validateAPIKeyGrant(&grants[index], seen); err != nil {
+			return err
 		}
-		if _, ok := apiKeyActions[grant.Action]; !ok {
-			return fmt.Errorf("invalid api key action %q", grant.Action)
-		}
-		if grant.InstanceScope == "" {
-			grant.InstanceScope = "own"
-		}
-		if grant.InstanceScope != "own" && grant.InstanceScope != "definition" {
-			return fmt.Errorf("invalid instance scope %q", grant.InstanceScope)
-		}
-		key := grant.WorkflowDefinitionID + "\x00" + grant.Action
-		if _, exists := seen[key]; exists {
-			return errors.New("duplicate workflow grant")
-		}
-		seen[key] = struct{}{}
-		for _, signal := range grant.SignalNames {
-			if strings.TrimSpace(signal) == "" || len(signal) > 128 {
-				return errors.New("invalid signal name restriction")
-			}
+	}
+	return nil
+}
+
+func validateAPIKeyGrant(grant *APIKeyGrant, seen map[string]struct{}) error {
+	grant.WorkflowDefinitionID = strings.TrimSpace(grant.WorkflowDefinitionID)
+	if grant.WorkflowDefinitionID == "" {
+		return errors.New("workflow definition id is required")
+	}
+	if _, ok := apiKeyActions[grant.Action]; !ok {
+		return fmt.Errorf("invalid api key action %q", grant.Action)
+	}
+	if grant.InstanceScope == "" {
+		grant.InstanceScope = "own"
+	}
+	if grant.InstanceScope != "own" && grant.InstanceScope != "definition" {
+		return fmt.Errorf("invalid instance scope %q", grant.InstanceScope)
+	}
+	key := grant.WorkflowDefinitionID + "\x00" + grant.Action
+	if _, exists := seen[key]; exists {
+		return errors.New("duplicate workflow grant")
+	}
+	seen[key] = struct{}{}
+	return validateSignalNames(grant.SignalNames)
+}
+
+func validateSignalNames(signalNames []string) error {
+	for _, signal := range signalNames {
+		if strings.TrimSpace(signal) == "" || len(signal) > 128 {
+			return errors.New("invalid signal name restriction")
 		}
 	}
 	return nil

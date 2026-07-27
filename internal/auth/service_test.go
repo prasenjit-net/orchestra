@@ -160,10 +160,66 @@ func TestAPIKeyWorkflowAuthorizationAndRevocation(t *testing.T) {
 	if _, err := AuthorizeAPIKey(key, APIKeyAuthorizationInput{DefinitionID: "orders", Action: "result.read", WorkflowTriggerType: string(PrincipalAPIKey), WorkflowTriggerID: "another-key"}); !errors.Is(err, ErrForbidden) {
 		t.Fatalf("foreign result authorization error = %v, want forbidden", err)
 	}
+	updated, err := service.UpdateAPIKey(context.Background(), admin.Principal, key.ID, CreateAPIKeyRequest{
+		Name: "updated webhook client", ExpiresAt: &expires,
+		Grants: []APIKeyGrant{{WorkflowDefinitionID: "orders", Action: "status.read", InstanceScope: "definition"}},
+	})
+	if err != nil || len(updated.Grants) != 1 || updated.Grants[0].Action != "status.read" {
+		t.Fatalf("UpdateAPIKey() = %#v, %v", updated, err)
+	}
+	_, updatedKey, err := service.AuthenticateAPIKey(context.Background(), created.Secret, "192.0.2.10:443")
+	if err != nil {
+		t.Fatalf("AuthenticateAPIKey() after update error = %v", err)
+	}
+	if _, err := AuthorizeAPIKey(updatedKey, APIKeyAuthorizationInput{DefinitionID: "orders", Action: "status.read"}); err != nil {
+		t.Fatalf("updated status authorization error = %v", err)
+	}
 	if err := service.RevokeAPIKey(context.Background(), admin.Principal, key.ID); err != nil {
 		t.Fatalf("RevokeAPIKey() error = %v", err)
 	}
 	if _, _, err := service.AuthenticateAPIKey(context.Background(), created.Secret, "192.0.2.10"); !errors.Is(err, ErrInvalidCredentials) {
 		t.Fatalf("revoked key authentication error = %v, want invalid credentials", err)
+	}
+}
+
+func TestStoreFiltersAndRateLimitWindows(t *testing.T) {
+	service, _ := newTestService(t)
+	bootstrapAdmin(t, service)
+	ctx := context.Background()
+
+	users, total, err := service.store.ListUsers(ctx, 20, 0, "ADMIN")
+	if err != nil || total != 1 || len(users) != 1 || users[0].Username != "admin" {
+		t.Fatalf("ListUsers() = %#v, %d, %v", users, total, err)
+	}
+	users, total, err = service.store.ListUsers(ctx, 20, 0, "missing")
+	if err != nil || total != 0 || len(users) != 0 {
+		t.Fatalf("filtered ListUsers() = %#v, %d, %v", users, total, err)
+	}
+
+	now := time.Date(2026, time.July, 27, 12, 0, 0, 0, time.UTC)
+	for _, event := range []AuditEvent{
+		{OccurredAt: now, ActorType: PrincipalUser, ActorID: "usr_admin", Action: "user.create", Outcome: "success"},
+		{OccurredAt: now.Add(time.Second), ActorType: PrincipalUser, ActorID: "usr_admin", Action: "user.update", Outcome: "denied"},
+	} {
+		if err := service.store.AppendAuditEvent(ctx, event); err != nil {
+			t.Fatalf("AppendAuditEvent() error = %v", err)
+		}
+	}
+	events, auditTotal, err := service.store.ListAuditEvents(ctx, ListAuditInput{ActorID: "usr_admin", Outcome: "denied"})
+	if err != nil || auditTotal != 1 || len(events) != 1 || events[0].Action != "user.update" {
+		t.Fatalf("ListAuditEvents() = %#v, %d, %v", events, auditTotal, err)
+	}
+
+	allowed, _, err := service.store.ConsumeRateLimit(ctx, "test-bucket", "test", now, time.Minute, 1)
+	if err != nil || !allowed {
+		t.Fatalf("first ConsumeRateLimit() = %v, %v", allowed, err)
+	}
+	allowed, retryAt, err := service.store.ConsumeRateLimit(ctx, "test-bucket", "test", now.Add(time.Second), time.Minute, 1)
+	if err != nil || allowed || !retryAt.Equal(now.Add(time.Minute)) {
+		t.Fatalf("limited ConsumeRateLimit() = %v, %v, %v", allowed, retryAt, err)
+	}
+	allowed, _, err = service.store.ConsumeRateLimit(ctx, "test-bucket", "test", now.Add(2*time.Minute), time.Minute, 1)
+	if err != nil || !allowed {
+		t.Fatalf("reset ConsumeRateLimit() = %v, %v", allowed, err)
 	}
 }

@@ -23,7 +23,7 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 		Password string `json:"password"`
 	}
 	if err := decodeJSON(r, &body); err != nil {
-		writeAPIError(w, http.StatusBadRequest, "REQUEST_INVALID", "invalid JSON body")
+		writeAPIError(w, http.StatusBadRequest, "REQUEST_INVALID", invalidJSONBodyMessage)
 		return
 	}
 	result, err := h.auth.Login(r.Context(), auth.LoginInput{
@@ -39,29 +39,29 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	setSessionCookie(w, h, result.Token)
-	w.Header().Set("Cache-Control", "no-store")
+	preventCaching(w)
 	respondJSON(w, http.StatusOK, buildSessionResponse(result.Principal, result.Session))
 }
 
 func (h *Handler) CurrentSession(w http.ResponseWriter, r *http.Request) {
 	principal, err := principalFromRequest(r)
 	if err != nil {
-		writeAPIError(w, http.StatusUnauthorized, "AUTH_UNAUTHENTICATED", "authentication required")
+		writeAuthenticationRequired(w)
 		return
 	}
 	_, session, err := h.auth.AuthenticateSession(r.Context(), mustSessionCookie(r))
 	if err != nil {
-		writeAPIError(w, http.StatusUnauthorized, "AUTH_UNAUTHENTICATED", "authentication required")
+		writeAuthenticationRequired(w)
 		return
 	}
-	w.Header().Set("Cache-Control", "no-store")
+	preventCaching(w)
 	respondJSON(w, http.StatusOK, buildSessionResponse(principal, session))
 }
 
 func (h *Handler) Logout(w http.ResponseWriter, r *http.Request) {
 	principal, err := principalFromRequest(r)
 	if err != nil {
-		writeAPIError(w, http.StatusUnauthorized, "AUTH_UNAUTHENTICATED", "authentication required")
+		writeAuthenticationRequired(w)
 		return
 	}
 	if err := h.auth.Logout(r.Context(), principal, middleware.GetReqID(r.Context()), r.RemoteAddr, r.UserAgent()); err != nil {
@@ -69,14 +69,14 @@ func (h *Handler) Logout(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	clearSessionCookie(w, cookieSecure(h))
-	w.Header().Set("Cache-Control", "no-store")
+	preventCaching(w)
 	respondJSON(w, http.StatusOK, map[string]string{"status": "logged_out"})
 }
 
 func (h *Handler) ChangePassword(w http.ResponseWriter, r *http.Request) {
 	principal, err := principalFromRequest(r)
 	if err != nil {
-		writeAPIError(w, http.StatusUnauthorized, "AUTH_UNAUTHENTICATED", "authentication required")
+		writeAuthenticationRequired(w)
 		return
 	}
 	var body struct {
@@ -84,7 +84,7 @@ func (h *Handler) ChangePassword(w http.ResponseWriter, r *http.Request) {
 		NewPassword     string `json:"newPassword"`
 	}
 	if err := decodeJSON(r, &body); err != nil {
-		writeAPIError(w, http.StatusBadRequest, "REQUEST_INVALID", "invalid JSON body")
+		writeAPIError(w, http.StatusBadRequest, "REQUEST_INVALID", invalidJSONBodyMessage)
 		return
 	}
 	result, err := h.auth.ChangePassword(r.Context(), principal, body.CurrentPassword, body.NewPassword, r.RemoteAddr, r.UserAgent())
@@ -97,7 +97,7 @@ func (h *Handler) ChangePassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	setSessionCookie(w, h, result.Token)
-	w.Header().Set("Cache-Control", "no-store")
+	preventCaching(w)
 	respondJSON(w, http.StatusOK, buildSessionResponse(result.Principal, result.Session))
 }
 
@@ -117,14 +117,14 @@ func setSessionCookie(w http.ResponseWriter, h *Handler, token string) {
 	secure := cookieSecure(h)
 	http.SetCookie(w, &http.Cookie{
 		Name: auth.SessionCookieName, Value: token, Path: "/", HttpOnly: true,
-		Secure: secure, SameSite: http.SameSiteLaxMode,
+		Secure: secure, SameSite: http.SameSiteLaxMode, // NOSONAR -- false is limited to explicitly configured local HTTP development.
 	})
 }
 
 func clearSessionCookie(w http.ResponseWriter, secure bool) {
 	http.SetCookie(w, &http.Cookie{
 		Name: auth.SessionCookieName, Value: "", Path: "/", HttpOnly: true,
-		Secure: secure, SameSite: http.SameSiteLaxMode, MaxAge: -1,
+		Secure: secure, SameSite: http.SameSiteLaxMode, MaxAge: -1, // NOSONAR -- must match the explicitly configured local HTTP session cookie.
 		Expires: time.Unix(1, 0),
 	})
 }

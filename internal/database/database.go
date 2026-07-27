@@ -9,8 +9,8 @@ import (
 	"strconv"
 	"time"
 
-	_ "github.com/jackc/pgx/v5/stdlib"
-	_ "modernc.org/sqlite"
+	_ "github.com/jackc/pgx/v5/stdlib" // Register the pgx database/sql driver.
+	_ "modernc.org/sqlite"             // Register the pure-Go SQLite database/sql driver.
 
 	"github.com/prasenjit-net/orchestra/internal/config"
 )

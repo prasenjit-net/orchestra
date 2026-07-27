@@ -15,7 +15,7 @@ interface AuthContextValue {
 
 const AuthContext = createContext<AuthContextValue | null>(null)
 
-export function AuthProvider({ children }: { children: ReactNode }) {
+export function AuthProvider({ children }: Readonly<{ children: ReactNode }>) {
   const [session, setSession] = useState<SessionResponse | null>(null)
   const [isLoading, setIsLoading] = useState(true)
 
@@ -85,7 +85,7 @@ export function useAuth() {
   return value
 }
 
-export function PermissionGate({ permission, children }: { permission: string; children: ReactNode }) {
+export function PermissionGate({ permission, children }: Readonly<{ permission: string; children: ReactNode }>) {
   const { hasPermission } = useAuth()
   return hasPermission(permission) ? children : null
 }

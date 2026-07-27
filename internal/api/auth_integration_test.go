@@ -60,7 +60,7 @@ func newAuthIntegrationSetup(t *testing.T) authIntegrationSetup {
 	}
 	return authIntegrationSetup{
 		cfg: cfg, identity: identity, workflow: workflowService, admin: admin,
-		router: NewRouter(cfg, logger, version.Current(), livebus.New(), workflowService, identity, nil, false),
+		router: NewRouter(cfg, logger, version.Current(), RouterOptions{Live: livebus.New(), Workflow: workflowService, Auth: identity}),
 	}
 }
 

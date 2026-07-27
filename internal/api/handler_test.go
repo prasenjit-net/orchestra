@@ -45,7 +45,7 @@ func newAuthenticatedTestRouter(t *testing.T, cfg config.Config, live *livebus.B
 	if err != nil {
 		t.Fatalf("complete auth test password change: %v", err)
 	}
-	router := NewRouter(cfg, logger, version.Current(), live, service, identity, nil, false)
+	router := NewRouter(cfg, logger, version.Current(), RouterOptions{Live: live, Workflow: service, Auth: identity})
 	authorize := func(req *http.Request) {
 		req.AddCookie(&http.Cookie{Name: auth.SessionCookieName, Value: session.Token})
 		if isUnsafeMethod(req.Method) {
@@ -57,7 +57,7 @@ func newAuthenticatedTestRouter(t *testing.T, cfg config.Config, live *livebus.B
 }
 
 func TestHealthEndpoint(t *testing.T) {
-	router := NewRouter(config.Default(), slog.New(slog.NewTextHandler(io.Discard, nil)), version.Current(), nil, nil, nil, nil, false)
+	router := NewRouter(config.Default(), slog.New(slog.NewTextHandler(io.Discard, nil)), version.Current(), RouterOptions{})
 	req := httptest.NewRequest(http.MethodGet, "/health", nil)
 	res := httptest.NewRecorder()
 

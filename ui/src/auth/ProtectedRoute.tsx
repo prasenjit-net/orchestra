@@ -18,7 +18,7 @@ export default function ProtectedRoute() {
   return <Outlet />
 }
 
-export function RequirePermission({ permission }: { permission: string }) {
+export function RequirePermission({ permission }: Readonly<{ permission: string }>) {
   const { hasPermission } = useAuth()
   if (!hasPermission(permission)) {
     return <Navigate to="/dashboard" replace />

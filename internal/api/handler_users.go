@@ -30,7 +30,7 @@ func (h *Handler) CreateUser(w http.ResponseWriter, r *http.Request) {
 		Password    string    `json:"password,omitempty"`
 	}
 	if err := decodeJSON(r, &body); err != nil {
-		writeAPIError(w, http.StatusBadRequest, "REQUEST_INVALID", "invalid JSON body")
+		writeAPIError(w, http.StatusBadRequest, "REQUEST_INVALID", invalidJSONBodyMessage)
 		return
 	}
 	created, err := h.auth.CreateUser(r.Context(), principal, auth.CreateManagedUserInput{
@@ -40,7 +40,7 @@ func (h *Handler) CreateUser(w http.ResponseWriter, r *http.Request) {
 		writeAuthServiceError(w, err)
 		return
 	}
-	w.Header().Set("Cache-Control", "no-store")
+	preventCaching(w)
 	respondJSON(w, http.StatusCreated, created)
 }
 
@@ -64,7 +64,7 @@ func (h *Handler) UpdateUser(w http.ResponseWriter, r *http.Request) {
 		Status      string    `json:"status"`
 	}
 	if err := decodeJSON(r, &body); err != nil {
-		writeAPIError(w, http.StatusBadRequest, "REQUEST_INVALID", "invalid JSON body")
+		writeAPIError(w, http.StatusBadRequest, "REQUEST_INVALID", invalidJSONBodyMessage)
 		return
 	}
 	user, err := h.auth.UpdateUser(r.Context(), principal, chi.URLParam(r, "userID"), auth.UpdateManagedUserInput{
@@ -83,7 +83,7 @@ func (h *Handler) ReplaceUserEntitlements(w http.ResponseWriter, r *http.Request
 		Entitlements []auth.Entitlement `json:"entitlements"`
 	}
 	if err := decodeJSON(r, &body); err != nil {
-		writeAPIError(w, http.StatusBadRequest, "REQUEST_INVALID", "invalid JSON body")
+		writeAPIError(w, http.StatusBadRequest, "REQUEST_INVALID", invalidJSONBodyMessage)
 		return
 	}
 	user, err := h.auth.ReplaceEntitlements(r.Context(), principal, chi.URLParam(r, "userID"), body.Entitlements)
@@ -101,7 +101,7 @@ func (h *Handler) ResetUserPassword(w http.ResponseWriter, r *http.Request) {
 	}
 	if r.ContentLength != 0 {
 		if err := decodeJSON(r, &body); err != nil {
-			writeAPIError(w, http.StatusBadRequest, "REQUEST_INVALID", "invalid JSON body")
+			writeAPIError(w, http.StatusBadRequest, "REQUEST_INVALID", invalidJSONBodyMessage)
 			return
 		}
 	}
@@ -110,7 +110,7 @@ func (h *Handler) ResetUserPassword(w http.ResponseWriter, r *http.Request) {
 		writeAuthServiceError(w, err)
 		return
 	}
-	w.Header().Set("Cache-Control", "no-store")
+	preventCaching(w)
 	respondJSON(w, http.StatusOK, map[string]string{"temporaryPassword": temporary})
 }
 

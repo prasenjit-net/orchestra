@@ -44,7 +44,7 @@ function eventDotClass(eventType: string) {
 
 // ─── sub-components ───────────────────────────────────────────────────────────
 
-function Fact({ label, children }: { label: string; children: React.ReactNode }) {
+function Fact({ label, children }: Readonly<{ label: string; children: React.ReactNode }>) {
   return (
     <div className="min-w-0">
       <div className="text-[10px] font-semibold uppercase tracking-wide text-gray-400 dark:text-slate-500">{label}</div>
@@ -53,7 +53,7 @@ function Fact({ label, children }: { label: string; children: React.ReactNode })
   )
 }
 
-function CollapsibleJSON({ label, value }: { label: string; value: unknown }) {
+function CollapsibleJSON({ label, value }: Readonly<{ label: string; value: unknown }>) {
   const [open, setOpen] = useState(false)
   if (!value || (typeof value === 'object' && !Array.isArray(value) && Object.keys(value as object).length === 0)) return null
   return (
@@ -75,7 +75,7 @@ function CollapsibleJSON({ label, value }: { label: string; value: unknown }) {
   )
 }
 
-function TaskActionButton({ action, onClick, disabled }: { action: WorkflowTaskAction; onClick: () => void; disabled: boolean }) {
+function TaskActionButton({ action, onClick, disabled }: Readonly<{ action: WorkflowTaskAction; onClick: () => void; disabled: boolean }>) {
   const destructive = action === 'cancel'
   return (
     <button
@@ -93,7 +93,7 @@ function TaskActionButton({ action, onClick, disabled }: { action: WorkflowTaskA
   )
 }
 
-function ActiveTaskCard({ task, onAction, isPending, canControl }: { task: WorkflowTask; onAction: (id: number, action: WorkflowTaskAction) => void; isPending: boolean; canControl: boolean }) {
+function ActiveTaskCard({ task, onAction, isPending, canControl }: Readonly<{ task: WorkflowTask; onAction: (id: number, action: WorkflowTaskAction) => void; isPending: boolean; canControl: boolean }>) {
   return (
     <div className="rounded-xl border border-primary-200 bg-primary-50/60 p-4 dark:border-primary-800/50 dark:bg-slate-800">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
@@ -129,7 +129,7 @@ function ActiveTaskCard({ task, onAction, isPending, canControl }: { task: Workf
   )
 }
 
-function EventRow({ event }: { event: WorkflowEvent }) {
+function EventRow({ event }: Readonly<{ event: WorkflowEvent }>) {
   const [open, setOpen] = useState(false)
   const hasPayload = Boolean(event.payload && typeof event.payload === 'object' && Object.keys(event.payload as object).length > 0)
 

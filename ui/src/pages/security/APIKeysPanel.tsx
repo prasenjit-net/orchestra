@@ -1,33 +1,47 @@
-import { useState, type FormEvent, type ReactNode } from 'react'
+import { useState, type FormEvent } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { Copy, KeyRound, Pencil, Plus, RefreshCw, Trash2, X } from 'lucide-react'
+import { Copy, KeyRound, Pencil, Plus, RefreshCw, Trash2 } from 'lucide-react'
 import { useAuth } from '../../auth/AuthProvider'
 import { apiKeysApi, workflowApi, type APIKeyInput } from '../../services/api'
 import type { APIKeyGrant, APIKeyRecord, APIKeySecret } from '../../types'
+import SecurityDialog from './SecurityDialog'
 
 const actions: APIKeyGrant['action'][] = ['start', 'signal', 'status.read', 'result.read']
 
-const emptyGrant = (): APIKeyGrant => ({
+interface KeyGrantDraft extends APIKeyGrant {
+  draftId: string
+}
+
+const emptyGrant = (): KeyGrantDraft => ({
+  draftId: crypto.randomUUID(),
   workflowDefinitionId: '', action: 'start', instanceScope: 'own',
   allowPinnedVersions: false, allowCallbackUrl: false, signalNames: [],
 })
 
 interface KeyDraft extends APIKeyInput {
+  grants: KeyGrantDraft[]
   expiresAt: string
 }
 
 const emptyDraft = (): KeyDraft => ({ name: '', description: '', expiresAt: '', grants: [emptyGrant()] })
-
-function Dialog({ title, children, onClose }: { title: string; children: ReactNode; onClose: () => void }) {
-  return <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 p-4" role="dialog" aria-modal="true" aria-label={title}><div className="max-h-[90vh] w-full max-w-3xl overflow-y-auto rounded-lg border border-gray-200 bg-white shadow-xl dark:border-slate-700 dark:bg-slate-900"><div className="sticky top-0 z-10 flex items-center justify-between border-b border-gray-200 bg-white px-5 py-4 dark:border-slate-700 dark:bg-slate-900"><h2 className="text-base font-semibold">{title}</h2><button type="button" onClick={onClose} className="flex h-8 w-8 items-center justify-center rounded-md text-gray-500 hover:bg-gray-100 dark:hover:bg-slate-800" aria-label="Close"><X className="h-4 w-4" /></button></div>{children}</div></div>
-}
 
 function toInput(key: APIKeyRecord): KeyDraft {
   return {
     name: key.name,
     description: key.description,
     expiresAt: key.expiresAt ? key.expiresAt.slice(0, 16) : '',
-    grants: key.grants.map((grant) => ({ ...grant, signalNames: grant.signalNames ?? [] })),
+    grants: key.grants.map((grant) => ({ ...grant, draftId: crypto.randomUUID(), signalNames: grant.signalNames ?? [] })),
+  }
+}
+
+function toAPIGrant(grant: KeyGrantDraft): APIKeyGrant {
+  return {
+    workflowDefinitionId: grant.workflowDefinitionId,
+    action: grant.action,
+    instanceScope: grant.instanceScope,
+    allowPinnedVersions: grant.allowPinnedVersions,
+    allowCallbackUrl: grant.allowCallbackUrl,
+    signalNames: grant.signalNames,
   }
 }
 
@@ -69,7 +83,7 @@ export default function APIKeysPanel() {
       name: draft.name,
       description: draft.description,
       expiresAt: draft.expiresAt ? new Date(draft.expiresAt).toISOString() : undefined,
-      grants: draft.grants,
+      grants: draft.grants.map(toAPIGrant),
     }
     try {
       if (editing === 'new') {
@@ -130,7 +144,7 @@ export default function APIKeysPanel() {
       </div>
 
       {editing && (
-        <Dialog title={editing === 'new' ? 'Create API key' : `Edit ${editing.name}`} onClose={() => setEditing(null)}>
+        <SecurityDialog title={editing === 'new' ? 'Create API key' : `Edit ${editing.name}`} onClose={() => setEditing(null)}>
           <form onSubmit={save} className="space-y-5 p-5">
             <div className="grid gap-4 sm:grid-cols-2"><label className="text-sm font-medium">Name<input autoFocus value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} required maxLength={128} className="mt-1.5 w-full rounded-md border border-gray-300 bg-white px-3 py-2 dark:border-slate-700 dark:bg-slate-950" /></label><label className="text-sm font-medium">Expires at<input type="datetime-local" value={draft.expiresAt} onChange={(event) => setDraft({ ...draft, expiresAt: event.target.value })} className="mt-1.5 w-full rounded-md border border-gray-300 bg-white px-3 py-2 dark:border-slate-700 dark:bg-slate-950" /></label></div>
             <label className="block text-sm font-medium">Description<textarea value={draft.description} onChange={(event) => setDraft({ ...draft, description: event.target.value })} rows={2} maxLength={1024} className="mt-1.5 w-full rounded-md border border-gray-300 bg-white px-3 py-2 dark:border-slate-700 dark:bg-slate-950" /></label>
@@ -138,7 +152,7 @@ export default function APIKeysPanel() {
               <div className="mb-2 flex items-center justify-between"><span className="text-sm font-semibold">Workflow grants</span><button type="button" onClick={() => setDraft({ ...draft, grants: [...draft.grants, emptyGrant()] })} className="inline-flex items-center gap-1 rounded-md border border-gray-300 px-2.5 py-1.5 text-xs dark:border-slate-700"><Plus className="h-3.5 w-3.5" /> Add grant</button></div>
               <div className="space-y-3">
                 {draft.grants.map((grant, index) => (
-                  <div key={index} className="rounded-md border border-gray-200 p-3 dark:border-slate-700">
+                  <div key={grant.draftId} className="rounded-md border border-gray-200 p-3 dark:border-slate-700">
                     <div className="grid gap-3 sm:grid-cols-[minmax(0,2fr)_minmax(0,1fr)_minmax(0,1fr)_auto]">
                       <label className="text-xs font-medium">Workflow<select value={grant.workflowDefinitionId} onChange={(event) => updateGrant(index, { workflowDefinitionId: event.target.value })} required className="mt-1 w-full rounded-md border border-gray-300 bg-white px-2 py-2 text-sm dark:border-slate-700 dark:bg-slate-950"><option value="">Select workflow</option>{definitions?.definitions.map((definition) => <option value={definition.id} key={definition.id}>{definition.name}</option>)}</select></label>
                       <label className="text-xs font-medium">Action<select value={grant.action} onChange={(event) => updateGrant(index, { action: event.target.value as APIKeyGrant['action'] })} className="mt-1 w-full rounded-md border border-gray-300 bg-white px-2 py-2 text-sm dark:border-slate-700 dark:bg-slate-950">{actions.map((action) => <option key={action}>{action}</option>)}</select></label>
@@ -151,15 +165,15 @@ export default function APIKeysPanel() {
               </div>
             </div>
             {error && <p className="text-sm text-red-600 dark:text-red-300">{error}</p>}
-            <div className="flex justify-end gap-2"><button type="button" onClick={() => setEditing(null)} className="rounded-md border border-gray-300 px-3.5 py-2 text-sm dark:border-slate-700">Cancel</button><button disabled={saving} className="rounded-md bg-primary-600 px-3.5 py-2 text-sm font-semibold text-white disabled:opacity-60">{editing === 'new' ? 'Create key' : 'Save changes'}</button></div>
+            <div className="flex justify-end gap-2"><button type="button" onClick={() => setEditing(null)} className="rounded-md border border-gray-300 px-3.5 py-2 text-sm dark:border-slate-700">Cancel</button><button type="submit" disabled={saving} className="rounded-md bg-primary-600 px-3.5 py-2 text-sm font-semibold text-white disabled:opacity-60">{editing === 'new' ? 'Create key' : 'Save changes'}</button></div>
           </form>
-        </Dialog>
+        </SecurityDialog>
       )}
 
       {revealed && (
-        <Dialog title="API key secret" onClose={() => setRevealed(null)}>
+        <SecurityDialog title="API key secret" onClose={() => setRevealed(null)}>
           <div className="p-5"><div className="flex items-start gap-2 rounded-md bg-gray-100 p-4 dark:bg-slate-950"><code className="min-w-0 flex-1 break-all text-sm">{revealed.secret}</code><button type="button" onClick={() => void navigator.clipboard.writeText(revealed.secret)} title="Copy secret" aria-label="Copy secret" className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md hover:bg-white dark:hover:bg-slate-800"><Copy className="h-4 w-4" /></button></div><div className="mt-4 flex items-center gap-2 text-sm text-amber-700 dark:text-amber-300"><KeyRound className="h-4 w-4" /> This secret is shown once.</div></div>
-        </Dialog>
+        </SecurityDialog>
       )}
     </div>
   )

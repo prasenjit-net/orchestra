@@ -15,11 +15,24 @@ import (
 	"github.com/prasenjit-net/orchestra/internal/workflow"
 )
 
-func NewRouter(cfg config.Config, logger *slog.Logger, build version.Info, live *livebus.Bus, workflowService *workflow.Service, authService *auth.Service, restartCh chan struct{}, configEditable bool) http.Handler {
+const (
+	exportRoute     = "/export"
+	mcpServersRoute = "/mcp-servers"
+)
+
+type RouterOptions struct {
+	Live           *livebus.Bus
+	Workflow       *workflow.Service
+	Auth           *auth.Service
+	RestartCh      chan struct{}
+	ConfigEditable bool
+}
+
+func NewRouter(cfg config.Config, logger *slog.Logger, build version.Info, options RouterOptions) http.Handler {
 	r := chi.NewRouter()
 	r.Use(middleware.Timeout(30 * time.Second))
 
-	h := NewHandler(cfg, build, live, workflowService, authService, restartCh, configEditable)
+	h := NewHandler(cfg, build, options.Live, options.Workflow, options.Auth, options.RestartCh, options.ConfigEditable)
 
 	// Explicit public surface.
 	r.Get("/health", h.Health)
@@ -27,9 +40,9 @@ func NewRouter(cfg config.Config, logger *slog.Logger, build version.Info, live 
 	r.Post("/auth/login", h.Login)
 
 	r.Group(func(r chi.Router) {
-		r.Use(authenticateSession(authService, cfg))
+		r.Use(authenticateSession(options.Auth, cfg))
 		r.Use(requireCSRF(cfg))
-		r.Use(auditAuthenticatedRequests(authService))
+		r.Use(auditAuthenticatedRequests(options.Auth))
 
 		// Account lifecycle routes remain available while a temporary password is active.
 		r.Get("/auth/session", h.CurrentSession)
@@ -61,16 +74,16 @@ func NewRouter(cfg config.Config, logger *slog.Logger, build version.Info, live 
 
 		r.With(h.requirePermission(auth.PermissionSettingsRead)).Get("/example", h.Example)
 		r.With(h.requirePermission(auth.PermissionSettingsRead)).Get("/meta", h.Meta)
-		if configEditable {
+		if options.ConfigEditable {
 			r.With(h.requirePermission(auth.PermissionSettingsRead)).Get("/config/raw", h.GetConfigRaw)
 			r.With(h.requirePermission(auth.PermissionSettingsWrite)).Put("/config/raw", h.PutConfigRaw)
 		}
 		r.With(h.requirePermission(auth.PermissionServerRestart)).Post("/admin/restart", h.Restart)
-		if live != nil {
+		if options.Live != nil {
 			r.With(h.requirePermission(auth.PermissionOperationRead)).Get("/ws", h.WorkflowStream)
 		}
 
-		if workflowService != nil {
+		if options.Workflow != nil {
 			mountWorkflowRoutes(r, h)
 		}
 
@@ -102,7 +115,7 @@ func mountWorkflowRoutes(r chi.Router, h *Handler) {
 		r.With(h.requirePermission(auth.PermissionResourceWrite)).Delete("/", func(w http.ResponseWriter, r *http.Request) {
 			h.DeleteScript(w, r, chi.URLParam(r, "scriptID"))
 		})
-		r.With(h.requirePermission(auth.PermissionResourceRead)).Get("/export", h.ExportScript)
+		r.With(h.requirePermission(auth.PermissionResourceRead)).Get(exportRoute, h.ExportScript)
 	})
 
 	r.With(h.requirePermission(auth.PermissionResourceRead)).Get("/json-schemas", h.ListJSONSchemas)
@@ -118,7 +131,7 @@ func mountWorkflowRoutes(r chi.Router, h *Handler) {
 		r.With(h.requirePermission(auth.PermissionResourceWrite)).Delete("/", func(w http.ResponseWriter, r *http.Request) {
 			h.DeleteJSONSchema(w, r, chi.URLParam(r, "schemaID"))
 		})
-		r.With(h.requirePermission(auth.PermissionResourceRead)).Get("/export", h.ExportJSONSchema)
+		r.With(h.requirePermission(auth.PermissionResourceRead)).Get(exportRoute, h.ExportJSONSchema)
 	})
 
 	r.With(h.requirePermission(auth.PermissionResourceRead)).Get("/agents", h.ListAgents)
@@ -133,17 +146,17 @@ func mountWorkflowRoutes(r chi.Router, h *Handler) {
 		r.With(h.requirePermission(auth.PermissionResourceWrite)).Delete("/", func(w http.ResponseWriter, r *http.Request) {
 			h.DeleteAgent(w, r, chi.URLParam(r, "agentID"))
 		})
-		r.With(h.requirePermission(auth.PermissionResourceRead)).Get("/mcp-servers", func(w http.ResponseWriter, r *http.Request) {
+		r.With(h.requirePermission(auth.PermissionResourceRead)).Get(mcpServersRoute, func(w http.ResponseWriter, r *http.Request) {
 			h.GetAgentMCPServers(w, r, chi.URLParam(r, "agentID"))
 		})
-		r.With(h.requirePermission(auth.PermissionResourceWrite)).Put("/mcp-servers", func(w http.ResponseWriter, r *http.Request) {
+		r.With(h.requirePermission(auth.PermissionResourceWrite)).Put(mcpServersRoute, func(w http.ResponseWriter, r *http.Request) {
 			h.SetAgentMCPServers(w, r, chi.URLParam(r, "agentID"))
 		})
-		r.With(h.requirePermission(auth.PermissionResourceRead)).Get("/export", h.ExportAgent)
+		r.With(h.requirePermission(auth.PermissionResourceRead)).Get(exportRoute, h.ExportAgent)
 	})
 
-	r.With(h.requirePermission(auth.PermissionResourceRead)).Get("/mcp-servers", h.ListMCPServers)
-	r.With(h.requirePermission(auth.PermissionResourceWrite)).Post("/mcp-servers", h.CreateMCPServer)
+	r.With(h.requirePermission(auth.PermissionResourceRead)).Get(mcpServersRoute, h.ListMCPServers)
+	r.With(h.requirePermission(auth.PermissionResourceWrite)).Post(mcpServersRoute, h.CreateMCPServer)
 	r.Route("/mcp-servers/{serverID}", func(r chi.Router) {
 		r.With(h.requirePermission(auth.PermissionResourceRead)).Get("/", func(w http.ResponseWriter, r *http.Request) {
 			h.GetMCPServer(w, r, chi.URLParam(r, "serverID"))
@@ -157,7 +170,7 @@ func mountWorkflowRoutes(r chi.Router, h *Handler) {
 		r.With(h.requirePermission(auth.PermissionResourceWrite)).Post("/explore", func(w http.ResponseWriter, r *http.Request) {
 			h.ExploreMCPServer(w, r, chi.URLParam(r, "serverID"))
 		})
-		r.With(h.requirePermission(auth.PermissionResourceRead)).Get("/export", h.ExportConnector)
+		r.With(h.requirePermission(auth.PermissionResourceRead)).Get(exportRoute, h.ExportConnector)
 	})
 
 	r.With(h.requirePermission(auth.PermissionAIUse)).Post("/ai/enhance-prompt", h.EnhancePrompt)
@@ -222,7 +235,7 @@ func mountWorkflowRoutes(r chi.Router, h *Handler) {
 			}
 			h.ActivateWorkflowDefinitionVersion(w, r, chi.URLParam(r, "definitionID"), version)
 		})
-		r.With(h.requirePermission(auth.PermissionWorkflowDefinitionRead)).Get("/export", h.ExportWorkflowDefinition)
+		r.With(h.requirePermission(auth.PermissionWorkflowDefinitionRead)).Get(exportRoute, h.ExportWorkflowDefinition)
 	})
 
 	r.With(h.requirePermission(auth.PermissionImportAnalyze)).Post("/import/analyze", h.AnalyzeImport)
