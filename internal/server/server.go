@@ -5,8 +5,10 @@ import (
 	"fmt"
 	"io/fs"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httputil"
+	"net/netip"
 	"net/url"
 	"path"
 	"strings"
@@ -16,6 +18,7 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 
 	"github.com/prasenjit-net/orchestra/internal/api"
+	"github.com/prasenjit-net/orchestra/internal/auth"
 	"github.com/prasenjit-net/orchestra/internal/config"
 	"github.com/prasenjit-net/orchestra/internal/livebus"
 	"github.com/prasenjit-net/orchestra/internal/version"
@@ -27,6 +30,7 @@ type Options struct {
 	UIFS           fs.FS
 	Live           *livebus.Bus
 	Workflow       *workflow.Service
+	Auth           *auth.Service
 	RestartCh      chan struct{}
 	ConfigEditable bool
 }
@@ -45,14 +49,19 @@ func New(cfg config.Config, logger *slog.Logger, build version.Info, options Opt
 func (a *App) Handler() http.Handler {
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID)
-	r.Use(middleware.RealIP)
+	r.Use(trustedRealIP(a.cfg.Auth.TrustedProxyCIDRs, a.logger))
 	r.Use(middleware.Recoverer)
 	r.Use(middleware.Heartbeat("/livez"))
+	r.Use(securityHeaders(a.options.DevMode))
+	r.Use(limitRequestBody(4 << 20))
 	r.Use(requestLogger(a.logger))
 
-	r.Mount("/api", api.NewRouter(a.cfg, a.logger, a.build, a.options.Live, a.options.Workflow, a.options.RestartCh, a.options.ConfigEditable))
+	r.Mount("/api", api.NewRouter(a.cfg, a.logger, a.build, api.RouterOptions{
+		Live: a.options.Live, Workflow: a.options.Workflow, Auth: a.options.Auth,
+		RestartCh: a.options.RestartCh, ConfigEditable: a.options.ConfigEditable,
+	}))
 
-	if extRouter, err := api.NewExtRouter(a.cfg, a.options.Workflow); err != nil {
+	if extRouter, err := api.NewExtRouter(a.cfg, a.options.Workflow, a.options.Auth); err != nil {
 		a.logger.Error("failed to create ext router", "error", err)
 	} else {
 		r.Mount("/ext", extRouter)
@@ -76,6 +85,107 @@ func (a *App) Handler() http.Handler {
 	r.Handle("/*", spa)
 
 	return r
+}
+
+func securityHeaders(devMode bool) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("X-Content-Type-Options", "nosniff")
+			w.Header().Set("X-Frame-Options", "DENY")
+			w.Header().Set("Referrer-Policy", "same-origin")
+			w.Header().Set("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+			if !devMode {
+				w.Header().Set("Content-Security-Policy", "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self' ws: wss:; worker-src 'self' blob:")
+			}
+			if r.TLS != nil {
+				w.Header().Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+			}
+			if strings.HasPrefix(r.URL.Path, "/api") || strings.HasPrefix(r.URL.Path, "/ext") {
+				w.Header().Set("Cache-Control", "no-store")
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
+func limitRequestBody(maxBytes int64) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Body != nil && r.Body != http.NoBody {
+				r.Body = http.MaxBytesReader(w, r.Body, maxBytes)
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
+func trustedRealIP(cidrs []string, logger *slog.Logger) func(http.Handler) http.Handler {
+	prefixes := parseTrustedPrefixes(cidrs, logger)
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			peer, ok := parseRemoteAddress(r.RemoteAddr)
+			if !ok || !isTrustedAddress(prefixes, peer) {
+				next.ServeHTTP(w, r)
+				return
+			}
+			r.RemoteAddr = clientAddress(forwardedAddressChain(r, peer), prefixes).String()
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
+func parseTrustedPrefixes(cidrs []string, logger *slog.Logger) []netip.Prefix {
+	prefixes := make([]netip.Prefix, 0, len(cidrs))
+	for _, raw := range cidrs {
+		prefix, err := netip.ParsePrefix(strings.TrimSpace(raw))
+		if err != nil {
+			logger.Warn("ignoring invalid trusted proxy CIDR", "cidr", raw)
+			continue
+		}
+		prefixes = append(prefixes, prefix)
+	}
+	return prefixes
+}
+
+func isTrustedAddress(prefixes []netip.Prefix, address netip.Addr) bool {
+	for _, prefix := range prefixes {
+		if prefix.Contains(address.Unmap()) {
+			return true
+		}
+	}
+	return false
+}
+
+func forwardedAddressChain(r *http.Request, peer netip.Addr) []netip.Addr {
+	chain := make([]netip.Addr, 0, 4)
+	for _, raw := range strings.Split(r.Header.Get("X-Forwarded-For"), ",") {
+		if address, err := netip.ParseAddr(strings.TrimSpace(raw)); err == nil {
+			chain = append(chain, address.Unmap())
+		}
+	}
+	if len(chain) == 0 {
+		if address, err := netip.ParseAddr(strings.TrimSpace(r.Header.Get("X-Real-IP"))); err == nil {
+			chain = append(chain, address.Unmap())
+		}
+	}
+	return append(chain, peer.Unmap())
+}
+
+func clientAddress(chain []netip.Addr, trustedPrefixes []netip.Prefix) netip.Addr {
+	for index := len(chain) - 1; index > 0; index-- {
+		if !isTrustedAddress(trustedPrefixes, chain[index]) {
+			return chain[index]
+		}
+	}
+	return chain[0]
+}
+
+func parseRemoteAddress(raw string) (netip.Addr, bool) {
+	if host, _, err := net.SplitHostPort(raw); err == nil {
+		raw = host
+	}
+	address, err := netip.ParseAddr(strings.Trim(raw, "[]"))
+	return address, err == nil
 }
 
 func newDevProxy(rawURL string, logger *slog.Logger) http.Handler {

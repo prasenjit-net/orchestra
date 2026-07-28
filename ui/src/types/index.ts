@@ -370,3 +370,108 @@ export interface ImportAnalysis {
   ready: ImportItem[]      // don't exist — always imported
   conflicts: ImportItem[]  // already exist — user may skip or override
 }
+
+// Authentication and authorization
+
+export type UserRole = 'admin' | 'developer' | 'observer'
+export type UserStatus = 'active' | 'disabled'
+export type EntitlementEffect = 'allow' | 'deny'
+
+export interface Entitlement {
+  permission: string
+  effect: EntitlementEffect
+  createdBy?: string
+  createdAt?: string
+}
+
+export interface AuthUser {
+  id: string
+  username: string
+  displayName: string
+  role: UserRole
+  status: UserStatus
+  mustChangePassword: boolean
+  lockedUntil?: string
+  lastLoginAt?: string
+  createdAt: string
+  updatedAt: string
+  entitlements?: Entitlement[]
+}
+
+export interface AuthSession {
+  id: string
+  userId?: string
+  createdAt?: string
+  lastSeenAt?: string
+  idleExpiresAt: string
+  absoluteExpiresAt: string
+  revokedAt?: string
+  sourceIp?: string
+}
+
+export interface SessionResponse {
+  user: AuthUser
+  permissions: string[]
+  csrfToken: string
+  session: AuthSession
+}
+
+export interface UsersResponse {
+  users: AuthUser[]
+  total: number
+  limit: number
+  offset: number
+}
+
+export interface APIKeyGrant {
+  workflowDefinitionId: string
+  action: 'start' | 'signal' | 'status.read' | 'result.read'
+  instanceScope: 'own' | 'definition'
+  allowPinnedVersions: boolean
+  allowCallbackUrl: boolean
+  signalNames?: string[]
+}
+
+export interface APIKeyRecord {
+  id: string
+  name: string
+  description: string
+  keyPrefix: string
+  createdByUserId: string
+  status: string
+  expiresAt?: string
+  lastUsedAt?: string
+  lastUsedIp?: string
+  createdAt: string
+  updatedAt: string
+  grants: APIKeyGrant[]
+}
+
+export interface APIKeySecret {
+  apiKey: APIKeyRecord
+  secret: string
+}
+
+export interface APIKeysResponse {
+  apiKeys: APIKeyRecord[]
+  total: number
+}
+
+export interface AuditEvent {
+  id: number
+  occurredAt: string
+  requestId?: string
+  actorType: string
+  actorId?: string
+  action: string
+  resourceType?: string
+  resourceId?: string
+  outcome: string
+  sourceIp?: string
+  metadata?: unknown
+}
+
+export interface AuditEventsResponse {
+  events: AuditEvent[]
+  total: number
+}

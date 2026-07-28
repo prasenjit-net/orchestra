@@ -1,18 +1,18 @@
 package app
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"os"
 	"strings"
 
-	_ "github.com/jackc/pgx/v5/stdlib"
-	_ "modernc.org/sqlite"
-
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 
+	"github.com/prasenjit-net/orchestra/internal/auth"
 	"github.com/prasenjit-net/orchestra/internal/config"
+	appdb "github.com/prasenjit-net/orchestra/internal/database"
 	"github.com/prasenjit-net/orchestra/internal/workflow"
 )
 
@@ -65,7 +65,8 @@ func runSchema(cmd *cobra.Command, _ []string) error {
 	}
 
 	dialect := workflow.Dialect(driver)
-	statements := dialect.DDL()
+	statements := append([]string(nil), dialect.DDL()...)
+	statements = append(statements, auth.SchemaStatements(appdb.Dialect(dialect))...)
 
 	migrations := dialect.Migrations()
 
@@ -112,26 +113,9 @@ func runSchema(cmd *cobra.Command, _ []string) error {
 }
 
 func openSchemaDB(cfg config.Config, dialect workflow.Dialect) (*sql.DB, error) {
-	switch dialect {
-	case workflow.DialectPostgres:
-		if cfg.Workflow.DatabaseURL == "" {
-			return nil, fmt.Errorf("workflow.databaseURL is required for postgres; set it in config or via APP_WORKFLOW_DATABASEURL")
-		}
-		db, err := sql.Open("pgx", cfg.Workflow.DatabaseURL)
-		if err != nil {
-			return nil, fmt.Errorf("open postgres database: %w", err)
-		}
-		return db, nil
-	default:
-		if err := os.MkdirAll(dirOf(cfg.Workflow.DatabasePath), 0o755); err != nil {
-			return nil, fmt.Errorf("create database directory: %w", err)
-		}
-		db, err := sql.Open("sqlite", cfg.Workflow.DatabasePath)
-		if err != nil {
-			return nil, fmt.Errorf("open sqlite database: %w", err)
-		}
-		return db, nil
-	}
+	cfg.Workflow.DatabaseDriver = string(dialect)
+	db, _, err := appdb.Open(context.Background(), cfg.Workflow)
+	return db, err
 }
 
 func dirOf(path string) string {

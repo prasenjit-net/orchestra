@@ -3,6 +3,7 @@ package api
 import (
 	"time"
 
+	"github.com/prasenjit-net/orchestra/internal/auth"
 	"github.com/prasenjit-net/orchestra/internal/config"
 	"github.com/prasenjit-net/orchestra/internal/livebus"
 	"github.com/prasenjit-net/orchestra/internal/version"
@@ -14,6 +15,7 @@ type Handler struct {
 	version        version.Info
 	live           *livebus.Bus
 	workflow       *workflow.Service
+	auth           *auth.Service
 	restartCh      chan struct{}
 	configEditable bool
 }
@@ -46,8 +48,8 @@ type metaResponse struct {
 	ConfigEditable bool         `json:"configEditable"`
 }
 
-func NewHandler(cfg config.Config, build version.Info, live *livebus.Bus, workflowService *workflow.Service, restartCh chan struct{}, configEditable bool) *Handler {
-	return &Handler{config: cfg, version: build, live: live, workflow: workflowService, restartCh: restartCh, configEditable: configEditable}
+func NewHandler(cfg config.Config, build version.Info, live *livebus.Bus, workflowService *workflow.Service, authService *auth.Service, restartCh chan struct{}, configEditable bool) *Handler {
+	return &Handler{config: cfg, version: build, live: live, workflow: workflowService, auth: authService, restartCh: restartCh, configEditable: configEditable}
 }
 
 func BuildHealthResponse(cfg config.Config, build version.Info) HealthResponse {

@@ -96,24 +96,26 @@ type DefinitionDetails struct {
 }
 
 type WorkflowInstance struct {
-	ID                string          `json:"id"`
-	DefinitionID      string          `json:"definitionId"`
-	DefinitionVersion int             `json:"definitionVersion"`
-	Status            string          `json:"status"`
-	CurrentStepIndex  int             `json:"currentStepIndex"`
-	CurrentStepName   string          `json:"currentStepName"`
-	CurrentActivity   string          `json:"currentActivity"`
-	LastEventSequence int             `json:"lastEventSequence"`
-	LastError         string          `json:"lastError,omitempty"`
-	LastOutput        json.RawMessage `json:"lastOutput,omitempty"`
-	Context           json.RawMessage `json:"context,omitempty"`
-	PendingSignals    int             `json:"pendingSignals"`
-	NextRunAt         *time.Time      `json:"nextRunAt,omitempty"`
-	CallbackURL       string          `json:"callbackUrl,omitempty"`
-	CallbackStatus    string          `json:"callbackStatus,omitempty"`
-	TriggerSource     string          `json:"triggerSource,omitempty"`
-	CreatedAt         time.Time       `json:"createdAt"`
-	UpdatedAt         time.Time       `json:"updatedAt"`
+	ID                   string          `json:"id"`
+	DefinitionID         string          `json:"definitionId"`
+	DefinitionVersion    int             `json:"definitionVersion"`
+	Status               string          `json:"status"`
+	CurrentStepIndex     int             `json:"currentStepIndex"`
+	CurrentStepName      string          `json:"currentStepName"`
+	CurrentActivity      string          `json:"currentActivity"`
+	LastEventSequence    int             `json:"lastEventSequence"`
+	LastError            string          `json:"lastError,omitempty"`
+	LastOutput           json.RawMessage `json:"lastOutput,omitempty"`
+	Context              json.RawMessage `json:"context,omitempty"`
+	PendingSignals       int             `json:"pendingSignals"`
+	NextRunAt            *time.Time      `json:"nextRunAt,omitempty"`
+	CallbackURL          string          `json:"callbackUrl,omitempty"`
+	CallbackStatus       string          `json:"callbackStatus,omitempty"`
+	TriggerSource        string          `json:"triggerSource,omitempty"`
+	TriggerPrincipalType string          `json:"triggerPrincipalType,omitempty"`
+	TriggerPrincipalID   string          `json:"triggerPrincipalId,omitempty"`
+	CreatedAt            time.Time       `json:"createdAt"`
+	UpdatedAt            time.Time       `json:"updatedAt"`
 }
 
 type WorkflowEvent struct {
@@ -159,11 +161,13 @@ type SignalWorkflowInput struct {
 }
 
 type StartWorkflowInput struct {
-	DefinitionID      string
-	DefinitionVersion int
-	Input             map[string]any
-	CallbackURL       string
-	TriggerSource     string
+	DefinitionID         string
+	DefinitionVersion    int
+	Input                map[string]any
+	CallbackURL          string
+	TriggerSource        string
+	TriggerPrincipalType string
+	TriggerPrincipalID   string
 }
 
 type ActivityDescriptor struct {

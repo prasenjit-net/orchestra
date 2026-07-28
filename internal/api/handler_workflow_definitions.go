@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 
+	"github.com/prasenjit-net/orchestra/internal/auth"
 	"github.com/prasenjit-net/orchestra/internal/webhooks"
 	"github.com/prasenjit-net/orchestra/internal/workflow"
 )
@@ -176,17 +177,21 @@ func (h *Handler) StartWorkflow(w http.ResponseWriter, r *http.Request, definiti
 		}
 	}
 
+	principal, _ := principalFromRequest(r)
 	instance, err := h.workflow.StartWorkflowWithInput(r.Context(), workflow.StartWorkflowInput{
-		DefinitionID:      definitionID,
-		DefinitionVersion: body.Version,
-		Input:             body.Input,
-		CallbackURL:       body.CallbackURL,
-		TriggerSource:     "ui",
+		DefinitionID:         definitionID,
+		DefinitionVersion:    body.Version,
+		Input:                body.Input,
+		CallbackURL:          body.CallbackURL,
+		TriggerSource:        "ui",
+		TriggerPrincipalType: string(principal.Type),
+		TriggerPrincipalID:   principal.ID,
 	})
 	if err != nil {
 		writeWorkflowError(w, err)
 		return
 	}
+	_ = h.auth.Audit(r.Context(), auth.AuditEvent{ActorType: principal.Type, ActorID: principal.ID, Action: "workflow.start", ResourceType: "workflow", ResourceID: instance.ID, Outcome: "success", SourceIP: r.RemoteAddr, UserAgent: r.UserAgent()})
 
 	respondJSON(w, http.StatusCreated, instance)
 }

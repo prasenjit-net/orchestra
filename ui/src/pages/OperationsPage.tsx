@@ -14,6 +14,7 @@ import {
   payloadSummary,
   statusClasses,
 } from './workflowUi'
+import { useAuth } from '../auth/AuthProvider'
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
 
@@ -36,7 +37,7 @@ function eventDotClass(eventType: string) {
 
 // ─── sub-components ───────────────────────────────────────────────────────────
 
-function MetricChip({ label, value, color }: { label: string; value: number; color: string }) {
+function MetricChip({ label, value, color }: Readonly<{ label: string; value: number; color: string }>) {
   return (
     <div className="flex items-center gap-2 rounded-lg border border-gray-200 bg-white px-4 py-2.5 dark:border-slate-800 dark:bg-slate-900">
       <span className={`text-lg font-bold tabular-nums ${color}`}>{value}</span>
@@ -49,11 +50,11 @@ function TaskActionButton({
   action,
   onClick,
   disabled,
-}: {
+}: Readonly<{
   action: WorkflowTaskAction
   onClick: () => void
   disabled: boolean
-}) {
+}>) {
   const base = 'rounded px-2 py-1 text-xs font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-50'
   const style =
     action === 'cancel'
@@ -66,7 +67,7 @@ function TaskActionButton({
   )
 }
 
-function TaskRow({ task, onAction, isPending }: { task: WorkflowTask; onAction: (id: number, a: WorkflowTaskAction) => void; isPending: boolean }) {
+function TaskRow({ task, onAction, isPending, canControl }: Readonly<{ task: WorkflowTask; onAction: (id: number, a: WorkflowTaskAction) => void; isPending: boolean; canControl: boolean }>) {
   const actions = availableTaskActions(task)
   return (
     <div className="flex flex-col gap-3 rounded-lg border border-gray-200 p-3 dark:border-slate-800 sm:flex-row sm:items-center sm:justify-between">
@@ -96,7 +97,7 @@ function TaskRow({ task, onAction, isPending }: { task: WorkflowTask; onAction: 
           )}
         </div>
       </div>
-      {actions.length > 0 && (
+      {canControl && actions.length > 0 && (
         <div className="flex shrink-0 flex-wrap gap-1.5">
           {actions.map((a) => (
             <TaskActionButton key={a} action={a} onClick={() => onAction(task.id, a)} disabled={isPending} />
@@ -107,7 +108,7 @@ function TaskRow({ task, onAction, isPending }: { task: WorkflowTask; onAction: 
   )
 }
 
-function EventRow({ event }: { event: WorkflowEvent }) {
+function EventRow({ event }: Readonly<{ event: WorkflowEvent }>) {
   const [open, setOpen] = useState(false)
   const hasPayload = event.payload != null && Object.keys(event.payload as object).length > 0
   const summary = payloadSummary(event.payload)
@@ -164,6 +165,7 @@ const EVENT_PAGE_SIZE = 50
 export default function OperationsPage() {
   const { status } = useLiveBus()
   const queryClient = useQueryClient()
+  const { hasPermission } = useAuth()
   const [eventFilter, setEventFilter] = useState<EventFilter>('all')
   const [showCompleted, setShowCompleted] = useState(false)
   const [taskPage, setTaskPage] = useState(0)
@@ -275,6 +277,7 @@ export default function OperationsPage() {
                 task={task}
                 onAction={(id, action) => taskActionMutation.mutate({ taskId: id, action })}
                 isPending={taskActionMutation.isPending}
+                canControl={hasPermission('workflow.task.control')}
               />
             ))
           )}
@@ -310,6 +313,7 @@ export default function OperationsPage() {
                 task={task}
                 onAction={(id, action) => taskActionMutation.mutate({ taskId: id, action })}
                 isPending={taskActionMutation.isPending}
+                canControl={hasPermission('workflow.task.control')}
               />
             ))}
           </div>

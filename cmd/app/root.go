@@ -40,6 +40,7 @@ func init() {
 	rootCmd.AddCommand(initCmd)
 	rootCmd.AddCommand(versionCmd)
 	rootCmd.AddCommand(schemaCmd)
+	rootCmd.AddCommand(usersCmd)
 }
 
 func initConfig() {

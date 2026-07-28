@@ -5,10 +5,14 @@ import ImportModal from '../components/ImportModal'
 import { useImport } from '../hooks/useImport'
 import { downloadBundle, importExportApi, scriptsApi } from '../services/api'
 import { formatDate } from './workflowUi'
+import { useAuth } from '../auth/AuthProvider'
 
 export default function ScriptsPage() {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
+  const { hasPermission } = useAuth()
+  const canWrite = hasPermission('resource.write')
+  const canImport = hasPermission('import.analyze') && hasPermission('import.apply')
 
   const scriptsQuery = useQuery({
     queryKey: ['scripts'],
@@ -37,7 +41,7 @@ export default function ScriptsPage() {
           <p className="mt-1 text-sm text-gray-500 dark:text-slate-400">Reusable Starlark scripts you can attach to workflow steps.</p>
         </div>
         <div className="flex items-center gap-2">
-          <input ref={importHook.fileInputRef} type="file" accept=".json" className="hidden" onChange={importHook.onFileChange} />
+          {canImport && <><input ref={importHook.fileInputRef} type="file" accept=".json" className="hidden" onChange={importHook.onFileChange} />
           <button
             type="button"
             onClick={importHook.openFilePicker}
@@ -46,15 +50,15 @@ export default function ScriptsPage() {
           >
             <Upload className="h-4 w-4" />
             {importHook.state.isAnalyzing ? 'Analyzing…' : importHook.state.isApplying ? 'Importing…' : 'Import'}
-          </button>
-          <button
+          </button></>}
+          {canWrite && <button
             type="button"
             onClick={() => navigate('/scripts/new')}
             className="inline-flex items-center gap-2 rounded-lg bg-primary-600 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-primary-700"
           >
             <Plus className="h-4 w-4" />
             New Script
-          </button>
+          </button>}
         </div>
       </div>
 
@@ -69,14 +73,14 @@ export default function ScriptsPage() {
           <Code2 className="mb-4 h-10 w-10 text-gray-300 dark:text-slate-600" />
           <p className="text-sm font-medium text-gray-500 dark:text-slate-400">No scripts yet</p>
           <p className="mt-1 text-xs text-gray-400 dark:text-slate-500">Create a script to reuse Starlark code across workflow steps.</p>
-          <button
+          {canWrite && <button
             type="button"
             onClick={() => navigate('/scripts/new')}
             className="mt-6 inline-flex items-center gap-2 rounded-lg bg-primary-600 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-primary-700"
           >
             <Plus className="h-4 w-4" />
             New Script
-          </button>
+          </button>}
         </div>
       ) : (
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
@@ -92,8 +96,9 @@ export default function ScriptsPage() {
               </button>
               <button
                 type="button"
-                onClick={() => navigate(`/scripts/${script.id}/editor`)}
-                className="flex flex-col text-left"
+                onClick={() => canWrite && navigate(`/scripts/${script.id}/editor`)}
+                className="flex flex-col text-left disabled:cursor-default"
+                disabled={!canWrite}
               >
                 <div className="flex items-start justify-between gap-3 pr-8">
                   <p className="font-semibold text-gray-900 group-hover:text-primary-600 dark:text-slate-100 dark:group-hover:text-primary-400">
@@ -113,7 +118,7 @@ export default function ScriptsPage() {
         </div>
       )}
 
-      {importHook.state.analysis && (
+      {canImport && importHook.state.analysis && (
         <ImportModal
           analysis={importHook.state.analysis}
           isPending={importHook.state.isApplying}

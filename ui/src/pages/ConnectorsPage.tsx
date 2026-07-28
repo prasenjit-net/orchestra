@@ -5,10 +5,14 @@ import ImportModal from '../components/ImportModal'
 import { useImport } from '../hooks/useImport'
 import { downloadBundle, importExportApi, mcpServersApi } from '../services/api'
 import { formatDate } from './workflowUi'
+import { useAuth } from '../auth/AuthProvider'
 
 export default function ConnectorsPage() {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
+  const { hasPermission } = useAuth()
+  const canWrite = hasPermission('resource.write')
+  const canImport = hasPermission('import.analyze') && hasPermission('import.apply')
 
   const serversQuery = useQuery({
     queryKey: ['connectors'],
@@ -38,8 +42,8 @@ export default function ConnectorsPage() {
             Reusable Model Context Protocol connectors you can attach to agents.
           </p>
         </div>
-        <div className="flex items-center gap-2">
-          <input ref={importHook.fileInputRef} type="file" accept=".json" className="hidden" onChange={importHook.onFileChange} />
+        {(canWrite || canImport) && <div className="flex items-center gap-2">
+          {canImport && <><input ref={importHook.fileInputRef} type="file" accept=".json" className="hidden" onChange={importHook.onFileChange} />
           <button
             type="button"
             onClick={importHook.openFilePicker}
@@ -48,16 +52,16 @@ export default function ConnectorsPage() {
           >
             <Upload className="h-4 w-4" />
             {importHook.state.isAnalyzing ? 'Analyzing…' : importHook.state.isApplying ? 'Importing…' : 'Import'}
-          </button>
-          <button
+          </button></>}
+          {canWrite && <button
             type="button"
             onClick={() => navigate('/connectors/new')}
             className="inline-flex items-center gap-2 rounded-lg bg-primary-600 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-primary-700"
           >
             <Plus className="h-4 w-4" />
             New Connector
-          </button>
-        </div>
+          </button>}
+        </div>}
       </div>
 
       {importHook.state.error && (
@@ -73,14 +77,14 @@ export default function ConnectorsPage() {
           <p className="mt-1 text-xs text-gray-400 dark:text-slate-500">
             Add a connector to give agents access to external tools.
           </p>
-          <button
+          {canWrite && <button
             type="button"
             onClick={() => navigate('/connectors/new')}
             className="mt-6 inline-flex items-center gap-2 rounded-lg bg-primary-600 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-primary-700"
           >
             <Plus className="h-4 w-4" />
             New Connector
-          </button>
+          </button>}
         </div>
       ) : (
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
@@ -96,8 +100,9 @@ export default function ConnectorsPage() {
               </button>
               <button
                 type="button"
-                onClick={() => navigate(`/connectors/${srv.id}/editor`)}
-                className="flex flex-col text-left"
+                onClick={() => canWrite && navigate(`/connectors/${srv.id}/editor`)}
+                disabled={!canWrite}
+                className="flex flex-col text-left disabled:cursor-default"
               >
                 <div className="flex items-start justify-between gap-3 pr-8">
                   <p className="font-semibold text-gray-900 group-hover:text-primary-600 dark:text-slate-100 dark:group-hover:text-primary-400">
@@ -134,7 +139,7 @@ export default function ConnectorsPage() {
         </div>
       )}
 
-      {importHook.state.analysis && (
+      {canImport && importHook.state.analysis && (
         <ImportModal
           analysis={importHook.state.analysis}
           isPending={importHook.state.isApplying}

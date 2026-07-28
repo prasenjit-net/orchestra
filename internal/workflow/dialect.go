@@ -88,6 +88,8 @@ var sqliteDDL = []string{
 	callback_url TEXT NOT NULL DEFAULT '',
 	trigger_source TEXT NOT NULL DEFAULT 'ui',
 	callback_status TEXT NOT NULL DEFAULT '',
+	trigger_principal_type TEXT NOT NULL DEFAULT '',
+	trigger_principal_id TEXT NOT NULL DEFAULT '',
 	created_at TEXT NOT NULL,
 	updated_at TEXT NOT NULL
 )`,
@@ -228,6 +230,8 @@ var postgresMigrations = []string{
 	`ALTER TABLE workflow_instances ADD COLUMN IF NOT EXISTS callback_url TEXT NOT NULL DEFAULT ''`,
 	`ALTER TABLE workflow_instances ADD COLUMN IF NOT EXISTS trigger_source TEXT NOT NULL DEFAULT 'ui'`,
 	`ALTER TABLE workflow_instances ADD COLUMN IF NOT EXISTS callback_status TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE workflow_instances ADD COLUMN IF NOT EXISTS trigger_principal_type TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE workflow_instances ADD COLUMN IF NOT EXISTS trigger_principal_id TEXT NOT NULL DEFAULT ''`,
 	// mcp_servers: tools_json and explored_at added during MCP exploration feature
 	`ALTER TABLE mcp_servers ADD COLUMN IF NOT EXISTS tools_json TEXT NOT NULL DEFAULT '[]'`,
 	`ALTER TABLE mcp_servers ADD COLUMN IF NOT EXISTS explored_at TEXT`,
@@ -284,6 +288,8 @@ var postgresDDL = []string{
 	callback_url TEXT NOT NULL DEFAULT '',
 	trigger_source TEXT NOT NULL DEFAULT 'ui',
 	callback_status TEXT NOT NULL DEFAULT '',
+	trigger_principal_type TEXT NOT NULL DEFAULT '',
+	trigger_principal_id TEXT NOT NULL DEFAULT '',
 	created_at TEXT NOT NULL,
 	updated_at TEXT NOT NULL
 )`,

@@ -5,6 +5,7 @@ import SectionHeader from '../components/SectionHeader'
 import StatCard from '../components/StatCard'
 import { buildWebSocketUrl, clusterApi } from '../services/api'
 import type { ClusterNode, NodeHealthResult } from '../types'
+import { useAuth } from '../auth/AuthProvider'
 
 function roleBadge(role: ClusterNode['role']) {
   const classes: Record<ClusterNode['role'], string> = {
@@ -46,6 +47,7 @@ function relativeTime(iso: string) {
 
 export default function ClusterPage() {
   const queryClient = useQueryClient()
+  const { hasPermission } = useAuth()
 
   const { data: nodes = [], isLoading } = useQuery({
     queryKey: ['cluster-nodes'],
@@ -82,7 +84,7 @@ export default function ClusterPage() {
         title="Cluster"
         description="Registered nodes and their health status"
         action={
-          <button
+          hasPermission('cluster.control') ? <button
             type="button"
             onClick={() => healthMutation.mutate()}
             disabled={healthMutation.isPending || nodes.length === 0}
@@ -90,7 +92,7 @@ export default function ClusterPage() {
           >
             <RefreshCw className={`h-4 w-4 ${healthMutation.isPending ? 'animate-spin' : ''}`} />
             {healthMutation.isPending ? 'Checking…' : 'Check health'}
-          </button>
+          </button> : null
         }
       />
 

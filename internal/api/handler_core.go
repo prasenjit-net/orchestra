@@ -31,6 +31,14 @@ func (h *Handler) Meta(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (h *Handler) PublicMeta(w http.ResponseWriter, r *http.Request) {
+	respondJSON(w, http.StatusOK, map[string]any{
+		"name":        h.config.App.Name,
+		"description": h.config.App.Description,
+		"version":     h.version.Version,
+	})
+}
+
 func (h *Handler) ListWorkflowActivities(w http.ResponseWriter, r *http.Request) {
 	if h.workflow == nil {
 		writeError(w, http.StatusServiceUnavailable, "workflow service unavailable")

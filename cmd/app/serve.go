@@ -17,7 +17,9 @@ import (
 	"github.com/spf13/viper"
 
 	"github.com/prasenjit-net/orchestra/internal/api"
+	"github.com/prasenjit-net/orchestra/internal/auth"
 	"github.com/prasenjit-net/orchestra/internal/config"
+	appdb "github.com/prasenjit-net/orchestra/internal/database"
 	"github.com/prasenjit-net/orchestra/internal/livebus"
 	"github.com/prasenjit-net/orchestra/internal/logging"
 	"github.com/prasenjit-net/orchestra/internal/server"
@@ -64,7 +66,13 @@ func runServe(cmd *cobra.Command, args []string) error {
 	live := livebus.New()
 	defer live.Close()
 
-	workflowService, err := workflow.NewService(cfg.Workflow, cfg.AI, logger, live)
+	db, dialect, err := appdb.Open(context.Background(), cfg.Workflow)
+	if err != nil {
+		return fmt.Errorf("open application database: %w", err)
+	}
+	defer db.Close()
+
+	workflowService, err := workflow.NewServiceWithDB(cfg.Workflow, cfg.AI, logger, db, dialect, live)
 	if err != nil {
 		return fmt.Errorf("create workflow service: %w", err)
 	}
@@ -72,9 +80,34 @@ func runServe(cmd *cobra.Command, args []string) error {
 		defer workflowService.Close()
 	}
 
+	var authService *auth.Service
+	if isController {
+		authService, err = auth.NewService(context.Background(), db, dialect, cfg.Auth, logger)
+		if err != nil {
+			return fmt.Errorf("create authentication service: %w", err)
+		}
+		bootstrap, err := authService.BootstrapInitialAdmin(context.Background())
+		if err != nil {
+			return fmt.Errorf("bootstrap initial administrator: %w", err)
+		}
+		if bootstrap.Created {
+			if bootstrap.OutputPath != "" {
+				logger.Warn("initial administrator created; retrieve the temporary credential from the protected bootstrap file", "username", bootstrap.Username, "path", bootstrap.OutputPath)
+			} else {
+				logger.Warn("initial administrator created from deployment secret; change the password on first login", "username", bootstrap.Username)
+			}
+		}
+	}
+
 	// Register this node and start the heartbeat goroutine.
 	workerCtx, stopWorker := context.WithCancel(context.Background())
 	defer stopWorker()
+	if authService != nil {
+		if err := authService.Cleanup(workerCtx); err != nil {
+			logger.Warn("initial authentication cleanup failed", "error", err)
+		}
+		go runAuthCleanup(workerCtx, authService, logger)
+	}
 
 	nodeID := resolveNodeID(cfg.Node.ID)
 	if workflowService != nil {
@@ -128,6 +161,7 @@ func runServe(cmd *cobra.Command, args []string) error {
 			UIFS:           uiFS,
 			Live:           live,
 			Workflow:       workflowService,
+			Auth:           authService,
 			RestartCh:      restartCh,
 			ConfigEditable: isController && isWorker,
 		})
@@ -136,11 +170,13 @@ func runServe(cmd *cobra.Command, args []string) error {
 		}
 
 		httpServer = &http.Server{
-			Addr:         cfg.Server.Address(),
-			Handler:      appServer.Handler(),
-			ReadTimeout:  cfg.Server.ReadTimeout,
-			WriteTimeout: cfg.Server.WriteTimeout,
-			IdleTimeout:  cfg.Server.IdleTimeout,
+			Addr:              cfg.Server.Address(),
+			Handler:           appServer.Handler(),
+			ReadHeaderTimeout: 5 * time.Second,
+			ReadTimeout:       cfg.Server.ReadTimeout,
+			WriteTimeout:      cfg.Server.WriteTimeout,
+			IdleTimeout:       cfg.Server.IdleTimeout,
+			MaxHeaderBytes:    1 << 20,
 		}
 		go func() {
 			logger.Info("starting server",
@@ -192,6 +228,23 @@ func runServe(cmd *cobra.Command, args []string) error {
 		execSelf(logger)
 	}
 	return nil
+}
+
+func runAuthCleanup(ctx context.Context, service *auth.Service, logger interface {
+	Warn(string, ...any)
+}) {
+	ticker := time.NewTicker(time.Hour)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if err := service.Cleanup(ctx); err != nil && !errors.Is(err, context.Canceled) {
+				logger.Warn("authentication cleanup failed", "error", err)
+			}
+		}
+	}
 }
 
 // resolveRoles determines which subsystems to enable.
@@ -306,7 +359,10 @@ func startHealthServer(addr string, logger interface{ Info(string, ...any) }) *h
 	return srv
 }
 
-func execSelf(logger interface{ Info(string, ...any); Error(string, ...any) }) {
+func execSelf(logger interface {
+	Info(string, ...any)
+	Error(string, ...any)
+}) {
 	exe, err := os.Executable()
 	if err != nil {
 		logger.Error("restart: get executable", "error", err)

@@ -21,6 +21,7 @@ import {
   formatEventType,
   statusClasses,
 } from './workflowUi'
+import { useAuth } from '../auth/AuthProvider'
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
 
@@ -43,7 +44,7 @@ function eventDotClass(eventType: string) {
 
 // ─── sub-components ───────────────────────────────────────────────────────────
 
-function Fact({ label, children }: { label: string; children: React.ReactNode }) {
+function Fact({ label, children }: Readonly<{ label: string; children: React.ReactNode }>) {
   return (
     <div className="min-w-0">
       <div className="text-[10px] font-semibold uppercase tracking-wide text-gray-400 dark:text-slate-500">{label}</div>
@@ -52,7 +53,7 @@ function Fact({ label, children }: { label: string; children: React.ReactNode })
   )
 }
 
-function CollapsibleJSON({ label, value }: { label: string; value: unknown }) {
+function CollapsibleJSON({ label, value }: Readonly<{ label: string; value: unknown }>) {
   const [open, setOpen] = useState(false)
   if (!value || (typeof value === 'object' && !Array.isArray(value) && Object.keys(value as object).length === 0)) return null
   return (
@@ -74,7 +75,7 @@ function CollapsibleJSON({ label, value }: { label: string; value: unknown }) {
   )
 }
 
-function TaskActionButton({ action, onClick, disabled }: { action: WorkflowTaskAction; onClick: () => void; disabled: boolean }) {
+function TaskActionButton({ action, onClick, disabled }: Readonly<{ action: WorkflowTaskAction; onClick: () => void; disabled: boolean }>) {
   const destructive = action === 'cancel'
   return (
     <button
@@ -92,7 +93,7 @@ function TaskActionButton({ action, onClick, disabled }: { action: WorkflowTaskA
   )
 }
 
-function ActiveTaskCard({ task, onAction, isPending }: { task: WorkflowTask; onAction: (id: number, action: WorkflowTaskAction) => void; isPending: boolean }) {
+function ActiveTaskCard({ task, onAction, isPending, canControl }: Readonly<{ task: WorkflowTask; onAction: (id: number, action: WorkflowTaskAction) => void; isPending: boolean; canControl: boolean }>) {
   return (
     <div className="rounded-xl border border-primary-200 bg-primary-50/60 p-4 dark:border-primary-800/50 dark:bg-slate-800">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
@@ -118,17 +119,17 @@ function ActiveTaskCard({ task, onAction, isPending }: { task: WorkflowTask; onA
             </div>
           )}
         </div>
-        <div className="flex shrink-0 flex-wrap gap-2">
+        {canControl && <div className="flex shrink-0 flex-wrap gap-2">
           {availableTaskActions(task).map((action) => (
             <TaskActionButton key={action} action={action} onClick={() => onAction(task.id, action)} disabled={isPending} />
           ))}
-        </div>
+        </div>}
       </div>
     </div>
   )
 }
 
-function EventRow({ event }: { event: WorkflowEvent }) {
+function EventRow({ event }: Readonly<{ event: WorkflowEvent }>) {
   const [open, setOpen] = useState(false)
   const hasPayload = Boolean(event.payload && typeof event.payload === 'object' && Object.keys(event.payload as object).length > 0)
 
@@ -163,6 +164,7 @@ function EventRow({ event }: { event: WorkflowEvent }) {
 export default function RunDetailsPage() {
   const { workflowId = '' } = useParams()
   const queryClient = useQueryClient()
+  const { hasPermission } = useAuth()
   const [eventFilter, setEventFilter] = useState<'all' | 'lifecycle' | 'failure' | 'queue'>('all')
   const [showTaskHistory, setShowTaskHistory] = useState(false)
   const [historyLimit, setHistoryLimit] = useState(50)
@@ -345,6 +347,7 @@ export default function RunDetailsPage() {
               task={task}
               onAction={(id, action) => taskActionMutation.mutate({ taskId: id, action })}
               isPending={taskActionMutation.isPending}
+              canControl={hasPermission('workflow.task.control')}
             />
           ))}
         </div>

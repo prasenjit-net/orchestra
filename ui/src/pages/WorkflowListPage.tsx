@@ -10,6 +10,7 @@ import { useImport } from '../hooks/useImport'
 import { downloadBundle, importExportApi, workflowApi } from '../services/api'
 import { formatDate, statusClasses } from './workflowUi'
 import type { WorkflowDefinitionSummary } from '../types'
+import { useAuth } from '../auth/AuthProvider'
 
 function WebhookUrl({ definitionId }: { definitionId: string }) {
   const [copied, setCopied] = useState(false)
@@ -39,6 +40,10 @@ function WebhookUrl({ definitionId }: { definitionId: string }) {
 export default function WorkflowListPage() {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
+  const { hasPermission } = useAuth()
+  const canWrite = hasPermission('workflow.definition.write')
+  const canStart = hasPermission('workflow.run.start')
+  const canImport = hasPermission('import.analyze') && hasPermission('import.apply')
   const [notice, setNotice] = useState<string | null>(null)
   const [pageError, setPageError] = useState<string | null>(null)
   const [startTarget, setStartTarget] = useState<WorkflowDefinitionSummary | null>(null)
@@ -99,8 +104,8 @@ export default function WorkflowListPage() {
         title="Workflows"
         description="Manage versioned workflow definitions, publish drafts, and start new runs."
         action={
-          <div className="flex items-center gap-2">
-            <input ref={importHook.fileInputRef} type="file" accept=".json" className="hidden" onChange={importHook.onFileChange} />
+          (canImport || canWrite) ? <div className="flex items-center gap-2">
+            {canImport && <><input ref={importHook.fileInputRef} type="file" accept=".json" className="hidden" onChange={importHook.onFileChange} />
             <button
               type="button"
               onClick={importHook.openFilePicker}
@@ -109,16 +114,16 @@ export default function WorkflowListPage() {
             >
               <Upload className="h-4 w-4" />
               {importHook.state.isAnalyzing ? 'Analyzing…' : importHook.state.isApplying ? 'Importing…' : 'Import'}
-            </button>
-            <button
+            </button></>}
+            {canWrite && <button
               type="button"
               onClick={() => navigate('/workflows/new')}
               className="inline-flex items-center gap-2 rounded-lg bg-primary-600 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-primary-700"
             >
               <PencilRuler className="h-4 w-4" />
               New workflow
-            </button>
-          </div>
+            </button>}
+          </div> : null
         }
       />
 
@@ -167,14 +172,14 @@ export default function WorkflowListPage() {
               </span>
             )}
           </h2>
-          <button
+          {canWrite && <button
             type="button"
             onClick={() => navigate('/workflows/new')}
             className="inline-flex items-center gap-1.5 text-sm font-semibold text-primary-600 hover:text-primary-700 dark:text-primary-400 dark:hover:text-primary-300"
           >
             <Plus className="h-4 w-4" />
             Create
-          </button>
+          </button>}
         </div>
 
         {definitions.length === 0 ? (
@@ -182,14 +187,14 @@ export default function WorkflowListPage() {
             <GitBranch className="mx-auto h-8 w-8 text-gray-400 dark:text-slate-500" />
             <p className="mt-3 text-sm font-medium text-gray-900 dark:text-slate-100">No workflow definitions yet</p>
             <p className="mt-1 text-sm text-gray-500 dark:text-slate-400">Use the visual designer to create your first workflow.</p>
-            <button
+            {canWrite && <button
               type="button"
               onClick={() => navigate('/workflows/new')}
               className="mt-4 inline-flex items-center gap-2 rounded-lg bg-primary-600 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-primary-700"
             >
               <PencilRuler className="h-4 w-4" />
               Open designer
-            </button>
+            </button>}
           </div>
         ) : (
           <div className="mt-4 grid grid-cols-1 gap-4 xl:grid-cols-2">
@@ -231,22 +236,22 @@ export default function WorkflowListPage() {
 
                 {/* Actions */}
                 <div className="flex flex-wrap items-center gap-2 border-t border-gray-100 px-5 py-3 dark:border-slate-800">
-                  <button
+                  {canWrite && <button
                     type="button"
                     onClick={() => navigate(`/workflows/${definition.id}/designer`)}
                     className="inline-flex items-center gap-1.5 rounded-lg bg-primary-600 px-3 py-1.5 text-sm font-semibold text-white transition-colors hover:bg-primary-700"
                   >
                     <PencilRuler className="h-3.5 w-3.5" />
                     Designer
-                  </button>
-                  <button
+                  </button>}
+                  {canStart && <button
                     type="button"
                     onClick={() => navigate(`/workflows/${definition.id}/versions`)}
                     className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 px-3 py-1.5 text-sm font-semibold text-gray-700 transition-colors hover:bg-gray-50 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800"
                   >
                     <History className="h-3.5 w-3.5" />
                     Versions
-                  </button>
+                  </button>}
                   <button
                     type="button"
                     onClick={() => {
@@ -284,7 +289,7 @@ export default function WorkflowListPage() {
         )}
       </section>
 
-      {startTarget && (
+      {canStart && startTarget && (
         <StartWorkflowModal
           definitionName={startTarget.name}
           activeVersion={startTarget.activeVersion}
@@ -304,7 +309,7 @@ export default function WorkflowListPage() {
         />
       )}
 
-      {importHook.state.analysis && (
+      {canImport && importHook.state.analysis && (
         <ImportModal
           analysis={importHook.state.analysis}
           isPending={importHook.state.isApplying}

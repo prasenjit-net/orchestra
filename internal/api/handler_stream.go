@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"net/http"
+	"net/url"
 	"time"
 
 	"github.com/coder/websocket"
@@ -16,9 +17,7 @@ func (h *Handler) WorkflowStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
-		InsecureSkipVerify: true,
-	})
+	conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{OriginPatterns: h.websocketOriginPatterns()})
 	if err != nil {
 		return
 	}
@@ -61,4 +60,19 @@ func (h *Handler) WorkflowStream(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+}
+
+func (h *Handler) websocketOriginPatterns() []string {
+	values := []string{h.config.App.URL}
+	if h.config.App.Env == "development" {
+		values = append(values, h.config.UI.DevProxyURL)
+	}
+	patterns := make([]string, 0, len(values))
+	for _, value := range values {
+		parsed, err := url.Parse(value)
+		if err == nil && parsed.Host != "" {
+			patterns = append(patterns, parsed.Host)
+		}
+	}
+	return patterns
 }
