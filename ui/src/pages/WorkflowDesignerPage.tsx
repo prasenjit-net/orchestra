@@ -1743,18 +1743,56 @@ function sortedValue(value: unknown): unknown {
   )
 }
 
+function normalizeOptionalObject(value: unknown) {
+  if (value == null) {
+    return undefined
+  }
+  if (typeof value === 'object' && !Array.isArray(value) && Object.keys(value).length === 0) {
+    return undefined
+  }
+  return value
+}
+
+function normalizeStepTransitions(transitions: WorkflowStepTransition[] | null | undefined) {
+  if (transitions == null) {
+    return undefined
+  }
+  return transitions.map((transition) => ({
+    to: transition.to,
+    label: transition.label || undefined,
+    condition: transition.condition
+      ? {
+          path: transition.condition.path,
+          operator: transition.condition.operator,
+          value: transition.condition.value,
+        }
+      : undefined,
+  }))
+}
+
+function comparableDocument(document: WorkflowDefinitionDocument, includeLayout: boolean): WorkflowDefinitionDocument {
+  return {
+    name: document.name,
+    description: document.description,
+    startSchemaId: document.startSchemaId || undefined,
+    endSchemaId: document.endSchemaId || undefined,
+    endOutput: normalizeOptionalObject(document.endOutput),
+    steps: document.steps.map((step) => ({
+      name: step.name,
+      activity: step.activity,
+      input: normalizeOptionalObject(step.input),
+      retry: {
+        maxAttempts: step.retry?.maxAttempts ?? 1,
+        backoffSeconds: step.retry?.backoffSeconds ?? 0,
+      },
+      layout: includeLayout ? step.layout : undefined,
+      transitions: normalizeStepTransitions(step.transitions as WorkflowStepTransition[] | null | undefined),
+    })),
+  }
+}
+
 function documentSignature(document: WorkflowDefinitionDocument, includeLayout: boolean) {
-  const comparable = includeLayout
-    ? document
-    : {
-        ...document,
-        steps: document.steps.map((step) => {
-          const nextStep = { ...step }
-          delete nextStep.layout
-          return nextStep
-        }),
-      }
-  return JSON.stringify(sortedValue(comparable))
+  return JSON.stringify(sortedValue(comparableDocument(document, includeLayout)))
 }
 
 function classifyWorkflowChange(currentDocument: WorkflowDefinitionDocument | undefined, nextDocument: WorkflowDefinitionDocument): WorkflowChangeKind {
