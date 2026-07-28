@@ -6,6 +6,9 @@ import '@xyflow/react/dist/style.css'
 import App from './App'
 import './index.css'
 import { AuthProvider } from './auth/AuthProvider'
+import { initializeTheme, ThemeProvider } from './theme/ThemeProvider'
+
+initializeTheme()
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -20,9 +23,11 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
     <QueryClientProvider client={queryClient}>
       <BrowserRouter>
-        <AuthProvider>
-          <App />
-        </AuthProvider>
+        <ThemeProvider>
+          <AuthProvider>
+            <App />
+          </AuthProvider>
+        </ThemeProvider>
       </BrowserRouter>
     </QueryClientProvider>
   </React.StrictMode>,

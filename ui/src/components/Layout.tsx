@@ -6,10 +6,7 @@ import clsx from 'clsx'
 import { LogoFull } from './Logo'
 import { metaApi } from '../services/api'
 import { useAuth } from '../auth/AuthProvider'
-
-type ThemeMode = 'light' | 'dark' | 'system'
-
-const themeStorageKey = 'orchestra-theme'
+import { useTheme } from '../theme/ThemeProvider'
 
 const navItems = [
   { to: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
@@ -28,46 +25,16 @@ const navItems = [
 
 const appRepoUrl = 'https://github.com/prasenjit-net/orchestra'
 
-const getInitialTheme = (): ThemeMode => {
-  if (typeof window === 'undefined') {
-    return 'system'
-  }
-
-  const stored = window.localStorage.getItem(themeStorageKey)
-  if (stored === 'light' || stored === 'dark' || stored === 'system') {
-    return stored
-  }
-
-  return 'system'
-}
-
-const applyTheme = (mode: ThemeMode) => {
-  if (typeof window === 'undefined') {
-    return
-  }
-
-  const root = document.documentElement
-  const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches
-  const useDark = mode === 'dark' || (mode === 'system' && prefersDark)
-  root.classList.toggle('dark', useDark)
-  root.style.colorScheme = useDark ? 'dark' : 'light'
-}
-
 export default function Layout() {
   const navigate = useNavigate()
   const { session, hasPermission, logout } = useAuth()
-  const [themeMode, setThemeMode] = useState<ThemeMode>(getInitialTheme)
+  const { themeMode, setThemeMode } = useTheme()
   const [isDrawerOpen, setIsDrawerOpen] = useState(false)
   const { data: meta } = useQuery({
     queryKey: ['meta'],
     queryFn: metaApi.get,
     staleTime: Infinity,
   })
-
-  useEffect(() => {
-    applyTheme(themeMode)
-    window.localStorage.setItem(themeStorageKey, themeMode)
-  }, [themeMode])
 
   useEffect(() => {
     document.title = meta?.name || 'Orchestra'
