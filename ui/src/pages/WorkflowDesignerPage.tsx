@@ -1726,6 +1726,50 @@ function compileDocument(
   }
 }
 
+type WorkflowChangeKind = 'none' | 'layout' | 'definition'
+
+function sortedValue(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map(sortedValue)
+  }
+  if (!value || typeof value !== 'object') {
+    return value
+  }
+  return Object.fromEntries(
+    Object.entries(value)
+      .filter(([, entryValue]) => entryValue !== undefined)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, entryValue]) => [key, sortedValue(entryValue)]),
+  )
+}
+
+function documentSignature(document: WorkflowDefinitionDocument, includeLayout: boolean) {
+  const comparable = includeLayout
+    ? document
+    : {
+        ...document,
+        steps: document.steps.map((step) => {
+          const nextStep = { ...step }
+          delete nextStep.layout
+          return nextStep
+        }),
+      }
+  return JSON.stringify(sortedValue(comparable))
+}
+
+function classifyWorkflowChange(currentDocument: WorkflowDefinitionDocument | undefined, nextDocument: WorkflowDefinitionDocument): WorkflowChangeKind {
+  if (!currentDocument) {
+    return 'definition'
+  }
+  if (documentSignature(currentDocument, true) === documentSignature(nextDocument, true)) {
+    return 'none'
+  }
+  if (documentSignature(currentDocument, false) === documentSignature(nextDocument, false)) {
+    return 'layout'
+  }
+  return 'definition'
+}
+
 function WorkflowDesignerCanvas() {
   const { definitionId } = useParams<{ definitionId: string }>()
   const [searchParams] = useSearchParams()
@@ -2061,6 +2105,24 @@ function WorkflowDesignerCanvas() {
     },
   })
 
+  const updateDefinitionVersionLayoutMutation = useMutation({
+    mutationFn: ({ targetDefinitionId, version, payload }: { targetDefinitionId: string; version: number; payload: WorkflowDefinitionDocument }) =>
+      workflowApi.updateDefinitionVersionLayout(targetDefinitionId, version, payload),
+    onSuccess: (definition, variables) => {
+      setPageError(null)
+      setNotice(`Saved layout for v${variables.version}.`)
+      void Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['workflow-definitions'] }),
+        queryClient.invalidateQueries({ queryKey: ['workflow-definition', definition.id] }),
+        queryClient.invalidateQueries({ queryKey: ['workflow-definition', definition.id, variables.version] }),
+      ])
+    },
+    onError: (error: Error) => {
+      setNotice(null)
+      setPageError(error.message)
+    },
+  })
+
   const publishDefinitionMutation = useMutation({
     mutationFn: ({ targetDefinitionId, version, activate }: { targetDefinitionId: string; version: number; activate: boolean }) =>
       workflowApi.publishDefinitionVersion(targetDefinitionId, version, activate),
@@ -2128,6 +2190,15 @@ function WorkflowDesignerCanvas() {
         if (!basedOnVersion) {
           throw new Error('Select a source workflow version before saving.')
         }
+        const changeKind = classifyWorkflowChange(definitionQuery.data?.document, payload)
+        if (changeKind === 'none') {
+          setNotice('No workflow changes to save.')
+          return
+        }
+        if (changeKind === 'layout') {
+          updateDefinitionVersionLayoutMutation.mutate({ targetDefinitionId: definitionId, version: basedOnVersion, payload })
+          return
+        }
         createDefinitionVersionMutation.mutate({ targetDefinitionId: definitionId, payload, basedOnVersion })
         return
       }
@@ -2136,7 +2207,7 @@ function WorkflowDesignerCanvas() {
       setNotice(null)
       setPageError(error instanceof Error ? error.message : 'Unable to build workflow definition.')
     }
-  }, [createDefinitionMutation, createDefinitionVersionMutation, definitionId, definitionQuery.data?.activeVersion, edges, endOutputRows, endSchemaId, nodes, requestedVersion, startSchemaId, workflowDescription, workflowName])
+  }, [createDefinitionMutation, createDefinitionVersionMutation, definitionId, definitionQuery.data?.activeVersion, definitionQuery.data?.document, edges, endOutputRows, endSchemaId, nodes, requestedVersion, startSchemaId, updateDefinitionVersionLayoutMutation, workflowDescription, workflowName])
 
   if (activitiesQuery.isLoading || schemasQuery.isLoading || (definitionId && definitionQuery.isLoading)) {
     return <div className="p-8 text-sm text-gray-500 dark:text-slate-400">Loading designer…</div>
@@ -2155,6 +2226,25 @@ function WorkflowDesignerCanvas() {
 
   let activationLabel = viewedVersion ? `Activate v${viewedVersion}` : 'Activate'
   if (activateDefinitionMutation.isPending) activationLabel = 'Activating...'
+  const currentChangeKind = (() => {
+    if (!definitionId) {
+      return 'definition' as WorkflowChangeKind
+    }
+    try {
+      const payload = compileDocument(workflowName, workflowDescription, nodes, edges, {
+        startSchemaId,
+        endSchemaId,
+        endOutputRows,
+      })
+      return classifyWorkflowChange(loadedDefinition?.document, payload)
+    } catch {
+      return 'definition' as WorkflowChangeKind
+    }
+  })()
+  const isSavingDefinition = createDefinitionMutation.isPending || createDefinitionVersionMutation.isPending || updateDefinitionVersionLayoutMutation.isPending
+  let saveButtonLabel = definitionId ? 'Save as new version' : 'Create workflow'
+  if (definitionId && currentChangeKind === 'layout') saveButtonLabel = 'Save layout'
+  else if (definitionId && currentChangeKind === 'none') saveButtonLabel = 'No changes'
 
   if (!isDesktop) {
     return (
@@ -2216,11 +2306,11 @@ function WorkflowDesignerCanvas() {
             <button
               type="button"
               onClick={saveDocument}
-              disabled={createDefinitionMutation.isPending || createDefinitionVersionMutation.isPending}
+              disabled={isSavingDefinition}
               className="inline-flex items-center gap-2 rounded-lg bg-primary-600 px-3 py-2 text-xs font-semibold text-white transition-colors hover:bg-primary-700 disabled:cursor-not-allowed disabled:opacity-60"
             >
               <Save className="h-4 w-4" />
-              {definitionId ? 'Save as new version' : 'Create workflow'}
+              {saveButtonLabel}
             </button>
             {definitionId && viewedVersionMeta?.status === 'draft' && viewedVersion ? (
               <button

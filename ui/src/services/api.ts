@@ -452,6 +452,14 @@ export const workflowApi = {
         body: JSON.stringify({ ...payload, basedOnVersion }),
       }),
     ),
+  updateDefinitionVersionLayout: async (definitionId: string, version: number, payload: WorkflowDefinitionDocument) =>
+    handleResponse<WorkflowDefinitionDetails>(
+      await apiFetch(buildApiUrl(`/workflow-definitions/${definitionId}/versions/${version}/layout`), {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      }),
+    ),
   publishDefinitionVersion: async (definitionId: string, version: number, activate = false) =>
     handleResponse<WorkflowDefinitionDetails>(
       await apiFetch(buildApiUrl(`/workflow-definitions/${definitionId}/versions/${version}/publish`), {

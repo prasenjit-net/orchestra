@@ -208,6 +208,14 @@ func mountWorkflowRoutes(r chi.Router, h *Handler) {
 		r.With(h.requirePermission(auth.PermissionWorkflowDefinitionWrite)).Post("/versions", func(w http.ResponseWriter, r *http.Request) {
 			h.CreateWorkflowDefinitionVersion(w, r, chi.URLParam(r, "definitionID"))
 		})
+		r.With(h.requirePermission(auth.PermissionWorkflowDefinitionWrite)).Put("/versions/{version}/layout", func(w http.ResponseWriter, r *http.Request) {
+			version, err := parseVersion(chi.URLParam(r, "version"))
+			if err != nil {
+				writeError(w, http.StatusBadRequest, err.Error())
+				return
+			}
+			h.UpdateWorkflowDefinitionVersionLayout(w, r, chi.URLParam(r, "definitionID"), version)
+		})
 		r.With(h.requirePermission(auth.PermissionWorkflowRunStart)).Post("/start", func(w http.ResponseWriter, r *http.Request) {
 			h.StartWorkflow(w, r, chi.URLParam(r, "definitionID"))
 		})
