@@ -115,16 +115,16 @@ func buildSessionResponse(principal auth.Principal, session auth.Session) map[st
 
 func setSessionCookie(w http.ResponseWriter, h *Handler, token string) {
 	secure := cookieSecure(h)
-	http.SetCookie(w, &http.Cookie{
+	http.SetCookie(w, &http.Cookie{ // NOSONAR -- Secure may be disabled only by explicit local HTTP development configuration.
 		Name: auth.SessionCookieName, Value: token, Path: "/", HttpOnly: true,
-		Secure: secure, SameSite: http.SameSiteLaxMode, // NOSONAR -- false is limited to explicitly configured local HTTP development.
+		Secure: secure, SameSite: http.SameSiteLaxMode,
 	})
 }
 
 func clearSessionCookie(w http.ResponseWriter, secure bool) {
-	http.SetCookie(w, &http.Cookie{
+	http.SetCookie(w, &http.Cookie{ // NOSONAR -- Secure must match the explicitly configured session cookie to clear it.
 		Name: auth.SessionCookieName, Value: "", Path: "/", HttpOnly: true,
-		Secure: secure, SameSite: http.SameSiteLaxMode, MaxAge: -1, // NOSONAR -- must match the explicitly configured local HTTP session cookie.
+		Secure: secure, SameSite: http.SameSiteLaxMode, MaxAge: -1,
 		Expires: time.Unix(1, 0),
 	})
 }

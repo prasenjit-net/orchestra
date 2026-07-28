@@ -171,44 +171,77 @@ func (s *Store) ListAPIKeys(ctx context.Context, ownerID string, includeAll bool
 	if offset < 0 {
 		offset = 0
 	}
-	var total int
-	var rows *sql.Rows
-	var err error
-	if includeAll {
-		err = s.queryRow(ctx, `SELECT COUNT(*) FROM api_keys`).Scan(&total)
-		if err == nil {
-			rows, err = s.query(ctx, `SELECT `+apiKeyColumns+` FROM api_keys ORDER BY created_at DESC LIMIT ? OFFSET ?`, limit, offset)
-		}
-	} else {
-		err = s.queryRow(ctx, `SELECT COUNT(*) FROM api_keys WHERE created_by_user_id = ?`, ownerID).Scan(&total)
-		if err == nil {
-			rows, err = s.query(ctx, `SELECT `+apiKeyColumns+` FROM api_keys WHERE created_by_user_id = ? ORDER BY created_at DESC LIMIT ? OFFSET ?`, ownerID, limit, offset)
-		}
-	}
+	rows, total, err := s.queryAPIKeyRows(ctx, ownerID, includeAll, limit, offset)
 	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+
+	result, err := scanAPIKeys(rows)
+	if err != nil {
+		return nil, 0, err
+	}
+	if err := s.loadAPIKeyGrants(ctx, result); err != nil {
+		return nil, 0, err
+	}
+	return result, total, nil
+}
+
+func (s *Store) queryAPIKeyRows(ctx context.Context, ownerID string, includeAll bool, limit, offset int) (*sql.Rows, int, error) {
+	if includeAll {
+		return s.queryAllAPIKeyRows(ctx, limit, offset)
+	}
+	return s.queryOwnedAPIKeyRows(ctx, ownerID, limit, offset)
+}
+
+func (s *Store) queryAllAPIKeyRows(ctx context.Context, limit, offset int) (*sql.Rows, int, error) {
+	var total int
+	if err := s.queryRow(ctx, `SELECT COUNT(*) FROM api_keys`).Scan(&total); err != nil {
 		return nil, 0, fmt.Errorf("count api keys: %w", err)
 	}
+	rows, err := s.query(ctx, `SELECT `+apiKeyColumns+` FROM api_keys ORDER BY created_at DESC LIMIT ? OFFSET ?`, limit, offset)
+	if err != nil {
+		return nil, 0, fmt.Errorf("list api keys: %w", err)
+	}
+	return rows, total, nil
+}
+
+func (s *Store) queryOwnedAPIKeyRows(ctx context.Context, ownerID string, limit, offset int) (*sql.Rows, int, error) {
+	var total int
+	if err := s.queryRow(ctx, `SELECT COUNT(*) FROM api_keys WHERE created_by_user_id = ?`, ownerID).Scan(&total); err != nil {
+		return nil, 0, fmt.Errorf("count api keys: %w", err)
+	}
+	rows, err := s.query(ctx, `SELECT `+apiKeyColumns+` FROM api_keys WHERE created_by_user_id = ? ORDER BY created_at DESC LIMIT ? OFFSET ?`, ownerID, limit, offset)
+	if err != nil {
+		return nil, 0, fmt.Errorf("list api keys: %w", err)
+	}
+	return rows, total, nil
+}
+
+func scanAPIKeys(rows *sql.Rows) ([]APIKey, error) {
 	result := make([]APIKey, 0)
 	for rows.Next() {
 		record, err := scanAPIKey(rows)
 		if err != nil {
-			rows.Close()
-			return nil, 0, err
+			return nil, err
 		}
 		result = append(result, record.APIKey)
 	}
 	if err := rows.Err(); err != nil {
-		rows.Close()
-		return nil, 0, err
+		return nil, err
 	}
-	rows.Close()
+	return result, nil
+}
+
+func (s *Store) loadAPIKeyGrants(ctx context.Context, result []APIKey) error {
 	for index := range result {
-		result[index].Grants, err = s.ListAPIKeyGrants(ctx, result[index].ID)
+		grants, err := s.ListAPIKeyGrants(ctx, result[index].ID)
 		if err != nil {
-			return nil, 0, err
+			return err
 		}
+		result[index].Grants = grants
 	}
-	return result, total, nil
+	return nil
 }
 
 func (s *Store) ListAPIKeyGrants(ctx context.Context, keyID string) ([]APIKeyGrant, error) {

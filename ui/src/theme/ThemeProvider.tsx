@@ -1,5 +1,5 @@
 /* eslint-disable react-refresh/only-export-components */
-import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react'
+import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react'
 
 export type ThemeMode = 'light' | 'dark' | 'system'
 
@@ -32,7 +32,7 @@ export const initializeTheme = () => {
 }
 
 export function ThemeProvider({ children }: Readonly<{ children: ReactNode }>) {
-  const [themeMode, setThemeModeState] = useState<ThemeMode>(getStoredTheme)
+  const [themeMode, setThemeMode] = useState<ThemeMode>(getStoredTheme)
 
   useEffect(() => {
     const systemTheme = window.matchMedia(systemThemeQuery)
@@ -51,7 +51,7 @@ export function ThemeProvider({ children }: Readonly<{ children: ReactNode }>) {
   useEffect(() => {
     const handleStorageChange = (event: StorageEvent) => {
       if (event.key === themeStorageKey && isThemeMode(event.newValue)) {
-        setThemeModeState(event.newValue)
+        setThemeMode(event.newValue)
       }
     }
 
@@ -59,11 +59,7 @@ export function ThemeProvider({ children }: Readonly<{ children: ReactNode }>) {
     return () => window.removeEventListener('storage', handleStorageChange)
   }, [])
 
-  const setThemeMode = useCallback((mode: ThemeMode) => {
-    setThemeModeState(mode)
-  }, [])
-
-  const value = useMemo(() => ({ themeMode, setThemeMode }), [themeMode, setThemeMode])
+  const value = useMemo(() => ({ themeMode, setThemeMode }), [themeMode])
   return <ThemeContext.Provider value={value}>{children}</ThemeContext.Provider>
 }
 
