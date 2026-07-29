@@ -22,7 +22,7 @@ export default function PublishVersionModal({ version, activeVersion, isPending,
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/55 p-4">
-      <dialog open aria-modal="true" aria-labelledby="publish-version-title" className="m-0 w-full max-w-md rounded-lg border border-gray-200 bg-white p-0 shadow-xl dark:border-slate-700 dark:bg-slate-900">
+      <dialog open aria-modal="true" aria-labelledby="publish-version-title" className="m-auto w-full max-w-md rounded-lg border border-gray-200 bg-white p-0 shadow-xl dark:border-slate-700 dark:bg-slate-900">
         <div className="flex items-start justify-between gap-4 border-b border-gray-200 px-5 py-4 dark:border-slate-800">
           <div>
             <h2 id="publish-version-title" className="text-base font-semibold text-gray-900 dark:text-slate-100">Publish version {version}</h2>

@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ArrowLeft, Eye, Pencil, RefreshCw, Save, Sparkles, Trash2 } from 'lucide-react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import Editor from '../components/MonacoEditor'
+import EnhanceAgentPromptModal from '../components/EnhanceAgentPromptModal'
 import ReactMarkdown from 'react-markdown'
 import { useMonacoTheme } from '../hooks/useMonacoTheme'
 import { agentsApi, aiApi, mcpServersApi } from '../services/api'
@@ -47,7 +48,7 @@ export default function AgentEditorPage() {
   const [systemPrompt, setSystemPrompt] = useState('')
   const [maxTokens, setMaxTokens] = useState('')
   const [temperature, setTemperature] = useState('')
-  const [promptMode, setPromptMode] = useState<PromptMode>('edit')
+  const [promptMode, setPromptMode] = useState<PromptMode>('preview')
   const [pageError, setPageError] = useState<string | null>(null)
   const [saved, setSaved] = useState(false)
   const [checkedMCPIds, setCheckedMCPIds] = useState<Set<string>>(new Set())
@@ -173,11 +174,18 @@ export default function AgentEditorPage() {
   const monacoTheme = useMonacoTheme()
 
   const [enhanceError, setEnhanceError] = useState<string | null>(null)
+  const [enhanceModalOpen, setEnhanceModalOpen] = useState(false)
   const enhanceMutation = useMutation({
-    mutationFn: () => aiApi.enhancePrompt(systemPrompt, provider, model.trim() || providerOptions[provider].defaultModel),
+    mutationFn: (message: string) => aiApi.enhancePrompt(
+      systemPrompt,
+      message,
+      provider,
+      model.trim() || providerOptions[provider].defaultModel,
+    ),
     onSuccess: (result) => {
       setSystemPrompt(result.prompt)
       setEnhanceError(null)
+      setEnhanceModalOpen(false)
     },
     onError: (error: Error) => setEnhanceError(error.message),
   })
@@ -390,7 +398,10 @@ export default function AgentEditorPage() {
             <div className="flex items-center gap-2">
               <button
                 type="button"
-                onClick={() => enhanceMutation.mutate()}
+                onClick={() => {
+                  setEnhanceError(null)
+                  setEnhanceModalOpen(true)
+                }}
                 disabled={enhanceMutation.isPending || !systemPrompt.trim()}
                 title={`Rewrite this system prompt using ${providerOptions[provider].label}`}
                 className="inline-flex items-center gap-1.5 rounded-lg border border-violet-200 bg-violet-50 px-3 py-1 text-xs font-semibold text-violet-700 transition-colors hover:bg-violet-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-violet-800/50 dark:bg-violet-950/30 dark:text-violet-300 dark:hover:bg-violet-950/50"
@@ -426,12 +437,6 @@ export default function AgentEditorPage() {
               </div>
             </div>
           </div>
-          {enhanceError && (
-            <div className="mx-4 mb-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700 dark:border-red-900/40 dark:bg-red-950/30 dark:text-red-300">
-              {enhanceError}
-            </div>
-          )}
-
           {/* Editor / Preview area */}
           <div className="flex-1 overflow-hidden">
             {promptMode === 'edit' ? (
@@ -511,6 +516,14 @@ export default function AgentEditorPage() {
           </div>
         </div>
       </div>
+      {enhanceModalOpen ? (
+        <EnhanceAgentPromptModal
+          isPending={enhanceMutation.isPending}
+          error={enhanceError}
+          onClose={() => setEnhanceModalOpen(false)}
+          onEnhance={(message) => enhanceMutation.mutate(message)}
+        />
+      ) : null}
     </div>
   )
 }

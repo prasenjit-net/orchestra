@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -196,12 +197,26 @@ func TestEnhancePromptUsesSelectedProvider(t *testing.T) {
 		if r.URL.Path != "/messages" {
 			t.Fatalf("expected Claude messages endpoint, got %s", r.URL.Path)
 		}
-		var body map[string]any
+		var body struct {
+			Model    string `json:"model"`
+			Messages []struct {
+				Content []struct {
+					Text string `json:"text"`
+				} `json:"content"`
+			} `json:"messages"`
+		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			t.Fatalf("decode request: %v", err)
 		}
-		if body["model"] != "claude-sonnet-4-6" {
-			t.Fatalf("expected Claude model, got %#v", body["model"])
+		if body.Model != "claude-sonnet-4-6" {
+			t.Fatalf("expected Claude model, got %q", body.Model)
+		}
+		if len(body.Messages) != 1 || len(body.Messages[0].Content) != 1 {
+			t.Fatalf("expected one contextual enhancement message, got %#v", body.Messages)
+		}
+		enhancementContext := body.Messages[0].Content[0].Text
+		if !strings.Contains(enhancementContext, "draft prompt") || !strings.Contains(enhancementContext, "add escalation rules") {
+			t.Fatalf("expected draft and enhancement instructions in context, got %q", enhancementContext)
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = io.WriteString(w, `{"role":"assistant","stop_reason":"end_turn","content":[{"type":"text","text":"better prompt"}],"usage":{"input_tokens":1,"output_tokens":1}}`)
@@ -218,7 +233,7 @@ func TestEnhancePromptUsesSelectedProvider(t *testing.T) {
 	}
 	defer service.Close()
 
-	prompt, err := service.EnhancePrompt(context.Background(), "draft prompt", aiProviderClaude, "")
+	prompt, err := service.EnhancePrompt(context.Background(), "draft prompt", "add escalation rules", aiProviderClaude, "")
 	if err != nil {
 		t.Fatalf("EnhancePrompt returned error: %v", err)
 	}
