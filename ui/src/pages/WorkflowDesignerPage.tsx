@@ -1612,6 +1612,78 @@ function buildStepNameMap(orderedStepIds: string[], nodeMap: Map<string, Node>) 
   return stepNameByNodeId
 }
 
+function edgeToStepTransition(edge: Edge, stepNameByNodeId: Map<string, string>): WorkflowStepTransition {
+  const edgeData = edge.data as EdgeConditionData | undefined
+  const target = edge.target === endNodeID
+    ? terminalTransitionTarget
+    : (stepNameByNodeId.get(edge.target) ?? edge.target)
+  return {
+    to: target,
+    label: edgeData?.label,
+    condition: edgeData?.condition,
+  }
+}
+
+function compileSingleActivityTransition(
+  edge: Edge,
+  index: number,
+  orderedStepIds: string[],
+  stepNameByNodeId: Map<string, string>,
+): WorkflowStepTransition[] | undefined {
+  const edgeData = edge.data as EdgeConditionData | undefined
+  const nextName = stepNameByNodeId.get(edge.target)
+  const nextIndex = orderedStepIds.indexOf(edge.target)
+  if (!edgeData?.condition && !edgeData?.label && nextIndex === index + 1 && nextName) {
+    return undefined
+  }
+  return [{
+    to: nextName ?? edge.target,
+    label: edgeData?.label,
+    condition: edgeData?.condition,
+  }]
+}
+
+function compileMultipleTransitions(
+  edges: Edge[],
+  stepName: string,
+  stepNameByNodeId: Map<string, string>,
+): WorkflowStepTransition[] {
+  const defaultEdges = edges.filter((edge) => !(edge.data as EdgeConditionData | undefined)?.condition)
+  if (defaultEdges.length !== 1) {
+    throw new Error(`Step "${stepName}" with multiple outgoing edges needs exactly one default edge without a condition.`)
+  }
+  return edges.map((edge) => edgeToStepTransition(edge, stepNameByNodeId))
+}
+
+function compileStepTransitions(
+  nodeId: string,
+  index: number,
+  stepName: string,
+  orderedStepIds: string[],
+  outgoingEdges: Map<string, Edge[]>,
+  stepNameByNodeId: Map<string, string>,
+): WorkflowStepTransition[] | undefined {
+  const outs = outgoingEdges.get(nodeId) ?? []
+  if (outs.length === 0) {
+    return []
+  }
+
+  const toActivity = outs.filter((edge) => edge.target !== endNodeID)
+  const toEnd = outs.filter((edge) => edge.target === endNodeID)
+  if (toActivity.length === 1 && toEnd.length === 0) {
+    return compileSingleActivityTransition(toActivity[0], index, orderedStepIds, stepNameByNodeId)
+  }
+  if (outs.length > 1) {
+    return compileMultipleTransitions(outs, stepName, stepNameByNodeId)
+  }
+  if (toEnd.length === 1) {
+    const edgeData = toEnd[0].data as EdgeConditionData | undefined
+    const isImplicitEnd = index === orderedStepIds.length - 1 && edgeData?.implicit && !edgeData.condition && !edgeData.label
+    return isImplicitEnd ? undefined : [edgeToStepTransition(toEnd[0], stepNameByNodeId)]
+  }
+  return outs.map((edge) => edgeToStepTransition(edge, stepNameByNodeId))
+}
+
 function compileDocument(
   name: string,
   description: string,
@@ -1649,57 +1721,7 @@ function compileDocument(
     const nodeData = node.data
     const stepName = nodeData.label.trim()
 
-    const outs = outgoingEdges.get(nodeId) ?? []
-    const toActivity = outs.filter((e) => e.target !== endNodeID)
-    const toEnd = outs.filter((e) => e.target === endNodeID)
-
-    let transitions: WorkflowStepTransition[] | undefined
-    const isLastStep = index === orderedStepIds.length - 1
-    const edgeTargetName = (edge: Edge) => (edge.target === endNodeID ? terminalTransitionTarget : (stepNameByNodeId.get(edge.target) ?? edge.target))
-    const edgeToTransition = (edge: Edge): WorkflowStepTransition => {
-      const edgeData = edge.data as EdgeConditionData | undefined
-      return {
-        to: edgeTargetName(edge),
-        label: edgeData?.label,
-        condition: edgeData?.condition,
-      }
-    }
-
-    if (outs.length === 0) {
-      // No outgoing edge is an explicit terminal, distinct from linear fallback.
-      transitions = []
-    } else if (toActivity.length === 1 && toEnd.length === 0) {
-      const edgeData = toActivity[0].data as EdgeConditionData | undefined
-      const nextName = stepNameByNodeId.get(toActivity[0].target)
-      const nextIndex = orderedStepIds.indexOf(toActivity[0].target)
-      // Simple linear to immediate next step with no condition/label → omit transitions (linear fallback)
-      if (!edgeData?.condition && !edgeData?.label && nextIndex === index + 1 && nextName) {
-        transitions = undefined
-      } else {
-        transitions = [{
-          to: nextName ?? toActivity[0].target,
-          label: edgeData?.label,
-          condition: edgeData?.condition,
-        }]
-      }
-    } else if (outs.length > 1) {
-      const defaultEdges = outs.filter((edge) => {
-        const edgeData = edge.data as EdgeConditionData | undefined
-        return !edgeData?.condition
-      })
-      if (defaultEdges.length !== 1) {
-        throw new Error(`Step "${stepName}" with multiple outgoing edges needs exactly one default edge without a condition.`)
-      }
-      transitions = outs.map(edgeToTransition)
-    } else if (toActivity.length === 0 && toEnd.length === 1) {
-      const edgeData = toEnd[0].data as EdgeConditionData | undefined
-      // Definitions without transitions render an implicit edge to End for the last step.
-      transitions = isLastStep && edgeData?.implicit && !edgeData.condition && !edgeData.label
-        ? undefined
-        : [edgeToTransition(toEnd[0])]
-    } else {
-      transitions = outs.map(edgeToTransition)
-    }
+    const transitions = compileStepTransitions(nodeId, index, stepName, orderedStepIds, outgoingEdges, stepNameByNodeId)
 
     return {
       name: stepName,

@@ -10,6 +10,8 @@ import type { AIProvider, CreateAgentInput } from '../types'
 
 type PromptMode = 'edit' | 'preview'
 
+const agentModelControlID = 'agent-model'
+
 const providerOptions: Record<AIProvider, { label: string; defaultModel: string; help: string }> = {
   openai: {
     label: 'OpenAI',
@@ -194,6 +196,50 @@ export default function AgentEditorPage() {
 
   const isSaving = createMutation.isPending || updateMutation.isPending
   const listedModels = modelsQuery.data?.models ?? []
+  let modelControl
+  if (modelsQuery.isLoading) {
+    modelControl = (
+      <select
+        id={agentModelControlID}
+        disabled
+        className="w-full rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm text-gray-500 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-400"
+      >
+        <option>Loading models…</option>
+      </select>
+    )
+  } else if (listedModels.length > 0) {
+    modelControl = (
+      <select
+        id={agentModelControlID}
+        value={model}
+        onChange={(event) => setModel(event.target.value)}
+        className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-900 outline-none transition-colors focus:border-primary-500 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
+      >
+        {listedModels.map((option) => (
+          <option key={option.id} value={option.id}>
+            {option.displayName === option.id ? option.id : `${option.displayName} (${option.id})`}
+          </option>
+        ))}
+      </select>
+    )
+  } else {
+    modelControl = (
+      <input
+        id={agentModelControlID}
+        value={model}
+        onChange={(event) => setModel(event.target.value)}
+        placeholder={providerOptions[provider].defaultModel}
+        className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-900 outline-none transition-colors focus:border-primary-500 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
+      />
+    )
+  }
+
+  let modelHelpText = `No models returned. Default: ${providerOptions[provider].defaultModel}`
+  if (modelsQuery.error) {
+    modelHelpText = 'Model discovery unavailable. Enter a model ID manually.'
+  } else if (listedModels.length > 0) {
+    modelHelpText = `${listedModels.length} agent-capable models. Default: ${providerOptions[provider].defaultModel}`
+  }
 
   return (
     <div className="flex h-full flex-col overflow-hidden">
@@ -287,7 +333,7 @@ export default function AgentEditorPage() {
           </div>
           <div>
             <div className="mb-1.5 flex items-center justify-between gap-2">
-              <label className="text-[11px] font-semibold uppercase tracking-wide text-gray-500 dark:text-slate-400">Model</label>
+              <label htmlFor={agentModelControlID} className="text-[11px] font-semibold uppercase tracking-wide text-gray-500 dark:text-slate-400">Model</label>
               <button
                 type="button"
                 onClick={() => void modelsQuery.refetch()}
@@ -298,39 +344,9 @@ export default function AgentEditorPage() {
                 <RefreshCw className={`h-3.5 w-3.5 ${modelsQuery.isFetching ? 'animate-spin' : ''}`} />
               </button>
             </div>
-            {modelsQuery.isLoading ? (
-              <select
-                disabled
-                className="w-full rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm text-gray-500 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-400"
-              >
-                <option>Loading models…</option>
-              </select>
-            ) : listedModels.length > 0 ? (
-              <select
-                value={model}
-                onChange={(e) => setModel(e.target.value)}
-                className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-900 outline-none transition-colors focus:border-primary-500 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
-              >
-                {listedModels.map((option) => (
-                  <option key={option.id} value={option.id}>
-                    {option.displayName === option.id ? option.id : `${option.displayName} (${option.id})`}
-                  </option>
-                ))}
-              </select>
-            ) : (
-              <input
-                value={model}
-                onChange={(e) => setModel(e.target.value)}
-                placeholder={providerOptions[provider].defaultModel}
-                className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-900 outline-none transition-colors focus:border-primary-500 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
-              />
-            )}
+            {modelControl}
             <p className="mt-1 text-[11px] text-gray-400 dark:text-slate-500">
-              {modelsQuery.error
-                ? 'Model discovery unavailable. Enter a model ID manually.'
-                : listedModels.length > 0
-                  ? `${listedModels.length} agent-capable models. Default: ${providerOptions[provider].defaultModel}`
-                  : `No models returned. Default: ${providerOptions[provider].defaultModel}`}
+              {modelHelpText}
             </p>
           </div>
           <div>

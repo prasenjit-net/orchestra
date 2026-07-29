@@ -11,6 +11,8 @@ import (
 	"time"
 )
 
+const definitionUpdatedEvent = "definition.updated"
+
 func (s *Service) CreateDefinition(ctx context.Context, input CreateDefinitionInput) (DefinitionDetails, error) {
 	document, err := s.normalizeDefinition(input)
 	if err != nil {
@@ -69,7 +71,7 @@ func (s *Service) CreateDefinition(ctx context.Context, input CreateDefinitionIn
 			PublishedAt: &now,
 		}},
 	}
-	s.emitLiveEvent("definition.updated", "definition", definitionID, result.DefinitionSummary)
+	s.emitLiveEvent(definitionUpdatedEvent, "definition", definitionID, result.DefinitionSummary)
 	return result, nil
 }
 
@@ -128,7 +130,7 @@ func (s *Service) CreateDefinitionVersion(ctx context.Context, definitionID stri
 	if err != nil {
 		return DefinitionDetails{}, err
 	}
-	s.emitLiveEvent("definition.updated", "definition", definitionID, result.DefinitionSummary)
+	s.emitLiveEvent(definitionUpdatedEvent, "definition", definitionID, result.DefinitionSummary)
 	return result, nil
 }
 
@@ -189,7 +191,7 @@ func (s *Service) UpdateDefinitionVersionLayout(ctx context.Context, definitionI
 	if err != nil {
 		return DefinitionDetails{}, err
 	}
-	s.emitLiveEvent("definition.updated", "definition", definitionID, result.DefinitionSummary)
+	s.emitLiveEvent(definitionUpdatedEvent, "definition", definitionID, result.DefinitionSummary)
 	return result, nil
 }
 
@@ -550,11 +552,11 @@ func (s *Service) normalizeDefinition(input CreateDefinitionInput) (DefinitionDo
 	return document, nil
 }
 
-func definitionsEqual(a DefinitionDocument, b DefinitionDocument) bool {
+func definitionsEqual(a, b DefinitionDocument) bool {
 	return reflect.DeepEqual(a, b)
 }
 
-func definitionsEqualWithoutLayout(a DefinitionDocument, b DefinitionDocument) bool {
+func definitionsEqualWithoutLayout(a, b DefinitionDocument) bool {
 	return reflect.DeepEqual(definitionWithoutLayout(a), definitionWithoutLayout(b))
 }
 
