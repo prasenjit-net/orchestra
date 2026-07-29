@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -33,6 +34,7 @@ const (
 	defaultCopilotIntegration = "vscode-chat"
 	defaultCopilotIntent      = "conversation-panel"
 	defaultAIRequestTimeout   = 120 * time.Second
+	defaultAIModelListTimeout = 15 * time.Second
 	copilotRefreshBuffer      = 60 * time.Second
 )
 
@@ -78,6 +80,30 @@ type aiChatResponse struct {
 	FinishReason string
 	ToolCalls    []aiToolCall
 	Usage        aiUsage
+}
+
+type AIModelInfo struct {
+	ID          string `json:"id"`
+	DisplayName string `json:"displayName"`
+}
+
+type AIModelCatalog struct {
+	Provider string        `json:"provider"`
+	Models   []AIModelInfo `json:"models"`
+}
+
+type aiModelWire struct {
+	ID                 string `json:"id"`
+	Name               string `json:"name"`
+	DisplayName        string `json:"display_name"`
+	ModelPickerEnabled *bool  `json:"model_picker_enabled"`
+	Capabilities       *struct {
+		Type     string `json:"type"`
+		Supports *struct {
+			ToolCalls       *bool `json:"tool_calls"`
+			FunctionCalling *bool `json:"function_calling"`
+		} `json:"supports"`
+	} `json:"capabilities"`
 }
 
 type aiProviderClient struct {
@@ -176,6 +202,213 @@ func normalizeAIModel(provider, model string) string {
 		return model
 	}
 	return defaultAIModel(provider)
+}
+
+func (s *Service) ListAIModels(ctx context.Context, provider string) (AIModelCatalog, error) {
+	return s.ai.ListModels(ctx, provider)
+}
+
+func (c *aiProviderClient) ListModels(ctx context.Context, requestedProvider string) (AIModelCatalog, error) {
+	ctx, cancel := context.WithTimeout(ctx, defaultAIModelListTimeout)
+	defer cancel()
+
+	provider, err := normalizeAIProvider(requestedProvider)
+	if err != nil {
+		return AIModelCatalog{}, err
+	}
+
+	var endpoint string
+	var authorization string
+	headers := make(map[string]string)
+	switch provider {
+	case aiProviderOpenAI:
+		if strings.TrimSpace(c.cfg.OpenAIAPIKey) == "" {
+			return AIModelCatalog{}, fmt.Errorf("OpenAI API key not configured (set ai.openaiAPIKey or APP_AI_OPENAI_API_KEY)")
+		}
+		endpoint = siblingAIEndpoint(c.openAIEndpoint(), "/chat/completions", "/models")
+		authorization = "Bearer " + c.cfg.OpenAIAPIKey
+	case aiProviderClaude:
+		if strings.TrimSpace(c.cfg.ClaudeAPIKey) == "" {
+			return AIModelCatalog{}, fmt.Errorf("Claude API key not configured (set ai.claudeAPIKey or APP_AI_CLAUDE_API_KEY)")
+		}
+		endpoint = siblingAIEndpoint(c.claudeEndpoint(), "/messages", "/models") + "?limit=1000"
+		headers["x-api-key"] = c.cfg.ClaudeAPIKey
+		apiVersion := strings.TrimSpace(c.cfg.ClaudeAPIVersion)
+		if apiVersion == "" {
+			apiVersion = defaultClaudeAPIVersion
+		}
+		headers["anthropic-version"] = apiVersion
+	case aiProviderCopilot:
+		if strings.TrimSpace(c.cfg.CopilotOAuthToken) == "" {
+			return AIModelCatalog{}, fmt.Errorf("GitHub Copilot OAuth token not configured (set ai.copilotOAuthToken or APP_AI_COPILOT_OAUTH_TOKEN)")
+		}
+		token, tokenErr := c.copilotToken(ctx)
+		if tokenErr != nil {
+			return AIModelCatalog{}, tokenErr
+		}
+		endpoint = siblingAIEndpoint(c.copilotEndpoint(), "/chat/completions", "/models")
+		authorization = "Bearer " + token
+		for key, value := range c.copilotHeaders() {
+			headers[key] = value
+		}
+	}
+
+	models, err := c.fetchModels(ctx, provider, endpoint, authorization, headers)
+	if err != nil {
+		return AIModelCatalog{}, err
+	}
+	return AIModelCatalog{Provider: provider, Models: models}, nil
+}
+
+func siblingAIEndpoint(endpoint, currentPath, targetPath string) string {
+	base := strings.TrimRight(strings.TrimSpace(endpoint), "/")
+	base = strings.TrimSuffix(base, currentPath)
+	return strings.TrimRight(base, "/") + targetPath
+}
+
+func (c *aiProviderClient) fetchModels(ctx context.Context, provider, endpoint, authorization string, headers map[string]string) ([]AIModelInfo, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nil, fmt.Errorf("build %s models request: %w", providerDisplayName(provider), err)
+	}
+	req.Header.Set("Accept", "application/json")
+	if authorization != "" {
+		req.Header.Set("Authorization", authorization)
+	}
+	for key, value := range headers {
+		req.Header.Set(key, value)
+	}
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("list %s models: %w", providerDisplayName(provider), err)
+	}
+	defer resp.Body.Close()
+
+	var payload struct {
+		Data    []aiModelWire `json:"data"`
+		Message string        `json:"message"`
+		Error   *struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		return nil, fmt.Errorf("decode %s models response: %w", providerDisplayName(provider), err)
+	}
+	if resp.StatusCode >= http.StatusBadRequest {
+		message := strings.TrimSpace(payload.Message)
+		if payload.Error != nil && strings.TrimSpace(payload.Error.Message) != "" {
+			message = strings.TrimSpace(payload.Error.Message)
+		}
+		if message == "" {
+			message = fmt.Sprintf("HTTP %d", resp.StatusCode)
+		}
+		return nil, fmt.Errorf("list %s models: %s", providerDisplayName(provider), message)
+	}
+
+	seen := make(map[string]struct{}, len(payload.Data))
+	models := make([]AIModelInfo, 0, len(payload.Data))
+	for _, item := range payload.Data {
+		id := strings.TrimSpace(item.ID)
+		if id == "" || !supportsAgenticChat(provider, item) {
+			continue
+		}
+		if _, exists := seen[id]; exists {
+			continue
+		}
+		seen[id] = struct{}{}
+		displayName := strings.TrimSpace(item.DisplayName)
+		if displayName == "" {
+			displayName = strings.TrimSpace(item.Name)
+		}
+		if displayName == "" {
+			displayName = id
+		}
+		models = append(models, AIModelInfo{ID: id, DisplayName: displayName})
+	}
+	sort.Slice(models, func(i, j int) bool {
+		return strings.ToLower(models[i].DisplayName) < strings.ToLower(models[j].DisplayName)
+	})
+	return models, nil
+}
+
+func supportsAgenticChat(provider string, model aiModelWire) bool {
+	if model.ModelPickerEnabled != nil && !*model.ModelPickerEnabled {
+		return false
+	}
+	if model.Capabilities != nil {
+		if modelType := strings.ToLower(strings.TrimSpace(model.Capabilities.Type)); modelType != "" && modelType != "chat" {
+			return false
+		}
+		if model.Capabilities.Supports != nil {
+			if model.Capabilities.Supports.ToolCalls != nil {
+				return *model.Capabilities.Supports.ToolCalls
+			}
+			if model.Capabilities.Supports.FunctionCalling != nil {
+				return *model.Capabilities.Supports.FunctionCalling
+			}
+		}
+	}
+
+	id := strings.ToLower(strings.TrimSpace(model.ID))
+	switch provider {
+	case aiProviderClaude:
+		return strings.HasPrefix(id, "claude-")
+	case aiProviderCopilot:
+		return isLikelyCopilotAgentModel(id)
+	default:
+		return isLikelyOpenAIAgentModel(id)
+	}
+}
+
+func isLikelyOpenAIAgentModel(id string) bool {
+	id = openAIBaseModelID(id)
+	if hasAnyModelMarker(id,
+		"audio", "codex", "computer-use", "deep-research", "image", "instruct",
+		"moderation", "realtime", "search-preview", "transcribe", "tts",
+	) {
+		return false
+	}
+	if strings.Contains(id, "-pro") {
+		return false
+	}
+	return hasAnyModelPrefix(id,
+		"gpt-5", "gpt-4.5", "gpt-4.1", "gpt-4o", "gpt-4-turbo",
+		"o1", "o3", "o4", "chat-latest",
+	)
+}
+
+func isLikelyCopilotAgentModel(id string) bool {
+	if hasAnyModelMarker(id, "audio", "embedding", "image", "realtime", "transcribe", "tts") {
+		return false
+	}
+	return hasAnyModelPrefix(id, "gpt-", "o1", "o3", "o4", "claude-", "gemini-", "grok-", "mai-")
+}
+
+func openAIBaseModelID(id string) string {
+	if !strings.HasPrefix(id, "ft:") {
+		return id
+	}
+	base, _, _ := strings.Cut(strings.TrimPrefix(id, "ft:"), ":")
+	return base
+}
+
+func hasAnyModelMarker(id string, markers ...string) bool {
+	for _, marker := range markers {
+		if strings.Contains(id, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func hasAnyModelPrefix(id string, prefixes ...string) bool {
+	for _, prefix := range prefixes {
+		if strings.HasPrefix(id, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 func (c *aiProviderClient) Complete(ctx context.Context, req aiChatRequest) (aiChatResponse, error) {

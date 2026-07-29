@@ -1,6 +1,7 @@
 import type {
   Agent,
   AgentsResponse,
+  AIModelCatalog,
   APIKeyGrant,
   APIKeyRecord,
   APIKeysResponse,
@@ -241,6 +242,10 @@ export const clusterApi = {
 }
 
 export const aiApi = {
+  listModels: async (provider: string) => {
+    const params = new URLSearchParams({ provider })
+    return handleResponse<AIModelCatalog>(await apiFetch(buildApiUrl(`/ai/models?${params.toString()}`)))
+  },
   enhancePrompt: async (prompt: string, provider: string, model: string) =>
     handleResponse<{ prompt: string }>(
       await apiFetch(buildApiUrl('/ai/enhance-prompt'), {

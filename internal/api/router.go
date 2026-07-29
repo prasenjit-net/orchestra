@@ -173,6 +173,7 @@ func mountWorkflowRoutes(r chi.Router, h *Handler) {
 		r.With(h.requirePermission(auth.PermissionResourceRead)).Get(exportRoute, h.ExportConnector)
 	})
 
+	r.With(h.requirePermission(auth.PermissionAIUse)).Get("/ai/models", h.ListAIModels)
 	r.With(h.requirePermission(auth.PermissionAIUse)).Post("/ai/enhance-prompt", h.EnhancePrompt)
 	r.With(h.requirePermission(auth.PermissionAIUse)).Post("/ai/script-assist", h.ScriptAssist)
 	r.With(h.requirePermission(auth.PermissionAIUse)).Post("/ai/validate-script", h.ValidateScript)

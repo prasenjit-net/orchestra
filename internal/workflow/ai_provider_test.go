@@ -93,6 +93,104 @@ func TestCopilotTokenCaching(t *testing.T) {
 	}
 }
 
+func TestListOpenAIModels(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/models" {
+			t.Fatalf("expected models endpoint, got %s", r.URL.Path)
+		}
+		if got := r.Header.Get("Authorization"); got != "Bearer sk-test" {
+			t.Fatalf("expected OpenAI bearer token, got %q", got)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"data":[{"id":"gpt-5"},{"id":"gpt-4o"},{"id":"gpt-4o"},{"id":"text-embedding-3-small"},{"id":"gpt-image-1"},{"id":"gpt-4o-realtime-preview"},{"id":"gpt-5-codex"}]}`)
+	}))
+	defer server.Close()
+
+	client := newAIProviderClient(config.AIConfig{
+		OpenAIAPIKey:  "sk-test",
+		OpenAIBaseURL: server.URL + "/v1/chat/completions",
+	})
+	catalog, err := client.ListModels(context.Background(), aiProviderOpenAI)
+	if err != nil {
+		t.Fatalf("ListModels returned error: %v", err)
+	}
+	if catalog.Provider != aiProviderOpenAI || len(catalog.Models) != 2 {
+		t.Fatalf("unexpected catalog: %#v", catalog)
+	}
+	if catalog.Models[0].ID != "gpt-4o" || catalog.Models[1].ID != "gpt-5" {
+		t.Fatalf("expected only sorted agent-capable models, got %#v", catalog.Models)
+	}
+}
+
+func TestListClaudeModels(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/models" || r.URL.Query().Get("limit") != "1000" {
+			t.Fatalf("expected paged models endpoint, got %s", r.URL.String())
+		}
+		if got := r.Header.Get("x-api-key"); got != "claude-test" {
+			t.Fatalf("expected Claude API key, got %q", got)
+		}
+		if got := r.Header.Get("anthropic-version"); got != defaultClaudeAPIVersion {
+			t.Fatalf("expected Anthropic API version, got %q", got)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"data":[{"id":"claude-sonnet","display_name":"Claude Sonnet"},{"id":"embedding-model","display_name":"Embedding Model"}]}`)
+	}))
+	defer server.Close()
+
+	client := newAIProviderClient(config.AIConfig{
+		ClaudeAPIKey:  "claude-test",
+		ClaudeBaseURL: server.URL + "/v1/messages",
+	})
+	catalog, err := client.ListModels(context.Background(), aiProviderClaude)
+	if err != nil {
+		t.Fatalf("ListModels returned error: %v", err)
+	}
+	if len(catalog.Models) != 1 || catalog.Models[0].DisplayName != "Claude Sonnet" {
+		t.Fatalf("unexpected models: %#v", catalog.Models)
+	}
+}
+
+func TestListCopilotModelsUsesExchangedToken(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/copilot_internal/v2/token":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, `{"token":"short-lived","expires_at":4102444800}`)
+		case "/models":
+			if got := r.Header.Get("Authorization"); got != "Bearer short-lived" {
+				t.Fatalf("expected exchanged bearer token, got %q", got)
+			}
+			if got := r.Header.Get("copilot-integration-id"); got != defaultCopilotIntegration {
+				t.Fatalf("expected Copilot integration header, got %q", got)
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, `{"data":[
+				{"id":"gpt-4o","name":"GPT-4o","model_picker_enabled":true,"capabilities":{"type":"chat","supports":{"tool_calls":true}}},
+				{"id":"text-embedding","name":"Embedding","model_picker_enabled":true,"capabilities":{"type":"embedding","supports":{"tool_calls":false}}},
+				{"id":"claude-no-tools","name":"Claude without tools","model_picker_enabled":true,"capabilities":{"type":"chat","supports":{"tool_calls":false}}},
+				{"id":"hidden-chat","name":"Hidden chat","model_picker_enabled":false,"capabilities":{"type":"chat","supports":{"tool_calls":true}}}
+			]}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	client := newAIProviderClient(config.AIConfig{
+		CopilotOAuthToken: "gho-test",
+		CopilotBaseURL:    server.URL,
+		CopilotTokenURL:   server.URL + "/copilot_internal/v2/token",
+	})
+	catalog, err := client.ListModels(context.Background(), aiProviderCopilot)
+	if err != nil {
+		t.Fatalf("ListModels returned error: %v", err)
+	}
+	if len(catalog.Models) != 1 || catalog.Models[0].DisplayName != "GPT-4o" {
+		t.Fatalf("unexpected models: %#v", catalog.Models)
+	}
+}
+
 func TestEnhancePromptUsesSelectedProvider(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/messages" {
@@ -130,83 +228,83 @@ func TestEnhancePromptUsesSelectedProvider(t *testing.T) {
 }
 
 func TestResolveAIProvider(t *testing.T) {
-tests := []struct {
-name      string
-cfg       config.AIConfig
-requested string
-want      string
-wantErr   bool
-}{
-{
-name:      "explicit openai",
-cfg:       config.AIConfig{OpenAIAPIKey: "sk-test"},
-requested: "openai",
-want:      aiProviderOpenAI,
-},
-{
-name:      "explicit claude",
-cfg:       config.AIConfig{ClaudeAPIKey: "key"},
-requested: "claude",
-want:      aiProviderClaude,
-},
-{
-name:      "explicit copilot",
-cfg:       config.AIConfig{CopilotOAuthToken: "gho_test"},
-requested: "copilot",
-want:      aiProviderCopilot,
-},
-{
-name:      "explicit unknown",
-cfg:       config.AIConfig{OpenAIAPIKey: "sk-test"},
-requested: "anthropic",
-wantErr:   true,
-},
-{
-name:      "auto-select openai when all configured",
-cfg:       config.AIConfig{OpenAIAPIKey: "sk", ClaudeAPIKey: "claude", CopilotOAuthToken: "gho"},
-requested: "",
-want:      aiProviderOpenAI,
-},
-{
-name:      "auto-select copilot when openai missing",
-cfg:       config.AIConfig{CopilotOAuthToken: "gho", ClaudeAPIKey: "claude"},
-requested: "",
-want:      aiProviderCopilot,
-},
-{
-name:      "auto-select claude when only claude configured",
-cfg:       config.AIConfig{ClaudeAPIKey: "claude"},
-requested: "",
-want:      aiProviderClaude,
-},
-{
-name:      "no provider configured returns error",
-cfg:       config.AIConfig{},
-requested: "",
-wantErr:   true,
-},
-{
-name:      "case-insensitive explicit",
-cfg:       config.AIConfig{ClaudeAPIKey: "key"},
-requested: "Claude",
-want:      aiProviderClaude,
-},
-}
-for _, tc := range tests {
-t.Run(tc.name, func(t *testing.T) {
-got, err := resolveAIProvider(tc.cfg, tc.requested)
-if tc.wantErr {
-if err == nil {
-t.Fatalf("expected error, got provider %q", got)
-}
-return
-}
-if err != nil {
-t.Fatalf("unexpected error: %v", err)
-}
-if got != tc.want {
-t.Fatalf("expected %q, got %q", tc.want, got)
-}
-})
-}
+	tests := []struct {
+		name      string
+		cfg       config.AIConfig
+		requested string
+		want      string
+		wantErr   bool
+	}{
+		{
+			name:      "explicit openai",
+			cfg:       config.AIConfig{OpenAIAPIKey: "sk-test"},
+			requested: "openai",
+			want:      aiProviderOpenAI,
+		},
+		{
+			name:      "explicit claude",
+			cfg:       config.AIConfig{ClaudeAPIKey: "key"},
+			requested: "claude",
+			want:      aiProviderClaude,
+		},
+		{
+			name:      "explicit copilot",
+			cfg:       config.AIConfig{CopilotOAuthToken: "gho_test"},
+			requested: "copilot",
+			want:      aiProviderCopilot,
+		},
+		{
+			name:      "explicit unknown",
+			cfg:       config.AIConfig{OpenAIAPIKey: "sk-test"},
+			requested: "anthropic",
+			wantErr:   true,
+		},
+		{
+			name:      "auto-select openai when all configured",
+			cfg:       config.AIConfig{OpenAIAPIKey: "sk", ClaudeAPIKey: "claude", CopilotOAuthToken: "gho"},
+			requested: "",
+			want:      aiProviderOpenAI,
+		},
+		{
+			name:      "auto-select copilot when openai missing",
+			cfg:       config.AIConfig{CopilotOAuthToken: "gho", ClaudeAPIKey: "claude"},
+			requested: "",
+			want:      aiProviderCopilot,
+		},
+		{
+			name:      "auto-select claude when only claude configured",
+			cfg:       config.AIConfig{ClaudeAPIKey: "claude"},
+			requested: "",
+			want:      aiProviderClaude,
+		},
+		{
+			name:      "no provider configured returns error",
+			cfg:       config.AIConfig{},
+			requested: "",
+			wantErr:   true,
+		},
+		{
+			name:      "case-insensitive explicit",
+			cfg:       config.AIConfig{ClaudeAPIKey: "key"},
+			requested: "Claude",
+			want:      aiProviderClaude,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := resolveAIProvider(tc.cfg, tc.requested)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("expected error, got provider %q", got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got != tc.want {
+				t.Fatalf("expected %q, got %q", tc.want, got)
+			}
+		})
+	}
 }

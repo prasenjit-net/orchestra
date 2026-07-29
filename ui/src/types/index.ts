@@ -279,6 +279,16 @@ export interface JSONSchemasResponse {
 
 export type AIProvider = 'openai' | 'claude' | 'copilot'
 
+export interface AIModelInfo {
+  id: string
+  displayName: string
+}
+
+export interface AIModelCatalog {
+  provider: AIProvider
+  models: AIModelInfo[]
+}
+
 export interface Agent {
   id: string
   name: string
