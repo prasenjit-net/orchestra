@@ -1229,89 +1229,67 @@ func TestDefinitionPersistsStepLayout(t *testing.T) {
 	}
 }
 
-func TestUpdateDefinitionVersionLayoutDoesNotCreateVersion(t *testing.T) {
-	cfg := config.Default()
-	cfg.Workflow.DatabasePath = filepath.Join(t.TempDir(), "workflows.db")
-	service, err := NewService(cfg.Workflow, cfg.AI, slog.New(slog.NewTextHandler(io.Discard, nil)))
-	if err != nil {
-		t.Fatalf("NewService returned error: %v", err)
-	}
-	defer service.Close()
-
-	definition, err := service.CreateDefinition(context.Background(), CreateDefinitionInput{
-		Name:        "Layout-only workflow",
-		Description: "Updates positions without a new version",
-		Steps: []StepDefinition{{
-			Name:     "first",
-			Activity: "noop",
-			Layout:   StepLayout{X: 100, Y: 200},
-		}},
-	})
-	if err != nil {
-		t.Fatalf("CreateDefinition returned error: %v", err)
+func TestUpdateDefinitionVersionLayout(t *testing.T) {
+	tests := []struct {
+		name            string
+		updatedStepName string
+		wantError       bool
+	}{
+		{name: "updates layout without creating a version", updatedStepName: "first"},
+		{name: "rejects workflow content changes", updatedStepName: "renamed", wantError: true},
 	}
 
-	updated, err := service.UpdateDefinitionVersionLayout(context.Background(), definition.ID, 1, CreateDefinitionInput{
-		Name:        "Layout-only workflow",
-		Description: "Updates positions without a new version",
-		Steps: []StepDefinition{{
-			Name:     "first",
-			Activity: "noop",
-			Layout:   StepLayout{X: 360, Y: 420},
-		}},
-	})
-	if err != nil {
-		t.Fatalf("UpdateDefinitionVersionLayout returned error: %v", err)
-	}
-	if updated.LatestVersion != 1 || len(updated.Versions) != 1 {
-		t.Fatalf("expected layout update to keep one version, got latest=%d versions=%d", updated.LatestVersion, len(updated.Versions))
-	}
-	if updated.Document.Steps[0].Layout.X != 360 || updated.Document.Steps[0].Layout.Y != 420 {
-		t.Fatalf("expected layout coordinates to update, got %+v", updated.Document.Steps[0].Layout)
-	}
-}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			cfg := config.Default()
+			cfg.Workflow.DatabasePath = filepath.Join(t.TempDir(), "workflows.db")
+			service, err := NewService(cfg.Workflow, cfg.AI, slog.New(slog.NewTextHandler(io.Discard, nil)))
+			if err != nil {
+				t.Fatalf("NewService returned error: %v", err)
+			}
+			defer service.Close()
 
-func TestUpdateDefinitionVersionLayoutRejectsContentChange(t *testing.T) {
-	cfg := config.Default()
-	cfg.Workflow.DatabasePath = filepath.Join(t.TempDir(), "workflows.db")
-	service, err := NewService(cfg.Workflow, cfg.AI, slog.New(slog.NewTextHandler(io.Discard, nil)))
-	if err != nil {
-		t.Fatalf("NewService returned error: %v", err)
-	}
-	defer service.Close()
+			input := CreateDefinitionInput{
+				Name:        "Layout workflow",
+				Description: "Updates positions in place",
+				Steps: []StepDefinition{{
+					Name:     "first",
+					Activity: "noop",
+					Layout:   StepLayout{X: 100, Y: 200},
+				}},
+			}
+			definition, err := service.CreateDefinition(context.Background(), input)
+			if err != nil {
+				t.Fatalf("CreateDefinition returned error: %v", err)
+			}
 
-	definition, err := service.CreateDefinition(context.Background(), CreateDefinitionInput{
-		Name:        "Layout guard workflow",
-		Description: "Rejects semantic updates",
-		Steps: []StepDefinition{{
-			Name:     "first",
-			Activity: "noop",
-			Layout:   StepLayout{X: 100, Y: 200},
-		}},
-	})
-	if err != nil {
-		t.Fatalf("CreateDefinition returned error: %v", err)
-	}
+			input.Steps[0].Name = test.updatedStepName
+			input.Steps[0].Layout = StepLayout{X: 360, Y: 420}
+			updated, err := service.UpdateDefinitionVersionLayout(context.Background(), definition.ID, 1, input)
+			if test.wantError {
+				if err == nil {
+					t.Fatal("expected semantic layout update to fail")
+				}
+				reloaded, getErr := service.GetDefinition(context.Background(), definition.ID)
+				if getErr != nil {
+					t.Fatalf("GetDefinition returned error: %v", getErr)
+				}
+				if reloaded.Document.Steps[0].Name != "first" || reloaded.Document.Steps[0].Layout.X != 100 {
+					t.Fatalf("expected rejected update to leave document unchanged, got %+v", reloaded.Document.Steps[0])
+				}
+				return
+			}
 
-	_, err = service.UpdateDefinitionVersionLayout(context.Background(), definition.ID, 1, CreateDefinitionInput{
-		Name:        "Layout guard workflow",
-		Description: "Rejects semantic updates",
-		Steps: []StepDefinition{{
-			Name:     "renamed",
-			Activity: "noop",
-			Layout:   StepLayout{X: 360, Y: 420},
-		}},
-	})
-	if err == nil {
-		t.Fatal("expected semantic layout update to fail")
-	}
-
-	reloaded, err := service.GetDefinition(context.Background(), definition.ID)
-	if err != nil {
-		t.Fatalf("GetDefinition returned error: %v", err)
-	}
-	if reloaded.Document.Steps[0].Name != "first" || reloaded.Document.Steps[0].Layout.X != 100 {
-		t.Fatalf("expected rejected update to leave document unchanged, got %+v", reloaded.Document.Steps[0])
+			if err != nil {
+				t.Fatalf("UpdateDefinitionVersionLayout returned error: %v", err)
+			}
+			if updated.LatestVersion != 1 || len(updated.Versions) != 1 {
+				t.Fatalf("expected layout update to keep one version, got latest=%d versions=%d", updated.LatestVersion, len(updated.Versions))
+			}
+			if updated.Document.Steps[0].Layout.X != 360 || updated.Document.Steps[0].Layout.Y != 420 {
+				t.Fatalf("expected layout coordinates to update, got %+v", updated.Document.Steps[0].Layout)
+			}
+		})
 	}
 }
 
