@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -20,9 +21,10 @@ const (
 	aiProviderClaude  = "claude"
 	aiProviderCopilot = "copilot"
 
-	defaultOpenAIModel        = "gpt-4o"
+	modelGPT4O                = "gpt-4o"
+	defaultOpenAIModel        = modelGPT4O
 	defaultClaudeModel        = "claude-sonnet-4-6"
-	defaultCopilotModel       = "gpt-4o"
+	defaultCopilotModel       = modelGPT4O
 	defaultOpenAIEndpoint     = "https://api.openai.com/v1/chat/completions"
 	defaultClaudeEndpoint     = "https://api.anthropic.com/v1/messages"
 	defaultClaudeAPIVersion   = "2023-06-01"
@@ -33,7 +35,12 @@ const (
 	defaultCopilotIntegration = "vscode-chat"
 	defaultCopilotIntent      = "conversation-panel"
 	defaultAIRequestTimeout   = 120 * time.Second
+	defaultAIModelListTimeout = 15 * time.Second
 	copilotRefreshBuffer      = 60 * time.Second
+	bearerPrefix              = "Bearer "
+	chatCompletionsPath       = "/chat/completions"
+	messagesPath              = "/messages"
+	modelsPath                = "/models"
 )
 
 type aiMessage struct {
@@ -78,6 +85,44 @@ type aiChatResponse struct {
 	FinishReason string
 	ToolCalls    []aiToolCall
 	Usage        aiUsage
+}
+
+type AIModelInfo struct {
+	ID          string `json:"id"`
+	DisplayName string `json:"displayName"`
+}
+
+type AIModelCatalog struct {
+	Provider string        `json:"provider"`
+	Models   []AIModelInfo `json:"models"`
+}
+
+type aiModelSupportsWire struct {
+	ToolCalls       *bool `json:"tool_calls"`
+	FunctionCalling *bool `json:"function_calling"`
+}
+
+type aiModelCapabilitiesWire struct {
+	Type     string               `json:"type"`
+	Supports *aiModelSupportsWire `json:"supports"`
+}
+
+type aiModelWire struct {
+	ID                 string                   `json:"id"`
+	Name               string                   `json:"name"`
+	DisplayName        string                   `json:"display_name"`
+	ModelPickerEnabled *bool                    `json:"model_picker_enabled"`
+	Capabilities       *aiModelCapabilitiesWire `json:"capabilities"`
+}
+
+type aiProviderErrorWire struct {
+	Message string `json:"message"`
+}
+
+type aiModelsResponseWire struct {
+	Data    []aiModelWire        `json:"data"`
+	Message string               `json:"message"`
+	Error   *aiProviderErrorWire `json:"error"`
 }
 
 type aiProviderClient struct {
@@ -178,6 +223,221 @@ func normalizeAIModel(provider, model string) string {
 	return defaultAIModel(provider)
 }
 
+func (s *Service) ListAIModels(ctx context.Context, provider string) (AIModelCatalog, error) {
+	return s.ai.ListModels(ctx, provider)
+}
+
+func (c *aiProviderClient) ListModels(ctx context.Context, requestedProvider string) (AIModelCatalog, error) {
+	ctx, cancel := context.WithTimeout(ctx, defaultAIModelListTimeout)
+	defer cancel()
+
+	provider, err := normalizeAIProvider(requestedProvider)
+	if err != nil {
+		return AIModelCatalog{}, err
+	}
+
+	var endpoint string
+	var authorization string
+	headers := make(map[string]string)
+	switch provider {
+	case aiProviderOpenAI:
+		if strings.TrimSpace(c.cfg.OpenAIAPIKey) == "" {
+			return AIModelCatalog{}, fmt.Errorf("OpenAI API key not configured (set ai.openaiAPIKey or APP_AI_OPENAI_API_KEY)")
+		}
+		endpoint = siblingAIEndpoint(c.openAIEndpoint(), chatCompletionsPath, modelsPath)
+		authorization = bearerPrefix + c.cfg.OpenAIAPIKey
+	case aiProviderClaude:
+		if strings.TrimSpace(c.cfg.ClaudeAPIKey) == "" {
+			return AIModelCatalog{}, fmt.Errorf("Claude API key not configured (set ai.claudeAPIKey or APP_AI_CLAUDE_API_KEY)")
+		}
+		endpoint = siblingAIEndpoint(c.claudeEndpoint(), messagesPath, modelsPath) + "?limit=1000"
+		headers["x-api-key"] = c.cfg.ClaudeAPIKey
+		apiVersion := strings.TrimSpace(c.cfg.ClaudeAPIVersion)
+		if apiVersion == "" {
+			apiVersion = defaultClaudeAPIVersion
+		}
+		headers["anthropic-version"] = apiVersion
+	case aiProviderCopilot:
+		if strings.TrimSpace(c.cfg.CopilotOAuthToken) == "" {
+			return AIModelCatalog{}, fmt.Errorf("GitHub Copilot OAuth token not configured (set ai.copilotOAuthToken or APP_AI_COPILOT_OAUTH_TOKEN)")
+		}
+		token, tokenErr := c.copilotToken(ctx)
+		if tokenErr != nil {
+			return AIModelCatalog{}, tokenErr
+		}
+		endpoint = siblingAIEndpoint(c.copilotEndpoint(), chatCompletionsPath, modelsPath)
+		authorization = bearerPrefix + token
+		for key, value := range c.copilotHeaders() {
+			headers[key] = value
+		}
+	}
+
+	models, err := c.fetchModels(ctx, provider, endpoint, authorization, headers)
+	if err != nil {
+		return AIModelCatalog{}, err
+	}
+	return AIModelCatalog{Provider: provider, Models: models}, nil
+}
+
+func siblingAIEndpoint(endpoint, currentPath, targetPath string) string {
+	base := strings.TrimRight(strings.TrimSpace(endpoint), "/")
+	base = strings.TrimSuffix(base, currentPath)
+	return strings.TrimRight(base, "/") + targetPath
+}
+
+func (c *aiProviderClient) fetchModels(ctx context.Context, provider, endpoint, authorization string, headers map[string]string) ([]AIModelInfo, error) {
+	req, err := newAIModelsRequest(ctx, endpoint, authorization, headers)
+	if err != nil {
+		return nil, fmt.Errorf("build %s models request: %w", providerDisplayName(provider), err)
+	}
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("list %s models: %w", providerDisplayName(provider), err)
+	}
+	defer resp.Body.Close()
+
+	var payload aiModelsResponseWire
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		return nil, fmt.Errorf("decode %s models response: %w", providerDisplayName(provider), err)
+	}
+	if resp.StatusCode >= http.StatusBadRequest {
+		return nil, fmt.Errorf("list %s models: %s", providerDisplayName(provider), aiModelsErrorMessage(payload, resp.StatusCode))
+	}
+	return normalizeAIModels(provider, payload.Data), nil
+}
+
+func newAIModelsRequest(ctx context.Context, endpoint, authorization string, headers map[string]string) (*http.Request, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Accept", "application/json")
+	if authorization != "" {
+		req.Header.Set("Authorization", authorization)
+	}
+	for key, value := range headers {
+		req.Header.Set(key, value)
+	}
+	return req, nil
+}
+
+func aiModelsErrorMessage(payload aiModelsResponseWire, statusCode int) string {
+	if payload.Error != nil && strings.TrimSpace(payload.Error.Message) != "" {
+		return strings.TrimSpace(payload.Error.Message)
+	}
+	if message := strings.TrimSpace(payload.Message); message != "" {
+		return message
+	}
+	return fmt.Sprintf("HTTP %d", statusCode)
+}
+
+func normalizeAIModels(provider string, items []aiModelWire) []AIModelInfo {
+	seen := make(map[string]struct{}, len(items))
+	models := make([]AIModelInfo, 0, len(items))
+	for _, item := range items {
+		id := strings.TrimSpace(item.ID)
+		if id == "" || !supportsAgenticChat(provider, item) {
+			continue
+		}
+		if _, exists := seen[id]; exists {
+			continue
+		}
+		seen[id] = struct{}{}
+		displayName := strings.TrimSpace(item.DisplayName)
+		if displayName == "" {
+			displayName = strings.TrimSpace(item.Name)
+		}
+		if displayName == "" {
+			displayName = id
+		}
+		models = append(models, AIModelInfo{ID: id, DisplayName: displayName})
+	}
+	sort.Slice(models, func(i, j int) bool {
+		return strings.ToLower(models[i].DisplayName) < strings.ToLower(models[j].DisplayName)
+	})
+	return models
+}
+
+func supportsAgenticChat(provider string, model aiModelWire) bool {
+	if model.ModelPickerEnabled != nil && !*model.ModelPickerEnabled {
+		return false
+	}
+	if model.Capabilities != nil {
+		if modelType := strings.ToLower(strings.TrimSpace(model.Capabilities.Type)); modelType != "" && modelType != "chat" {
+			return false
+		}
+		if model.Capabilities.Supports != nil {
+			if model.Capabilities.Supports.ToolCalls != nil {
+				return *model.Capabilities.Supports.ToolCalls
+			}
+			if model.Capabilities.Supports.FunctionCalling != nil {
+				return *model.Capabilities.Supports.FunctionCalling
+			}
+		}
+	}
+
+	id := strings.ToLower(strings.TrimSpace(model.ID))
+	switch provider {
+	case aiProviderClaude:
+		return strings.HasPrefix(id, "claude-")
+	case aiProviderCopilot:
+		return isLikelyCopilotAgentModel(id)
+	default:
+		return isLikelyOpenAIAgentModel(id)
+	}
+}
+
+func isLikelyOpenAIAgentModel(id string) bool {
+	id = openAIBaseModelID(id)
+	if hasAnyModelMarker(id,
+		"audio", "codex", "computer-use", "deep-research", "image", "instruct",
+		"moderation", "realtime", "search-preview", "transcribe", "tts",
+	) {
+		return false
+	}
+	if strings.Contains(id, "-pro") {
+		return false
+	}
+	return hasAnyModelPrefix(id,
+		"gpt-5", "gpt-4.5", "gpt-4.1", modelGPT4O, "gpt-4-turbo",
+		"o1", "o3", "o4", "chat-latest",
+	)
+}
+
+func isLikelyCopilotAgentModel(id string) bool {
+	if hasAnyModelMarker(id, "audio", "embedding", "image", "realtime", "transcribe", "tts") {
+		return false
+	}
+	return hasAnyModelPrefix(id, "gpt-", "o1", "o3", "o4", "claude-", "gemini-", "grok-", "mai-")
+}
+
+func openAIBaseModelID(id string) string {
+	if !strings.HasPrefix(id, "ft:") {
+		return id
+	}
+	base, _, _ := strings.Cut(strings.TrimPrefix(id, "ft:"), ":")
+	return base
+}
+
+func hasAnyModelMarker(id string, markers ...string) bool {
+	for _, marker := range markers {
+		if strings.Contains(id, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func hasAnyModelPrefix(id string, prefixes ...string) bool {
+	for _, prefix := range prefixes {
+		if strings.HasPrefix(id, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
 func (c *aiProviderClient) Complete(ctx context.Context, req aiChatRequest) (aiChatResponse, error) {
 	provider, err := resolveAIProvider(c.cfg, req.Provider)
 	if err != nil {
@@ -191,7 +451,7 @@ func (c *aiProviderClient) Complete(ctx context.Context, req aiChatRequest) (aiC
 		if strings.TrimSpace(c.cfg.OpenAIAPIKey) == "" {
 			return aiChatResponse{}, fmt.Errorf("OpenAI API key not configured (set ai.openaiAPIKey or APP_AI_OPENAI_API_KEY)")
 		}
-		return c.callOpenAICompatible(ctx, c.openAIEndpoint(), "Bearer "+c.cfg.OpenAIAPIKey, nil, req)
+		return c.callOpenAICompatible(ctx, c.openAIEndpoint(), bearerPrefix+c.cfg.OpenAIAPIKey, nil, req)
 	case aiProviderClaude:
 		if strings.TrimSpace(c.cfg.ClaudeAPIKey) == "" {
 			return aiChatResponse{}, fmt.Errorf("Claude API key not configured (set ai.claudeAPIKey or APP_AI_CLAUDE_API_KEY)")
@@ -205,7 +465,7 @@ func (c *aiProviderClient) Complete(ctx context.Context, req aiChatRequest) (aiC
 		if err != nil {
 			return aiChatResponse{}, err
 		}
-		return c.callOpenAICompatible(ctx, c.copilotEndpoint(), "Bearer "+token, c.copilotHeaders(), req)
+		return c.callOpenAICompatible(ctx, c.copilotEndpoint(), bearerPrefix+token, c.copilotHeaders(), req)
 	default:
 		return aiChatResponse{}, fmt.Errorf("unsupported AI provider %q", provider)
 	}
@@ -216,10 +476,10 @@ func (c *aiProviderClient) openAIEndpoint() string {
 	if base == "" {
 		return defaultOpenAIEndpoint
 	}
-	if strings.HasSuffix(base, "/chat/completions") {
+	if strings.HasSuffix(base, chatCompletionsPath) {
 		return base
 	}
-	return strings.TrimRight(base, "/") + "/chat/completions"
+	return strings.TrimRight(base, "/") + chatCompletionsPath
 }
 
 func (c *aiProviderClient) claudeEndpoint() string {
@@ -227,10 +487,10 @@ func (c *aiProviderClient) claudeEndpoint() string {
 	if base == "" {
 		return defaultClaudeEndpoint
 	}
-	if strings.HasSuffix(base, "/messages") {
+	if strings.HasSuffix(base, messagesPath) {
 		return base
 	}
-	return strings.TrimRight(base, "/") + "/messages"
+	return strings.TrimRight(base, "/") + messagesPath
 }
 
 func (c *aiProviderClient) copilotEndpoint() string {
@@ -238,7 +498,7 @@ func (c *aiProviderClient) copilotEndpoint() string {
 	if base == "" {
 		base = defaultCopilotBaseURL
 	}
-	return strings.TrimRight(base, "/") + "/chat/completions"
+	return strings.TrimRight(base, "/") + chatCompletionsPath
 }
 
 func (c *aiProviderClient) copilotExchangeURL() string {

@@ -6,9 +6,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"time"
 )
+
+const definitionUpdatedEvent = "definition.updated"
 
 func (s *Service) CreateDefinition(ctx context.Context, input CreateDefinitionInput) (DefinitionDetails, error) {
 	document, err := s.normalizeDefinition(input)
@@ -68,7 +71,7 @@ func (s *Service) CreateDefinition(ctx context.Context, input CreateDefinitionIn
 			PublishedAt: &now,
 		}},
 	}
-	s.emitLiveEvent("definition.updated", "definition", definitionID, result.DefinitionSummary)
+	s.emitLiveEvent(definitionUpdatedEvent, "definition", definitionID, result.DefinitionSummary)
 	return result, nil
 }
 
@@ -127,7 +130,68 @@ func (s *Service) CreateDefinitionVersion(ctx context.Context, definitionID stri
 	if err != nil {
 		return DefinitionDetails{}, err
 	}
-	s.emitLiveEvent("definition.updated", "definition", definitionID, result.DefinitionSummary)
+	s.emitLiveEvent(definitionUpdatedEvent, "definition", definitionID, result.DefinitionSummary)
+	return result, nil
+}
+
+func (s *Service) UpdateDefinitionVersionLayout(ctx context.Context, definitionID string, version int, input CreateDefinitionInput) (DefinitionDetails, error) {
+	document, err := s.normalizeDefinition(input)
+	if err != nil {
+		return DefinitionDetails{}, err
+	}
+	if version <= 0 {
+		return DefinitionDetails{}, fmt.Errorf("workflow definition version is required")
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return DefinitionDetails{}, fmt.Errorf("begin definition layout transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	if _, err := s.getDefinitionVersionMetaTx(ctx, tx, definitionID, version); err != nil {
+		return DefinitionDetails{}, err
+	}
+	existing, err := s.getDefinitionVersionDocumentTx(ctx, tx, definitionID, version)
+	if err != nil {
+		return DefinitionDetails{}, err
+	}
+	if !definitionsEqualWithoutLayout(existing, document) {
+		return DefinitionDetails{}, fmt.Errorf("layout update cannot change workflow definition content")
+	}
+	if definitionsEqual(existing, document) {
+		return s.GetDefinitionVersion(ctx, definitionID, version)
+	}
+
+	documentJSON, err := json.Marshal(document)
+	if err != nil {
+		return DefinitionDetails{}, fmt.Errorf("encode definition layout document: %w", err)
+	}
+	timestamp := formatTime(time.Now().UTC())
+	if _, err := s.execTxQuery(ctx, tx, `
+		UPDATE workflow_definition_versions
+		SET document_json = ?, updated_at = ?
+		WHERE definition_id = ? AND version = ?
+	`, string(documentJSON), timestamp, definitionID, version); err != nil {
+		return DefinitionDetails{}, fmt.Errorf("update definition version layout: %w", err)
+	}
+	if _, err := s.execTxQuery(ctx, tx, `
+		UPDATE workflow_definitions
+		SET updated_at = ?
+		WHERE id = ?
+	`, timestamp, definitionID); err != nil {
+		return DefinitionDetails{}, fmt.Errorf("update definition layout timestamp: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return DefinitionDetails{}, fmt.Errorf("commit definition layout transaction: %w", err)
+	}
+
+	result, err := s.GetDefinitionVersion(ctx, definitionID, version)
+	if err != nil {
+		return DefinitionDetails{}, err
+	}
+	s.emitLiveEvent(definitionUpdatedEvent, "definition", definitionID, result.DefinitionSummary)
 	return result, nil
 }
 
@@ -486,6 +550,24 @@ func (s *Service) normalizeDefinition(input CreateDefinitionInput) (DefinitionDo
 	}
 
 	return document, nil
+}
+
+func definitionsEqual(a, b DefinitionDocument) bool {
+	return reflect.DeepEqual(a, b)
+}
+
+func definitionsEqualWithoutLayout(a, b DefinitionDocument) bool {
+	return reflect.DeepEqual(definitionWithoutLayout(a), definitionWithoutLayout(b))
+}
+
+func definitionWithoutLayout(document DefinitionDocument) DefinitionDocument {
+	normalized := document
+	normalized.Steps = make([]StepDefinition, len(document.Steps))
+	copy(normalized.Steps, document.Steps)
+	for index := range normalized.Steps {
+		normalized.Steps[index].Layout = StepLayout{}
+	}
+	return normalized
 }
 
 func isValidStepName(name string) bool {

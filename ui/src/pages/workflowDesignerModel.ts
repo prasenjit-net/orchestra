@@ -39,6 +39,7 @@ export type CanvasContextMenuState = {
 export type EdgeConditionData = {
   label?: string
   condition?: WorkflowTransitionCondition
+  implicit?: boolean
 }
 
 export type DesignerNodeData = ActivityNodeData | BasicNodeData

@@ -99,6 +99,31 @@ func NewRouter(cfg config.Config, logger *slog.Logger, build version.Info, optio
 	return r
 }
 
+type workflowTaskAction func(http.ResponseWriter, *http.Request, int64)
+type workflowDefinitionVersionAction func(http.ResponseWriter, *http.Request, string, int)
+
+func withWorkflowTaskID(action workflowTaskAction) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		taskID, err := parseTaskID(chi.URLParam(r, "taskID"))
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		action(w, r, taskID)
+	}
+}
+
+func withWorkflowDefinitionVersion(action workflowDefinitionVersionAction) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		version, err := parseVersion(chi.URLParam(r, "version"))
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		action(w, r, chi.URLParam(r, "definitionID"), version)
+	}
+}
+
 func mountWorkflowRoutes(r chi.Router, h *Handler) {
 	r.With(h.requirePermission(auth.PermissionClusterRead)).Get("/nodes", h.ListNodes)
 	r.With(h.requirePermission(auth.PermissionClusterControl)).Post("/nodes/healthcheck", h.CheckNodeHealth)
@@ -173,6 +198,7 @@ func mountWorkflowRoutes(r chi.Router, h *Handler) {
 		r.With(h.requirePermission(auth.PermissionResourceRead)).Get(exportRoute, h.ExportConnector)
 	})
 
+	r.With(h.requirePermission(auth.PermissionAIUse)).Get("/ai/models", h.ListAIModels)
 	r.With(h.requirePermission(auth.PermissionAIUse)).Post("/ai/enhance-prompt", h.EnhancePrompt)
 	r.With(h.requirePermission(auth.PermissionAIUse)).Post("/ai/script-assist", h.ScriptAssist)
 	r.With(h.requirePermission(auth.PermissionAIUse)).Post("/ai/validate-script", h.ValidateScript)
@@ -182,21 +208,11 @@ func mountWorkflowRoutes(r chi.Router, h *Handler) {
 	r.With(h.requirePermission(auth.PermissionOperationRead)).Get("/workflows/events", h.ListWorkflowOperations)
 	r.With(h.requirePermission(auth.PermissionWorkflowTaskRead)).Get("/workflows/tasks", h.ListWorkflowTasks)
 	r.Route("/workflows/tasks/{taskID}", func(r chi.Router) {
-		taskAction := func(action func(http.ResponseWriter, *http.Request, int64)) http.HandlerFunc {
-			return func(w http.ResponseWriter, r *http.Request) {
-				taskID, err := parseTaskID(chi.URLParam(r, "taskID"))
-				if err != nil {
-					writeError(w, http.StatusBadRequest, err.Error())
-					return
-				}
-				action(w, r, taskID)
-			}
-		}
-		r.With(h.requirePermission(auth.PermissionWorkflowTaskControl)).Post("/retry", taskAction(h.RetryWorkflowTask))
-		r.With(h.requirePermission(auth.PermissionWorkflowTaskControl)).Post("/requeue", taskAction(h.RequeueWorkflowTask))
-		r.With(h.requirePermission(auth.PermissionWorkflowTaskControl)).Post("/pause", taskAction(h.PauseWorkflowTask))
-		r.With(h.requirePermission(auth.PermissionWorkflowTaskControl)).Post("/resume", taskAction(h.ResumeWorkflowTask))
-		r.With(h.requirePermission(auth.PermissionWorkflowTaskControl)).Post("/cancel", taskAction(h.CancelWorkflowTask))
+		r.With(h.requirePermission(auth.PermissionWorkflowTaskControl)).Post("/retry", withWorkflowTaskID(h.RetryWorkflowTask))
+		r.With(h.requirePermission(auth.PermissionWorkflowTaskControl)).Post("/requeue", withWorkflowTaskID(h.RequeueWorkflowTask))
+		r.With(h.requirePermission(auth.PermissionWorkflowTaskControl)).Post("/pause", withWorkflowTaskID(h.PauseWorkflowTask))
+		r.With(h.requirePermission(auth.PermissionWorkflowTaskControl)).Post("/resume", withWorkflowTaskID(h.ResumeWorkflowTask))
+		r.With(h.requirePermission(auth.PermissionWorkflowTaskControl)).Post("/cancel", withWorkflowTaskID(h.CancelWorkflowTask))
 	})
 
 	r.With(h.requirePermission(auth.PermissionWorkflowDefinitionRead)).Get("/workflow-definitions", h.ListWorkflowDefinitions)
@@ -208,33 +224,13 @@ func mountWorkflowRoutes(r chi.Router, h *Handler) {
 		r.With(h.requirePermission(auth.PermissionWorkflowDefinitionWrite)).Post("/versions", func(w http.ResponseWriter, r *http.Request) {
 			h.CreateWorkflowDefinitionVersion(w, r, chi.URLParam(r, "definitionID"))
 		})
+		r.With(h.requirePermission(auth.PermissionWorkflowDefinitionWrite)).Put("/versions/{version}/layout", withWorkflowDefinitionVersion(h.UpdateWorkflowDefinitionVersionLayout))
 		r.With(h.requirePermission(auth.PermissionWorkflowRunStart)).Post("/start", func(w http.ResponseWriter, r *http.Request) {
 			h.StartWorkflow(w, r, chi.URLParam(r, "definitionID"))
 		})
-		r.With(h.requirePermission(auth.PermissionWorkflowDefinitionRead)).Get("/versions/{version}", func(w http.ResponseWriter, r *http.Request) {
-			version, err := parseVersion(chi.URLParam(r, "version"))
-			if err != nil {
-				writeError(w, http.StatusBadRequest, err.Error())
-				return
-			}
-			h.GetWorkflowDefinitionVersion(w, r, chi.URLParam(r, "definitionID"), version)
-		})
-		r.With(h.requirePermission(auth.PermissionWorkflowDefinitionPublish)).Post("/versions/{version}/publish", func(w http.ResponseWriter, r *http.Request) {
-			version, err := parseVersion(chi.URLParam(r, "version"))
-			if err != nil {
-				writeError(w, http.StatusBadRequest, err.Error())
-				return
-			}
-			h.PublishWorkflowDefinitionVersion(w, r, chi.URLParam(r, "definitionID"), version)
-		})
-		r.With(h.requirePermission(auth.PermissionWorkflowDefinitionPublish)).Post("/versions/{version}/activate", func(w http.ResponseWriter, r *http.Request) {
-			version, err := parseVersion(chi.URLParam(r, "version"))
-			if err != nil {
-				writeError(w, http.StatusBadRequest, err.Error())
-				return
-			}
-			h.ActivateWorkflowDefinitionVersion(w, r, chi.URLParam(r, "definitionID"), version)
-		})
+		r.With(h.requirePermission(auth.PermissionWorkflowDefinitionRead)).Get("/versions/{version}", withWorkflowDefinitionVersion(h.GetWorkflowDefinitionVersion))
+		r.With(h.requirePermission(auth.PermissionWorkflowDefinitionPublish)).Post("/versions/{version}/publish", withWorkflowDefinitionVersion(h.PublishWorkflowDefinitionVersion))
+		r.With(h.requirePermission(auth.PermissionWorkflowDefinitionPublish)).Post("/versions/{version}/activate", withWorkflowDefinitionVersion(h.ActivateWorkflowDefinitionVersion))
 		r.With(h.requirePermission(auth.PermissionWorkflowDefinitionRead)).Get(exportRoute, h.ExportWorkflowDefinition)
 	})
 

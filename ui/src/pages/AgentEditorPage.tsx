@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ArrowLeft, Eye, Pencil, Save, Sparkles, Trash2 } from 'lucide-react'
+import { ArrowLeft, Eye, Pencil, RefreshCw, Save, Sparkles, Trash2 } from 'lucide-react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import Editor from '../components/MonacoEditor'
 import ReactMarkdown from 'react-markdown'
@@ -9,6 +9,8 @@ import { agentsApi, aiApi, mcpServersApi } from '../services/api'
 import type { AIProvider, CreateAgentInput } from '../types'
 
 type PromptMode = 'edit' | 'preview'
+
+const agentModelControlID = 'agent-model'
 
 const providerOptions: Record<AIProvider, { label: string; defaultModel: string; help: string }> = {
   openai: {
@@ -67,6 +69,13 @@ export default function AgentEditorPage() {
     enabled: !isNew,
   })
 
+  const modelsQuery = useQuery({
+    queryKey: ['ai-models', provider],
+    queryFn: () => aiApi.listModels(provider),
+    staleTime: 5 * 60 * 1000,
+    retry: false,
+  })
+
   useEffect(() => {
     if (agentQuery.data) {
       const a = agentQuery.data
@@ -86,6 +95,15 @@ export default function AgentEditorPage() {
     }
   }, [agentMCPQuery.data])
 
+  useEffect(() => {
+    const catalog = modelsQuery.data
+    if (!catalog || catalog.provider !== provider || catalog.models.length === 0 || catalog.models.some((option) => option.id === model.trim())) {
+      return
+    }
+    const providerDefault = providerOptions[provider].defaultModel
+    setModel(catalog.models.find((option) => option.id === providerDefault)?.id ?? catalog.models[0].id)
+  }, [model, modelsQuery.data, provider])
+
   const buildInput = (): CreateAgentInput => ({
     name: name.trim(),
     description: description.trim(),
@@ -97,11 +115,8 @@ export default function AgentEditorPage() {
   })
 
   const handleProviderChange = (nextProvider: AIProvider) => {
-    const currentDefault = providerOptions[provider].defaultModel
     setProvider(nextProvider)
-    if (!model.trim() || model.trim() === currentDefault) {
-      setModel(providerOptions[nextProvider].defaultModel)
-    }
+    setModel(providerOptions[nextProvider].defaultModel)
   }
 
   const createMutation = useMutation({
@@ -180,6 +195,51 @@ export default function AgentEditorPage() {
   }
 
   const isSaving = createMutation.isPending || updateMutation.isPending
+  const listedModels = modelsQuery.data?.models ?? []
+  let modelControl
+  if (modelsQuery.isLoading) {
+    modelControl = (
+      <select
+        id={agentModelControlID}
+        disabled
+        className="w-full rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm text-gray-500 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-400"
+      >
+        <option>Loading models…</option>
+      </select>
+    )
+  } else if (listedModels.length > 0) {
+    modelControl = (
+      <select
+        id={agentModelControlID}
+        value={model}
+        onChange={(event) => setModel(event.target.value)}
+        className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-900 outline-none transition-colors focus:border-primary-500 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
+      >
+        {listedModels.map((option) => (
+          <option key={option.id} value={option.id}>
+            {option.displayName === option.id ? option.id : `${option.displayName} (${option.id})`}
+          </option>
+        ))}
+      </select>
+    )
+  } else {
+    modelControl = (
+      <input
+        id={agentModelControlID}
+        value={model}
+        onChange={(event) => setModel(event.target.value)}
+        placeholder={providerOptions[provider].defaultModel}
+        className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-900 outline-none transition-colors focus:border-primary-500 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
+      />
+    )
+  }
+
+  let modelHelpText = `No models returned. Default: ${providerOptions[provider].defaultModel}`
+  if (modelsQuery.error) {
+    modelHelpText = 'Model discovery unavailable. Enter a model ID manually.'
+  } else if (listedModels.length > 0) {
+    modelHelpText = `${listedModels.length} agent-capable models. Default: ${providerOptions[provider].defaultModel}`
+  }
 
   return (
     <div className="flex h-full flex-col overflow-hidden">
@@ -272,14 +332,22 @@ export default function AgentEditorPage() {
             <p className="mt-1 text-[11px] text-gray-400 dark:text-slate-500">{providerOptions[provider].help}</p>
           </div>
           <div>
-            <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wide text-gray-500 dark:text-slate-400">Model</label>
-            <input
-              value={model}
-              onChange={(e) => setModel(e.target.value || providerOptions[provider].defaultModel)}
-              placeholder={providerOptions[provider].defaultModel}
-              className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-900 outline-none transition-colors focus:border-primary-500 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
-            />
-            <p className="mt-1 text-[11px] text-gray-400 dark:text-slate-500">Default: {providerOptions[provider].defaultModel}</p>
+            <div className="mb-1.5 flex items-center justify-between gap-2">
+              <label htmlFor={agentModelControlID} className="text-[11px] font-semibold uppercase tracking-wide text-gray-500 dark:text-slate-400">Model</label>
+              <button
+                type="button"
+                onClick={() => void modelsQuery.refetch()}
+                disabled={modelsQuery.isFetching}
+                title="Refresh available models"
+                className="rounded p-1 text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-700 disabled:cursor-wait disabled:opacity-50 dark:text-slate-500 dark:hover:bg-slate-800 dark:hover:text-slate-200"
+              >
+                <RefreshCw className={`h-3.5 w-3.5 ${modelsQuery.isFetching ? 'animate-spin' : ''}`} />
+              </button>
+            </div>
+            {modelControl}
+            <p className="mt-1 text-[11px] text-gray-400 dark:text-slate-500">
+              {modelHelpText}
+            </p>
           </div>
           <div>
             <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wide text-gray-500 dark:text-slate-400">Temperature</label>

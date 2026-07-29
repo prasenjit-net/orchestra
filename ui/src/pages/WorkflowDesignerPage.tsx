@@ -1551,11 +1551,8 @@ function buildGraphFromDefinition(definition: WorkflowDefinitionDocument, activi
     if (transitions == null) {
       // Linear: go to next step or End
       const nextId = index + 1 < stepNodes.length ? stepNodes[index + 1].node.id : endNodeID
-      edges.push(makeBaseEdge(node.id, nextId))
-    } else if (transitions.length === 0) {
-      // Explicit terminal
-      edges.push(makeBaseEdge(node.id, endNodeID))
-    } else {
+      edges.push(makeBaseEdge(node.id, nextId, { implicit: true }))
+    } else if (transitions.length > 0) {
       // Branching: one edge per transition
       for (const t of transitions) {
         const targetId = nodeIdByName.get(t.to) ?? endNodeID
@@ -1615,6 +1612,78 @@ function buildStepNameMap(orderedStepIds: string[], nodeMap: Map<string, Node>) 
   return stepNameByNodeId
 }
 
+function edgeToStepTransition(edge: Edge, stepNameByNodeId: Map<string, string>): WorkflowStepTransition {
+  const edgeData = edge.data as EdgeConditionData | undefined
+  const target = edge.target === endNodeID
+    ? terminalTransitionTarget
+    : (stepNameByNodeId.get(edge.target) ?? edge.target)
+  return {
+    to: target,
+    label: edgeData?.label,
+    condition: edgeData?.condition,
+  }
+}
+
+function compileSingleActivityTransition(
+  edge: Edge,
+  index: number,
+  orderedStepIds: string[],
+  stepNameByNodeId: Map<string, string>,
+): WorkflowStepTransition[] | undefined {
+  const edgeData = edge.data as EdgeConditionData | undefined
+  const nextName = stepNameByNodeId.get(edge.target)
+  const nextIndex = orderedStepIds.indexOf(edge.target)
+  if (!edgeData?.condition && !edgeData?.label && nextIndex === index + 1 && nextName) {
+    return undefined
+  }
+  return [{
+    to: nextName ?? edge.target,
+    label: edgeData?.label,
+    condition: edgeData?.condition,
+  }]
+}
+
+function compileMultipleTransitions(
+  edges: Edge[],
+  stepName: string,
+  stepNameByNodeId: Map<string, string>,
+): WorkflowStepTransition[] {
+  const defaultEdges = edges.filter((edge) => !(edge.data as EdgeConditionData | undefined)?.condition)
+  if (defaultEdges.length !== 1) {
+    throw new Error(`Step "${stepName}" with multiple outgoing edges needs exactly one default edge without a condition.`)
+  }
+  return edges.map((edge) => edgeToStepTransition(edge, stepNameByNodeId))
+}
+
+function compileStepTransitions(
+  nodeId: string,
+  index: number,
+  stepName: string,
+  orderedStepIds: string[],
+  outgoingEdges: Map<string, Edge[]>,
+  stepNameByNodeId: Map<string, string>,
+): WorkflowStepTransition[] | undefined {
+  const outs = outgoingEdges.get(nodeId) ?? []
+  if (outs.length === 0) {
+    return []
+  }
+
+  const toActivity = outs.filter((edge) => edge.target !== endNodeID)
+  const toEnd = outs.filter((edge) => edge.target === endNodeID)
+  if (toActivity.length === 1 && toEnd.length === 0) {
+    return compileSingleActivityTransition(toActivity[0], index, orderedStepIds, stepNameByNodeId)
+  }
+  if (outs.length > 1) {
+    return compileMultipleTransitions(outs, stepName, stepNameByNodeId)
+  }
+  if (toEnd.length === 1) {
+    const edgeData = toEnd[0].data as EdgeConditionData | undefined
+    const isImplicitEnd = index === orderedStepIds.length - 1 && edgeData?.implicit && !edgeData.condition && !edgeData.label
+    return isImplicitEnd ? undefined : [edgeToStepTransition(toEnd[0], stepNameByNodeId)]
+  }
+  return outs.map((edge) => edgeToStepTransition(edge, stepNameByNodeId))
+}
+
 function compileDocument(
   name: string,
   description: string,
@@ -1652,52 +1721,7 @@ function compileDocument(
     const nodeData = node.data
     const stepName = nodeData.label.trim()
 
-    const outs = outgoingEdges.get(nodeId) ?? []
-    const toActivity = outs.filter((e) => e.target !== endNodeID)
-    const toEnd = outs.filter((e) => e.target === endNodeID)
-
-    let transitions: WorkflowStepTransition[] | undefined
-    const isLastStep = index === orderedStepIds.length - 1
-    const edgeTargetName = (edge: Edge) => (edge.target === endNodeID ? terminalTransitionTarget : (stepNameByNodeId.get(edge.target) ?? edge.target))
-    const edgeToTransition = (edge: Edge): WorkflowStepTransition => {
-      const edgeData = edge.data as EdgeConditionData | undefined
-      return {
-        to: edgeTargetName(edge),
-        label: edgeData?.label,
-        condition: edgeData?.condition,
-      }
-    }
-
-    if (toActivity.length === 0 && toEnd.length > 0 && !isLastStep) {
-      // Explicit terminal (non-last step that only connects to End)
-      transitions = []
-    } else if (toActivity.length === 1 && toEnd.length === 0) {
-      const edgeData = toActivity[0].data as EdgeConditionData | undefined
-      const nextName = stepNameByNodeId.get(toActivity[0].target)
-      const nextIndex = orderedStepIds.indexOf(toActivity[0].target)
-      // Simple linear to immediate next step with no condition/label → omit transitions (linear fallback)
-      if (!edgeData?.condition && !edgeData?.label && nextIndex === index + 1 && nextName) {
-        transitions = undefined
-      } else {
-        transitions = [{
-          to: nextName ?? toActivity[0].target,
-          label: edgeData?.label,
-          condition: edgeData?.condition,
-        }]
-      }
-    } else if (outs.length > 1) {
-      const defaultEdges = outs.filter((edge) => {
-        const edgeData = edge.data as EdgeConditionData | undefined
-        return !edgeData?.condition
-      })
-      if (defaultEdges.length !== 1) {
-        throw new Error(`Step "${stepName}" with multiple outgoing edges needs exactly one default edge without a condition.`)
-      }
-      transitions = outs.map(edgeToTransition)
-    } else {
-      // Last step or only connects to End naturally — nil transitions (linear fallback)
-      transitions = undefined
-    }
+    const transitions = compileStepTransitions(nodeId, index, stepName, orderedStepIds, outgoingEdges, stepNameByNodeId)
 
     return {
       name: stepName,
@@ -1724,6 +1748,88 @@ function compileDocument(
     endOutput: Object.keys(endOutput).length > 0 ? endOutput : undefined,
     steps,
   }
+}
+
+type WorkflowChangeKind = 'none' | 'layout' | 'definition'
+
+function sortedValue(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map(sortedValue)
+  }
+  if (!value || typeof value !== 'object') {
+    return value
+  }
+  return Object.fromEntries(
+    Object.entries(value)
+      .filter(([, entryValue]) => entryValue !== undefined)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, entryValue]) => [key, sortedValue(entryValue)]),
+  )
+}
+
+function normalizeOptionalObject(value: unknown) {
+  if (value == null) {
+    return undefined
+  }
+  if (typeof value === 'object' && !Array.isArray(value) && Object.keys(value).length === 0) {
+    return undefined
+  }
+  return value
+}
+
+function normalizeStepTransitions(transitions: WorkflowStepTransition[] | null | undefined) {
+  if (transitions == null) {
+    return undefined
+  }
+  return transitions.map((transition) => ({
+    to: transition.to,
+    label: transition.label || undefined,
+    condition: transition.condition
+      ? {
+          path: transition.condition.path,
+          operator: transition.condition.operator,
+          value: transition.condition.value,
+        }
+      : undefined,
+  }))
+}
+
+function comparableDocument(document: WorkflowDefinitionDocument, includeLayout: boolean): WorkflowDefinitionDocument {
+  return {
+    name: document.name,
+    description: document.description,
+    startSchemaId: document.startSchemaId || undefined,
+    endSchemaId: document.endSchemaId || undefined,
+    endOutput: normalizeOptionalObject(document.endOutput),
+    steps: document.steps.map((step) => ({
+      name: step.name,
+      activity: step.activity,
+      input: normalizeOptionalObject(step.input),
+      retry: {
+        maxAttempts: step.retry?.maxAttempts ?? 1,
+        backoffSeconds: step.retry?.backoffSeconds ?? 0,
+      },
+      layout: includeLayout ? step.layout : undefined,
+      transitions: normalizeStepTransitions(step.transitions as WorkflowStepTransition[] | null | undefined),
+    })),
+  }
+}
+
+function documentSignature(document: WorkflowDefinitionDocument, includeLayout: boolean) {
+  return JSON.stringify(sortedValue(comparableDocument(document, includeLayout)))
+}
+
+function classifyWorkflowChange(currentDocument: WorkflowDefinitionDocument | undefined, nextDocument: WorkflowDefinitionDocument): WorkflowChangeKind {
+  if (!currentDocument) {
+    return 'definition'
+  }
+  if (documentSignature(currentDocument, true) === documentSignature(nextDocument, true)) {
+    return 'none'
+  }
+  if (documentSignature(currentDocument, false) === documentSignature(nextDocument, false)) {
+    return 'layout'
+  }
+  return 'definition'
 }
 
 function WorkflowDesignerCanvas() {
@@ -1913,7 +2019,7 @@ function WorkflowDesignerCanvas() {
       setEdges((currentEdges) => [
         ...currentEdges.filter((edge) => edge.id !== terminalEdge.id),
         makeBaseEdge(terminalEdge.source, newNode.id),
-        makeBaseEdge(newNode.id, endNodeID),
+        makeBaseEdge(newNode.id, endNodeID, { implicit: true }),
       ])
     },
     [edges, setEdges, setNodes],
@@ -1973,7 +2079,7 @@ function WorkflowDesignerCanvas() {
   const saveEdgeCondition = useCallback(
     (edgeId: string, data: EdgeConditionData) => {
       setEdges((currentEdges) =>
-        currentEdges.map((e) => (e.id === edgeId ? { ...e, data } : e)),
+        currentEdges.map((e) => (e.id === edgeId ? { ...e, data: { ...(e.data as EdgeConditionData | undefined), ...data } } : e)),
       )
     },
     [setEdges],
@@ -2061,6 +2167,24 @@ function WorkflowDesignerCanvas() {
     },
   })
 
+  const updateDefinitionVersionLayoutMutation = useMutation({
+    mutationFn: ({ targetDefinitionId, version, payload }: { targetDefinitionId: string; version: number; payload: WorkflowDefinitionDocument }) =>
+      workflowApi.updateDefinitionVersionLayout(targetDefinitionId, version, payload),
+    onSuccess: (definition, variables) => {
+      setPageError(null)
+      setNotice(`Saved layout for v${variables.version}.`)
+      void Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['workflow-definitions'] }),
+        queryClient.invalidateQueries({ queryKey: ['workflow-definition', definition.id] }),
+        queryClient.invalidateQueries({ queryKey: ['workflow-definition', definition.id, variables.version] }),
+      ])
+    },
+    onError: (error: Error) => {
+      setNotice(null)
+      setPageError(error.message)
+    },
+  })
+
   const publishDefinitionMutation = useMutation({
     mutationFn: ({ targetDefinitionId, version, activate }: { targetDefinitionId: string; version: number; activate: boolean }) =>
       workflowApi.publishDefinitionVersion(targetDefinitionId, version, activate),
@@ -2128,6 +2252,15 @@ function WorkflowDesignerCanvas() {
         if (!basedOnVersion) {
           throw new Error('Select a source workflow version before saving.')
         }
+        const changeKind = classifyWorkflowChange(definitionQuery.data?.document, payload)
+        if (changeKind === 'none') {
+          setNotice('No workflow changes to save.')
+          return
+        }
+        if (changeKind === 'layout') {
+          updateDefinitionVersionLayoutMutation.mutate({ targetDefinitionId: definitionId, version: basedOnVersion, payload })
+          return
+        }
         createDefinitionVersionMutation.mutate({ targetDefinitionId: definitionId, payload, basedOnVersion })
         return
       }
@@ -2136,7 +2269,7 @@ function WorkflowDesignerCanvas() {
       setNotice(null)
       setPageError(error instanceof Error ? error.message : 'Unable to build workflow definition.')
     }
-  }, [createDefinitionMutation, createDefinitionVersionMutation, definitionId, definitionQuery.data?.activeVersion, edges, endOutputRows, endSchemaId, nodes, requestedVersion, startSchemaId, workflowDescription, workflowName])
+  }, [createDefinitionMutation, createDefinitionVersionMutation, definitionId, definitionQuery.data?.activeVersion, definitionQuery.data?.document, edges, endOutputRows, endSchemaId, nodes, requestedVersion, startSchemaId, updateDefinitionVersionLayoutMutation, workflowDescription, workflowName])
 
   if (activitiesQuery.isLoading || schemasQuery.isLoading || (definitionId && definitionQuery.isLoading)) {
     return <div className="p-8 text-sm text-gray-500 dark:text-slate-400">Loading designer…</div>
@@ -2155,6 +2288,25 @@ function WorkflowDesignerCanvas() {
 
   let activationLabel = viewedVersion ? `Activate v${viewedVersion}` : 'Activate'
   if (activateDefinitionMutation.isPending) activationLabel = 'Activating...'
+  const currentChangeKind = (() => {
+    if (!definitionId) {
+      return 'definition' as WorkflowChangeKind
+    }
+    try {
+      const payload = compileDocument(workflowName, workflowDescription, nodes, edges, {
+        startSchemaId,
+        endSchemaId,
+        endOutputRows,
+      })
+      return classifyWorkflowChange(loadedDefinition?.document, payload)
+    } catch {
+      return 'definition' as WorkflowChangeKind
+    }
+  })()
+  const isSavingDefinition = createDefinitionMutation.isPending || createDefinitionVersionMutation.isPending || updateDefinitionVersionLayoutMutation.isPending
+  let saveButtonLabel = definitionId ? 'Save as new version' : 'Create workflow'
+  if (definitionId && currentChangeKind === 'layout') saveButtonLabel = 'Save layout'
+  else if (definitionId && currentChangeKind === 'none') saveButtonLabel = 'No changes'
 
   if (!isDesktop) {
     return (
@@ -2216,11 +2368,11 @@ function WorkflowDesignerCanvas() {
             <button
               type="button"
               onClick={saveDocument}
-              disabled={createDefinitionMutation.isPending || createDefinitionVersionMutation.isPending}
+              disabled={isSavingDefinition}
               className="inline-flex items-center gap-2 rounded-lg bg-primary-600 px-3 py-2 text-xs font-semibold text-white transition-colors hover:bg-primary-700 disabled:cursor-not-allowed disabled:opacity-60"
             >
               <Save className="h-4 w-4" />
-              {definitionId ? 'Save as new version' : 'Create workflow'}
+              {saveButtonLabel}
             </button>
             {definitionId && viewedVersionMeta?.status === 'draft' && viewedVersion ? (
               <button

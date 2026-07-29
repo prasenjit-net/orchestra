@@ -1,6 +1,7 @@
 import type {
   Agent,
   AgentsResponse,
+  AIModelCatalog,
   APIKeyGrant,
   APIKeyRecord,
   APIKeysResponse,
@@ -241,6 +242,10 @@ export const clusterApi = {
 }
 
 export const aiApi = {
+  listModels: async (provider: string) => {
+    const params = new URLSearchParams({ provider })
+    return handleResponse<AIModelCatalog>(await apiFetch(buildApiUrl(`/ai/models?${params.toString()}`)))
+  },
   enhancePrompt: async (prompt: string, provider: string, model: string) =>
     handleResponse<{ prompt: string }>(
       await apiFetch(buildApiUrl('/ai/enhance-prompt'), {
@@ -450,6 +455,14 @@ export const workflowApi = {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ ...payload, basedOnVersion }),
+      }),
+    ),
+  updateDefinitionVersionLayout: async (definitionId: string, version: number, payload: WorkflowDefinitionDocument) =>
+    handleResponse<WorkflowDefinitionDetails>(
+      await apiFetch(buildApiUrl(`/workflow-definitions/${definitionId}/versions/${version}/layout`), {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
       }),
     ),
   publishDefinitionVersion: async (definitionId: string, version: number, activate = false) =>

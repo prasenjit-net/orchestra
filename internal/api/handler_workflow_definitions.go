@@ -100,6 +100,31 @@ func (h *Handler) CreateWorkflowDefinitionVersion(w http.ResponseWriter, r *http
 	respondJSON(w, http.StatusCreated, definition)
 }
 
+func (h *Handler) UpdateWorkflowDefinitionVersionLayout(w http.ResponseWriter, r *http.Request, definitionID string, version int) {
+	if h.workflow == nil {
+		writeError(w, http.StatusServiceUnavailable, "workflow service unavailable")
+		return
+	}
+
+	var input workflow.CreateDefinitionInput
+	if err := decodeJSON(r, &input); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	definition, err := h.workflow.UpdateDefinitionVersionLayout(r.Context(), definitionID, version, input)
+	if err != nil {
+		if errors.Is(err, workflow.ErrNotFound) {
+			writeError(w, http.StatusNotFound, err.Error())
+			return
+		}
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	respondJSON(w, http.StatusOK, definition)
+}
+
 func (h *Handler) PublishWorkflowDefinitionVersion(w http.ResponseWriter, r *http.Request, definitionID string, version int) {
 	if h.workflow == nil {
 		writeError(w, http.StatusServiceUnavailable, "workflow service unavailable")
