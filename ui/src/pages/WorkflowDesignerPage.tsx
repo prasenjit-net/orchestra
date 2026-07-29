@@ -1551,11 +1551,8 @@ function buildGraphFromDefinition(definition: WorkflowDefinitionDocument, activi
     if (transitions == null) {
       // Linear: go to next step or End
       const nextId = index + 1 < stepNodes.length ? stepNodes[index + 1].node.id : endNodeID
-      edges.push(makeBaseEdge(node.id, nextId))
-    } else if (transitions.length === 0) {
-      // Explicit terminal
-      edges.push(makeBaseEdge(node.id, endNodeID))
-    } else {
+      edges.push(makeBaseEdge(node.id, nextId, { implicit: true }))
+    } else if (transitions.length > 0) {
       // Branching: one edge per transition
       for (const t of transitions) {
         const targetId = nodeIdByName.get(t.to) ?? endNodeID
@@ -1668,8 +1665,8 @@ function compileDocument(
       }
     }
 
-    if (toActivity.length === 0 && toEnd.length > 0 && !isLastStep) {
-      // Explicit terminal (non-last step that only connects to End)
+    if (outs.length === 0) {
+      // No outgoing edge is an explicit terminal, distinct from linear fallback.
       transitions = []
     } else if (toActivity.length === 1 && toEnd.length === 0) {
       const edgeData = toActivity[0].data as EdgeConditionData | undefined
@@ -1694,9 +1691,14 @@ function compileDocument(
         throw new Error(`Step "${stepName}" with multiple outgoing edges needs exactly one default edge without a condition.`)
       }
       transitions = outs.map(edgeToTransition)
+    } else if (toActivity.length === 0 && toEnd.length === 1) {
+      const edgeData = toEnd[0].data as EdgeConditionData | undefined
+      // Definitions without transitions render an implicit edge to End for the last step.
+      transitions = isLastStep && edgeData?.implicit && !edgeData.condition && !edgeData.label
+        ? undefined
+        : [edgeToTransition(toEnd[0])]
     } else {
-      // Last step or only connects to End naturally — nil transitions (linear fallback)
-      transitions = undefined
+      transitions = outs.map(edgeToTransition)
     }
 
     return {
@@ -1995,7 +1997,7 @@ function WorkflowDesignerCanvas() {
       setEdges((currentEdges) => [
         ...currentEdges.filter((edge) => edge.id !== terminalEdge.id),
         makeBaseEdge(terminalEdge.source, newNode.id),
-        makeBaseEdge(newNode.id, endNodeID),
+        makeBaseEdge(newNode.id, endNodeID, { implicit: true }),
       ])
     },
     [edges, setEdges, setNodes],
@@ -2055,7 +2057,7 @@ function WorkflowDesignerCanvas() {
   const saveEdgeCondition = useCallback(
     (edgeId: string, data: EdgeConditionData) => {
       setEdges((currentEdges) =>
-        currentEdges.map((e) => (e.id === edgeId ? { ...e, data } : e)),
+        currentEdges.map((e) => (e.id === edgeId ? { ...e, data: { ...(e.data as EdgeConditionData | undefined), ...data } } : e)),
       )
     },
     [setEdges],
