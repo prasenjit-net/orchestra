@@ -246,12 +246,12 @@ export const aiApi = {
     const params = new URLSearchParams({ provider })
     return handleResponse<AIModelCatalog>(await apiFetch(buildApiUrl(`/ai/models?${params.toString()}`)))
   },
-  enhancePrompt: async (prompt: string, provider: string, model: string) =>
+  enhancePrompt: async (prompt: string, message: string, provider: string, model: string) =>
     handleResponse<{ prompt: string }>(
       await apiFetch(buildApiUrl('/ai/enhance-prompt'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prompt, provider, model }),
+        body: JSON.stringify({ prompt, message, provider, model }),
       }),
     ),
 }

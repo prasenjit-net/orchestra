@@ -31,6 +31,7 @@ func (h *Handler) EnhancePrompt(w http.ResponseWriter, r *http.Request) {
 	}
 	var body struct {
 		Prompt   string `json:"prompt"`
+		Message  string `json:"message"`
 		Provider string `json:"provider"`
 		Model    string `json:"model"`
 	}
@@ -38,11 +39,15 @@ func (h *Handler) EnhancePrompt(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid JSON body")
 		return
 	}
-	if body.Prompt == "" {
+	if strings.TrimSpace(body.Prompt) == "" {
 		writeError(w, http.StatusBadRequest, "prompt is required")
 		return
 	}
-	enhanced, err := h.workflow.EnhancePrompt(r.Context(), body.Prompt, body.Provider, body.Model)
+	if strings.TrimSpace(body.Message) == "" {
+		writeError(w, http.StatusBadRequest, "enhancement message is required")
+		return
+	}
+	enhanced, err := h.workflow.EnhancePrompt(r.Context(), body.Prompt, body.Message, body.Provider, body.Model)
 	if err != nil {
 		writeError(w, http.StatusBadGateway, err.Error())
 		return
