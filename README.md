@@ -17,6 +17,13 @@ Orchestra is a **durable workflow engine** that ships as a single Go binary with
 - **Single binary** — the compiled React SPA is embedded in the Go binary; one file to deploy, no Node.js at runtime
 - **Light/dark mode** — full theme support across every page
 
+## Design Documentation
+
+The canonical implementation design is organized under [`design/`](design/README.md).
+It covers runtime architecture, workflow semantics, persistence, APIs, security,
+activities and integrations, frontend structure, deployment, reliability, testing, and
+known limitations.
+
 ---
 
 ## Quick Start
